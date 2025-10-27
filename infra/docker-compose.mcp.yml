@@ -356,8 +356,8 @@ services:
 
   backtesting-mcp:
     build:
-      context: servers/backtesting-mcp
-      dockerfile: Dockerfile.new  # Используем оптимизированный Dockerfile с базовым образом
+      context: ../servers/backtesting-mcp
+      dockerfile: Dockerfile
     image: backtesting-mcp:latest
     restart: unless-stopped
     working_dir: /app
