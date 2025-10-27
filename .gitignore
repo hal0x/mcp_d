@@ -54,4 +54,11 @@ temp/
 halv1/
 infra/tests/
 mcp-web-ui/
-servers/
+servers/binance-mcp/
+servers/tradingview-mcp/
+servers/shell-mcp/
+servers/memory-mcp/
+servers/supervisor-mcp/
+servers/learning-mcp/
+servers/backtesting-mcp/
+# servers/policy-mcp/ - добавлен в репозиторий
