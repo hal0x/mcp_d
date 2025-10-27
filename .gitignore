@@ -58,7 +58,9 @@ servers/binance-mcp/
 servers/tradingview-mcp/
 servers/shell-mcp/
 servers/memory-mcp/
-servers/supervisor-mcp/
 servers/learning-mcp/
 servers/backtesting-mcp/
+# Разрешаем только sql файлы в supervisor-mcp
+servers/supervisor-mcp/*
+!servers/supervisor-mcp/sql/
 # servers/policy-mcp/ - добавлен в репозиторий
