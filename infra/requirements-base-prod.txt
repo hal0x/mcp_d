@@ -1,0 +1,56 @@
+# Production зависимости для всех MCP сервисов
+# Web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# MCP protocol
+mcp>=1.14.1
+fastapi-mcp>=0.4.0
+
+# Data validation and settings
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Database drivers
+asyncpg>=0.29.0
+sqlalchemy>=2.0.0
+alembic>=1.12.0
+
+# Caching and message queue
+redis>=5.0.0
+
+# HTTP client
+httpx>=0.24.0
+aiohttp>=3.8.0
+requests>=2.31.0
+
+# Logging
+structlog>=23.0.0
+
+# Configuration
+python-dotenv>=1.0.0
+PyYAML>=6.0
+
+# Utilities
+click>=8.0.0
+tqdm>=4.65.0
+aiofiles>=23.0.0
+python-multipart>=0.0.6
+
+# Data processing
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Heavy ML dependencies (pre-built wheels)
+scipy>=1.16.0
+scikit-learn>=1.7.0
+hdbscan>=0.8.40
+joblib>=1.5.0
+threadpoolctl>=3.6.0
+
+# Additional common dependencies
+psycopg2-binary>=2.9.0
+
+# Hyperparameter optimization
+optuna>=3.6.0
+optuna-dashboard>=0.16.0

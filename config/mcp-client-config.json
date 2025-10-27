@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "Bright Data": {
+      "command": "npx",
+      "args": ["@brightdata/mcp"],
+      "env": {
+        "API_TOKEN": "c2ea95d7c82bb1b550475e8c922904cd66c1fa4414b9b69361d34f9810198e8c"
+      }
+    },
+    "tradingview-mcp": {
+      "url": "http://127.0.0.1:8060/mcp"
+    },
+    "binance-mcp-demo": {
+      "url": "http://127.0.0.1:8000/mcp"
+    },
+    "shell-mcp": {
+      "url": "http://127.0.0.1:8070/mcp"
+    },
+    "memory-mcp": {
+      "url": "http://127.0.0.1:8050/mcp"
+    },
+    "backtesting-mcp": {
+      "url": "http://127.0.0.1:8082/mcp"
+    },
+    "supervisor-mcp": {
+      "url": "http://127.0.0.1:8001/mcp"
+    }
+  }
+}

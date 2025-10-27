@@ -1,0 +1,57 @@
+# Вложенные git репозитории
+*/\.git/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+package-lock.json
+yarn.lock
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+*.log
+
+# Environment
+.env
+.env.local
+*.env
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Вложенные git репозитории - исключить полностью
+halv1/
+infra/tests/
+mcp-web-ui/
+servers/
