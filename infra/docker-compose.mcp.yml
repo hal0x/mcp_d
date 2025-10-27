@@ -132,8 +132,8 @@ services:
 
   shell-mcp:
     build:
-      context: servers/shell-mcp
-      dockerfile: Dockerfile.new  # Используем оптимизированный Dockerfile с базовым образом
+      context: ../servers/shell-mcp
+      dockerfile: Dockerfile
     image: shell-mcp:latest
     restart: unless-stopped
     working_dir: /app
