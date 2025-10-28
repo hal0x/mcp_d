@@ -53,6 +53,12 @@ class Config:
     tp_rr_min: float
     tp_atr_multiple: float
 
+    supervisor_metrics_enabled: bool
+    supervisor_url: Optional[str]
+
+    max_api_retries: int
+    api_backoff_base: float
+
     @property
     def is_demo_mode(self) -> bool:
         """Проверяет, используется ли демо режим."""
@@ -129,6 +135,17 @@ def get_config() -> Config:
         redis_url = "redis://localhost:6379/0"
     redis_cache_ttl = int(os.getenv("REDIS_CACHE_TTL", "30"))
 
+    max_api_retries = int(os.getenv("BINANCE_API_MAX_RETRIES", "3"))
+    api_backoff_base = float(os.getenv("BINANCE_API_BACKOFF_BASE", "0.5"))
+
+    supervisor_metrics_enabled = os.getenv("SUPERVISOR_METRICS_ENABLED", "true").lower() in {
+        "true",
+        "1",
+        "yes",
+        "on",
+    }
+    supervisor_url = os.getenv("SUPERVISOR_URL")
+
     postgres_enabled = os.getenv("POSTGRES_ENABLED", "false").lower() in {
         "true",
         "1",
@@ -181,4 +198,8 @@ def get_config() -> Config:
         max_consecutive_losses=int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3")),
         tp_rr_min=float(os.getenv("TP_RR_MIN", "1.0")),
         tp_atr_multiple=float(os.getenv("TP_ATR_MULTIPLE", "1.5")),
+        supervisor_metrics_enabled=supervisor_metrics_enabled and bool(supervisor_url),
+        supervisor_url=supervisor_url,
+        max_api_retries=max_api_retries,
+        api_backoff_base=api_backoff_base,
     )

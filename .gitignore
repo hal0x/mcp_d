@@ -52,15 +52,11 @@ temp/
 
 # Вложенные git репозитории - исключить полностью
 halv1/
-infra/tests/
 mcp-web-ui/
-servers/binance-mcp/
-servers/tradingview-mcp/
-servers/shell-mcp/
-servers/memory-mcp/
-servers/learning-mcp/
-servers/backtesting-mcp/
-# Разрешаем только sql файлы в supervisor-mcp
-servers/supervisor-mcp/*
-!servers/supervisor-mcp/sql/
-# servers/policy-mcp/ - добавлен в репозиторий
+# Все servers/ теперь в основном репозитории
+
+# Данные и артефакты memory-mcp
+servers/memory-mcp/input/
+servers/memory-mcp/chats/
+servers/memory-mcp/artifacts/
+servers/memory-mcp/chroma_db/

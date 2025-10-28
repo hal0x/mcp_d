@@ -74,6 +74,7 @@ from .models import (
     DerivativesContext,
 )
 from .storage import PostgresStorage
+from .supervisor_reporting import SupervisorReporter
 from .risk_tools import (
     PositionSizeRequest,
     compute_position_size,
@@ -91,39 +92,63 @@ _POSITION_LIMITS: Dict[str, Dict[str, Any]] = {}
 
 
 async def call_binance(method: Any, *args: Any, **kwargs: Any) -> Any:
-    """Асинхронный вызов метода Binance API."""
-    try:
-        return await asyncio.to_thread(method, *args, **kwargs)
-    except asyncio.CancelledError:
-        logger.warning(
-            "binance_call_cancelled", method=getattr(method, "__name__", repr(method))
-        )
-        raise
-    except BinanceAPIException as exc:
-        logger.warning(
-            "binance_api_error",
-            method=getattr(method, "__name__", repr(method)),
-            error=str(exc),
-            code=getattr(exc, "code", None),
-            status=getattr(exc, "status_code", None),
-        )
-        detail: Dict[str, Any] = {
-            "message": getattr(exc, "message", str(exc)),
-            "code": getattr(exc, "code", None),
-        }
-        status = getattr(exc, "status_code", None) or 502
-        response_payload = getattr(exc, "response", None)
-        if response_payload:
-            detail["response"] = response_payload
-        raise HTTPException(status_code=status, detail=detail) from exc
-    except Exception as exc:
-        logger.exception(
-            "binance_call_unexpected_error",
-            method=getattr(method, "__name__", repr(method)),
-        )
-        raise HTTPException(
-            status_code=500, detail="Неожиданная ошибка клиента Binance"
-        ) from exc
+    """Асинхронный вызов метода Binance API c retry и backoff."""
+    config = get_config()
+    attempt = 0
+    backoff = config.api_backoff_base
+    max_attempts = max(1, config.max_api_retries)
+
+    while True:
+        try:
+            return await asyncio.to_thread(method, *args, **kwargs)
+        except asyncio.CancelledError:
+            logger.warning(
+                "binance_call_cancelled",
+                method=getattr(method, "__name__", repr(method)),
+            )
+            raise
+        except BinanceAPIException as exc:
+            attempt += 1
+            should_retry = attempt < max_attempts and exc.status_code in {408, 429, 500, 502, 503, 504}
+            logger.warning(
+                "binance_api_error",
+                method=getattr(method, "__name__", repr(method)),
+                error=str(exc),
+                code=getattr(exc, "code", None),
+                status=getattr(exc, "status_code", None),
+                attempt=attempt,
+                retrying=should_retry,
+            )
+            if should_retry:
+                await asyncio.sleep(backoff)
+                backoff *= 2
+                continue
+
+            detail: Dict[str, Any] = {
+                "message": getattr(exc, "message", str(exc)),
+                "code": getattr(exc, "code", None),
+            }
+            status = getattr(exc, "status_code", None) or 502
+            response_payload = getattr(exc, "response", None)
+            if response_payload:
+                detail["response"] = response_payload
+            raise HTTPException(status_code=status, detail=detail) from exc
+        except Exception as exc:
+            attempt += 1
+            should_retry = attempt < max_attempts
+            logger.warning(
+                "binance_call_unexpected_error",
+                method=getattr(method, "__name__", repr(method)),
+                attempt=attempt,
+                retrying=should_retry,
+            )
+            if should_retry:
+                await asyncio.sleep(backoff)
+                backoff *= 2
+                continue
+            raise HTTPException(
+                status_code=500, detail="Неожиданная ошибка клиента Binance"
+            ) from exc
 
 
 class RiskService:
@@ -195,6 +220,7 @@ class RiskService:
             await RiskService._storage.record_portfolio_metrics(
                 metrics.model_dump(mode="json")
             )
+        await SupervisorReporter.record_portfolio_metrics(metrics.model_dump(mode="json"))
         return metrics
 
     @staticmethod
@@ -970,7 +996,7 @@ class OrderService:
             result = await call_binance(client.futures_cancel_order, **params)
         else:
             result = await call_binance(client.cancel_order, **params)
-        return CancelOrderResponse(
+        response_model = CancelOrderResponse(
             order_id=int(result.get("orderId", 0)),
             symbol=result.get("symbol", symbol_upper),
             status=result.get("status", "CANCELED"),
@@ -981,6 +1007,8 @@ class OrderService:
                 "origClientOrderId", result.get("clientOrderId", "")
             ),
         )
+        await SupervisorReporter.order_cancelled(response_model.model_dump(mode="json"))
+        return response_model
 
     @staticmethod
     async def create_order(order_request: CreateOrderRequest) -> CreateOrderResponse:
@@ -1070,7 +1098,7 @@ class OrderService:
             result = await call_binance(client.create_order, **order_params)
 
         # Преобразуем ответ в нашу модель с безопасным парсингом
-        return CreateOrderResponse(
+        response_model = CreateOrderResponse(
             order_id=int(result.get("orderId", 0)),
             symbol=result.get("symbol", order_request.symbol.upper()),
             side=result.get("side", order_request.side.upper()),
@@ -1092,6 +1120,8 @@ class OrderService:
                 else None
             ),
         )
+        await SupervisorReporter.order_created(response_model.model_dump(mode="json"))
+        return response_model
 
     @staticmethod
     async def create_order_batch(

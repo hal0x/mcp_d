@@ -14,7 +14,7 @@ from fastmcp import FastMCP
 from .cache import get_redis
 from .config import Settings, get_settings
 from .db import get_session, init_db
-from .models import Fact
+from .models import Fact, Metric
 from .services.alerts import AlertsService
 from .services.health import HealthService
 from .services.metrics import MetricsService
@@ -162,3 +162,25 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    @app.post("/ingest/metric")
+    async def ingest_metric(payload: Dict[str, Any]) -> Dict[str, Any]:
+        metric = Metric(
+            name=payload["name"],
+            value=float(payload.get("value", 0.0)),
+            ts=_parse_datetime(payload.get("ts")) or datetime.utcnow(),
+            tags=payload.get("tags", {}),
+        )
+        await metrics_service.ingest_metric(metric)
+        return {"status": "ok"}
+
+    @app.post("/ingest/fact")
+    async def ingest_fact(payload: Dict[str, Any]) -> Dict[str, Any]:
+        fact = Fact(
+            ts=_parse_datetime(payload.get("ts")) or datetime.utcnow(),
+            kind=payload["kind"],
+            actor=payload.get("actor", ""),
+            correlation_id=payload.get("correlation_id", ""),
+            payload=payload.get("payload", {}),
+        )
+        await metrics_service.ingest_fact(fact)
+        return {"status": "ok"}

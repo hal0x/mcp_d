@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MCP Services",
+  "type": "object",
+  "properties": {
+    "services": {
+      "type": "object",
+      "patternProperties": {
+        "^.+$": {
+          "type": "object",
+          "properties": {
+            "host": {"type": "string"},
+            "port": {"type": "integer"},
+            "transport": {"type": "string"},
+            "healthcheck": {"type": "boolean"},
+            "dependencies": {
+              "type": "array",
+              "items": {"type": "string"}
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {"type": "string"}
+            },
+            "env": {"type": "object"}
+          },
+          "required": ["host", "port", "transport"]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["services"]
+}
