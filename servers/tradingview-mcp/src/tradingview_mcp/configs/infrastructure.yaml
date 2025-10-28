@@ -1,0 +1,36 @@
+redis:
+  host: redis
+  port: 6379
+  db: 0
+  ttl:
+    indicators: 300
+    alerts: 1800
+    sessions: 3600
+
+postgres:
+  host: postgres
+  port: 5432
+  database: tradingview_scanners
+  pool_size: 10
+
+binance_mcp:
+  url: http://binance-mcp:8000
+  timeout: 30
+
+halv1_bot:
+  url: http://halv1-dashboard:8001/api/trading-alert
+  timeout: 10
+
+memory_mcp:
+  url: http://memory-mcp:8050/mcp
+  timeout: 15
+
+filters:
+  derivatives:
+    min_open_interest: null
+    max_funding_abs: 0.05
+    min_cvd_abs: null
+  context:
+    min_confidence: 55
+    max_leverage: 15
+    require_stop_loss: true

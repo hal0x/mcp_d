@@ -1,0 +1,62 @@
+[
+  {
+    "query": "найти все сообщения про Bitcoin",
+    "type": "factual",
+    "entity": "Bitcoin",
+    "expected_result_type": "specific_message"
+  },
+  {
+    "query": "что обсуждали про цену Bitcoin в январе?",
+    "type": "contextual",
+    "entity": "Bitcoin",
+    "timeframe": "январь",
+    "expected_result_type": "message_sequence"
+  },
+  {
+    "query": "какие основные темы обсуждались в этом чате?",
+    "type": "analytical",
+    "expected_result_type": "summary"
+  },
+  {
+    "query": "кто упоминал криптовалюты?",
+    "type": "factual",
+    "entity": "криптовалюты",
+    "expected_result_type": "specific_message"
+  },
+  {
+    "query": "какие решения принимались по проекту?",
+    "type": "analytical",
+    "expected_result_type": "summary"
+  },
+  {
+    "query": "что происходило с проектом в последнюю неделю?",
+    "type": "contextual",
+    "entity": "проект",
+    "timeframe": "последнюю неделю",
+    "expected_result_type": "message_sequence"
+  },
+  {
+    "query": "найти сообщения про NFT",
+    "type": "factual",
+    "entity": "NFT",
+    "expected_result_type": "specific_message"
+  },
+  {
+    "query": "какие проблемы возникали?",
+    "type": "analytical",
+    "expected_result_type": "summary"
+  },
+  {
+    "query": "что говорили про DeFi в марте?",
+    "type": "contextual",
+    "entity": "DeFi",
+    "timeframe": "март",
+    "expected_result_type": "message_sequence"
+  },
+  {
+    "query": "кто писал про блокчейн?",
+    "type": "factual",
+    "entity": "блокчейн",
+    "expected_result_type": "specific_message"
+  }
+]

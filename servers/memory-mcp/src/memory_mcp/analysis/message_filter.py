@@ -1,0 +1,385 @@
+#!/usr/bin/env python3
+"""
+Модуль для фильтрации и дедупликации сообщений
+"""
+
+import logging
+import re
+from difflib import SequenceMatcher
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+
+class MessageFilter:
+    """Класс для фильтрации и дедупликации сообщений"""
+
+    def __init__(
+        self,
+        min_text_length: int = 3,
+        similarity_threshold: float = 0.85,
+        max_consecutive_duplicates: int = 1,
+    ):
+        """
+        Инициализация фильтра
+
+        Args:
+            min_text_length: Минимальная длина текста сообщения
+            similarity_threshold: Порог схожести для дедупликации (0.0-1.0)
+            max_consecutive_duplicates: Максимум подряд идущих похожих сообщений
+        """
+        self.min_text_length = min_text_length
+        self.similarity_threshold = similarity_threshold
+        self.max_consecutive_duplicates = max_consecutive_duplicates
+
+    def filter_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Фильтрация сообщений с удалением пустых и дедупликацией
+
+        Args:
+            messages: Список сообщений
+
+        Returns:
+            Отфильтрованный список сообщений
+        """
+        if not messages:
+            return []
+
+        filtered = []
+        stats = {
+            "total": len(messages),
+            "empty": 0,
+            "too_short": 0,
+            "duplicates": 0,
+            "bot_spam": 0,
+            "service": 0,
+        }
+
+        for msg in messages:
+            # Пропускаем пустые сообщения
+            if self._is_empty_message(msg):
+                stats["empty"] += 1
+                continue
+
+            # Пропускаем сервисные сообщения
+            if self._is_service_message(msg):
+                stats["service"] += 1
+                continue
+
+            # Пропускаем слишком короткие сообщения
+            text = self._get_message_text(msg)
+            if text and len(text.strip()) < self.min_text_length:
+                stats["too_short"] += 1
+                continue
+
+            # Пропускаем спам от ботов
+            if self._is_bot_spam(msg):
+                stats["bot_spam"] += 1
+                continue
+
+            filtered.append(msg)
+
+        # Дедупликация последовательных похожих сообщений
+        deduplicated = self._deduplicate_consecutive(filtered)
+        stats["duplicates"] = len(filtered) - len(deduplicated)
+
+        logger.info(
+            f"Фильтрация: {stats['total']} → {len(deduplicated)} сообщений "
+            f"(пустых: {stats['empty']}, коротких: {stats['too_short']}, "
+            f"дублей: {stats['duplicates']}, спама: {stats['bot_spam']}, "
+            f"сервисных: {stats['service']})"
+        )
+
+        return deduplicated
+
+    def _is_empty_message(self, msg: Dict[str, Any]) -> bool:
+        """
+        Проверка, является ли сообщение пустым
+
+        Args:
+            msg: Сообщение
+
+        Returns:
+            True если сообщение пустое
+        """
+        text = self._get_message_text(msg)
+
+        # Нет текста
+        if not text or not text.strip():
+            # Проверяем, есть ли медиа, файлы или другой контент
+            if not msg.get("file") and not msg.get("media_type"):
+                return True
+
+        return False
+
+    def _is_service_message(self, msg: Dict[str, Any]) -> bool:
+        """
+        Проверка, является ли сообщение сервисным
+
+        Args:
+            msg: Сообщение
+
+        Returns:
+            True если это сервисное сообщение
+        """
+        # Проверяем тип действия
+        action = msg.get("action")
+        if action:
+            # Системные действия (вход/выход из чата, смена названия и т.д.)
+            service_actions = [
+                "invite_members",
+                "remove_members",
+                "pin_message",
+                "create_group",
+                "migrate_to_supergroup",
+                "phone_call",
+            ]
+            if action in service_actions:
+                return True
+
+        # Проверяем текст на служебные паттерны
+        text = self._get_message_text(msg)
+        if text:
+            service_patterns = [
+                r"^joined the (group|channel)$",
+                r"^left the (group|channel)$",
+                r"^pinned a message$",
+                r"changed the (group|channel) (photo|title|description)",
+            ]
+            for pattern in service_patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    return True
+
+        return False
+
+    def _is_bot_spam(self, msg: Dict[str, Any]) -> bool:
+        """
+        Проверка на спам от ботов
+
+        Args:
+            msg: Сообщение
+
+        Returns:
+            True если это спам от бота
+        """
+        text = self._get_message_text(msg)
+        if not text:
+            return False
+
+        # Паттерны спама
+        spam_patterns = [
+            r"Вы получили \d+ звёзд",  # Уведомления о звёздах
+            r"You received \d+ stars",
+            r"^\/start$",  # Команды запуска бота
+            r"^\/help$",
+            r"🎁 Новый подарок получен",  # Уведомления о подарках
+            r"🎁 New gift received",
+            r"^Подарок отправлен$",
+            r"^Gift sent$",
+        ]
+
+        for pattern in spam_patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                return True
+
+        # Проверяем, от бота ли сообщение
+        from_user = msg.get("from", {})
+        if isinstance(from_user, dict):
+            # Если username содержит 'bot' или 'Bot'
+            username = from_user.get("username") or ""
+            if (
+                username
+                and "bot" in username.lower()
+                and username.lower().endswith("bot")
+            ):
+                # Короткие однотипные сообщения от ботов
+                if len(text.strip()) < 50 and (
+                    text.startswith("✅")
+                    or text.startswith("❌")
+                    or text.startswith("⚠️")
+                    or re.match(
+                        r"^[\d\s\.\,\+\-\*\/\=\(\)]+$", text
+                    )  # Только цифры и символы
+                ):
+                    return True
+
+        return False
+
+    def _deduplicate_consecutive(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Дедупликация последовательных похожих сообщений
+
+        Args:
+            messages: Отфильтрованный список сообщений
+
+        Returns:
+            Список без последовательных дублей
+        """
+        if not messages:
+            return []
+
+        deduplicated = []
+        prev_text = None
+        consecutive_count = 0
+
+        for msg in messages:
+            text = self._normalize_text(self._get_message_text(msg))
+            original_text = self._get_message_text(msg)
+
+            # Если текст пустой, всегда добавляем (может быть медиа)
+            if not text:
+                deduplicated.append(msg)
+                prev_text = None
+                consecutive_count = 0
+                continue
+
+            # Проверяем похожесть с предыдущим
+            if prev_text and self._is_similar(text, prev_text):
+                consecutive_count += 1
+
+                # Пропускаем, если превышен лимит
+                if consecutive_count > self.max_consecutive_duplicates:
+                    # Добавляем аннотацию о пропущенных сообщениях
+                    if consecutive_count == self.max_consecutive_duplicates + 1:
+                        # Добавляем маркер только один раз
+                        last_msg = deduplicated[-1]
+                        if not last_msg.get("_duplicate_marker"):
+                            last_msg["_duplicate_count"] = 1
+                            last_msg["_duplicate_marker"] = True
+                            last_msg["_duplicate_variants"] = [original_text[:200]]
+                    else:
+                        # Увеличиваем счётчик и сохраняем вариацию
+                        last_msg = deduplicated[-1]
+                        last_msg["_duplicate_count"] = (
+                            last_msg.get("_duplicate_count", 1) + 1
+                        )
+                        # Сохраняем до 5 вариаций для анализа
+                        variants = last_msg.get("_duplicate_variants", [])
+                        if len(variants) < 5 and original_text[:200] not in variants:
+                            variants.append(original_text[:200])
+                            last_msg["_duplicate_variants"] = variants
+                    continue
+            else:
+                consecutive_count = 0
+
+            deduplicated.append(msg)
+            prev_text = text
+
+        return deduplicated
+
+    def _is_similar(self, text1: str, text2: str) -> bool:
+        """
+        Проверка схожести двух текстов
+
+        Args:
+            text1: Первый текст
+            text2: Второй текст
+
+        Returns:
+            True если тексты похожи
+        """
+        if not text1 or not text2:
+            return False
+
+        # Точное совпадение
+        if text1 == text2:
+            return True
+
+        # Проверка через SequenceMatcher
+        similarity = SequenceMatcher(None, text1, text2).ratio()
+        return similarity >= self.similarity_threshold
+
+    def _normalize_text(self, text: Optional[str]) -> str:
+        """
+        Нормализация текста для сравнения
+
+        Args:
+            text: Исходный текст
+
+        Returns:
+            Нормализованный текст
+        """
+        if not text:
+            return ""
+
+        # Убираем лишние пробелы
+        normalized = re.sub(r"\s+", " ", text.strip())
+
+        # Убираем эмодзи для более точного сравнения
+        normalized = re.sub(r"[\U00010000-\U0010ffff]", "", normalized)
+
+        # Приводим к нижнему регистру
+        normalized = normalized.lower()
+
+        return normalized
+
+    def _get_message_text(self, msg: Dict[str, Any]) -> str:
+        """
+        Получение текста сообщения
+
+        Args:
+            msg: Сообщение
+
+        Returns:
+            Текст сообщения
+        """
+        text = msg.get("text", "")
+
+        # Если текст - список (форматированный текст)
+        if isinstance(text, list):
+            text_parts = []
+            for item in text:
+                if isinstance(item, str):
+                    text_parts.append(item)
+                elif isinstance(item, dict):
+                    text_parts.append(item.get("text", ""))
+            text = "".join(text_parts)
+
+        return text if isinstance(text, str) else str(text)
+
+
+def filter_and_deduplicate(
+    messages: List[Dict[str, Any]], min_length: int = 3, similarity: float = 0.85
+) -> List[Dict[str, Any]]:
+    """
+    Удобная функция для фильтрации и дедупликации сообщений
+
+    Args:
+        messages: Список сообщений
+        min_length: Минимальная длина текста
+        similarity: Порог схожести для дедупликации
+
+    Returns:
+        Отфильтрованный список
+    """
+    filter_obj = MessageFilter(
+        min_text_length=min_length, similarity_threshold=similarity
+    )
+    return filter_obj.filter_messages(messages)
+
+
+if __name__ == "__main__":
+    # Тест модуля
+    test_messages = [
+        {"id": "1", "text": "Привет!", "from": {"username": "user1"}},
+        {"id": "2", "text": "   ", "from": {"username": "user2"}},  # Пустое
+        {"id": "3", "text": "Привет!", "from": {"username": "user1"}},  # Дубль
+        {"id": "4", "text": "Привет!!!", "from": {"username": "user1"}},  # Похожее
+        {"id": "5", "text": "Как дела?", "from": {"username": "user2"}},
+        {"id": "6", "text": "a", "from": {"username": "user3"}},  # Слишком короткое
+        {"id": "7", "text": "Всё отлично!", "from": {"username": "user1"}},
+        {"id": "8", "text": "Вы получили 5 звёзд", "from": {"username": "bot"}},  # Спам
+    ]
+
+    filter_obj = MessageFilter()
+    filtered = filter_obj.filter_messages(test_messages)
+
+    print(f"Исходных сообщений: {len(test_messages)}")
+    print(f"После фильтрации: {len(filtered)}")
+    print("\nОставлено сообщений:")
+    for msg in filtered:
+        dup_count = msg.get("_duplicate_count", 0)
+        dup_marker = f" [+{dup_count} похожих]" if dup_count > 0 else ""
+        print(f"  {msg['id']}: {msg['text']}{dup_marker}")

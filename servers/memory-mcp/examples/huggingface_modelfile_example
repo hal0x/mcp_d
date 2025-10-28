@@ -1,0 +1,19 @@
+# Пример Modelfile для модели с Hugging Face
+FROM hf.co/microsoft/DialoGPT-medium
+
+# Настройки модели
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER top_k 40
+
+# Системный промпт
+SYSTEM "Ты полезный AI-ассистент."
+
+# Шаблон для диалога
+TEMPLATE """{{ if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{ if .Prompt }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+{{ end }}<|im_start|>assistant
+{{ .Response }}<|im_end|>"""
+

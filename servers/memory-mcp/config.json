@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "memory-mcp": {
+      "command": "python",
+      "args": ["scripts/mcp_server.py"],
+      "cwd": "/Users/hal/projects/mcp/memory-mcp",
+      "env": {
+        "PYTHONPATH": "/Users/hal/projects/mcp/memory-mcp"
+      }
+    }
+  },
+  "clients": {
+    "cursor": {
+      "mcpServers": {
+        "memory-mcp": {
+          "command": "python",
+          "args": ["scripts/mcp_server.py"],
+          "cwd": "/Users/hal/projects/mcp/memory-mcp",
+          "env": {
+            "PYTHONPATH": "/Users/hal/projects/mcp/memory-mcp"
+          }
+        }
+      }
+    }
+  }
+}

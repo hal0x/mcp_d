@@ -1,0 +1,1211 @@
+{
+  "chat_name": "42 Club chat",
+  "timestamp": "2025-10-09T01:24:01.445938",
+  "total_queries": 5,
+  "results": [
+    {
+      "query": {
+        "id": "42 Club chat_1",
+        "query": "найти сообщения про Полностью",
+        "type": "factual",
+        "chat_name": "42 Club chat",
+        "entity": "Полностью",
+        "timeframe": null,
+        "generated_at": "2025-10-09T01:21:58.531289"
+      },
+      "search_results": [
+        {
+          "id": "42 Club chat-S0006-M0327",
+          "text": "И все кто писали про него, так себе каналы",
+          "score": 0.014438291139240507,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "date_utc": "2025-10-07T12:19:47Z",
+            "has_context": true,
+            "replaced_urls": "",
+            "session_id": "42 Club chat-S0006",
+            "context_length": 1140,
+            "chat_mode": "group",
+            "chat": "42 Club chat",
+            "msg_id": "42 Club chat-S0006-M0327"
+          }
+        },
+        {
+          "id": "42 Club chat-S0002-M0244",
+          "text": "Я не про нфт, мы же говорим с тобой сейчас про исходные концепты",
+          "score": 0.014373024236037934,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "context_length": 1323,
+            "session_id": "42 Club chat-S0002",
+            "chat_mode": "group",
+            "replaced_urls": "",
+            "date_utc": "2025-10-01T19:11:50Z",
+            "msg_id": "42 Club chat-S0002-M0244",
+            "has_context": true,
+            "chat": "42 Club chat"
+          }
+        },
+        {
+          "id": "42 Club chat-S0002-M0036",
+          "text": "Так он про себя говорил",
+          "score": 0.009919517102615695,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "has_context": true,
+            "context_length": 1026,
+            "chat_mode": "group",
+            "msg_id": "42 Club chat-S0002-M0036",
+            "date_utc": "2025-10-01T09:49:32Z",
+            "chat": "42 Club chat",
+            "session_id": "42 Club chat-S0002",
+            "replaced_urls": ""
+          }
+        },
+        {
+          "id": "42 Club chat-S0001-M0075",
+          "text": "Такая вот роза сегодня сминтилась\n\nhttps://t.me/nft/eternalrose-28310",
+          "score": 0.009836065573770491,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "chat": "42 Club chat",
+            "date_utc": "2025-09-30T15:07:55Z",
+            "chat_mode": "group",
+            "session_id": "42 Club chat-S0001",
+            "msg_id": "42 Club chat-S0001-M0075",
+            "context_length": 649,
+            "has_context": true,
+            "replaced_urls": ""
+          }
+        },
+        {
+          "id": "42 Club chat-S0006-M0328",
+          "text": "Вопрос Roxman нужно задать, так как верификация мажора стоит",
+          "score": 0.00967741935483871,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "session_id": "42 Club chat-S0006",
+            "context_length": 1165,
+            "chat_mode": "group",
+            "replaced_urls": "",
+            "chat": "42 Club chat",
+            "date_utc": "2025-10-07T12:20:13Z",
+            "has_context": true,
+            "msg_id": "42 Club chat-S0006-M0328"
+          }
+        },
+        {
+          "id": "42 Club chat-S0003-M0085",
+          "text": "На тоне тонфиш только как то себя показал",
+          "score": 0.009523809523809523,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "chat_mode": "group",
+            "session_id": "42 Club chat-S0003",
+            "chat": "42 Club chat",
+            "context_length": 378,
+            "date_utc": "2025-10-03T10:03:13Z",
+            "replaced_urls": "",
+            "msg_id": "42 Club chat-S0003-M0085",
+            "has_context": true
+          }
+        },
+        {
+          "id": "42 Club chat-S0002-M0022",
+          "text": "Про меня как раз",
+          "score": 0.009433465085638998,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "replaced_urls": "",
+            "has_context": true,
+            "chat_mode": "group",
+            "msg_id": "42 Club chat-S0002-M0022",
+            "date_utc": "2025-10-01T09:33:40Z",
+            "context_length": 534,
+            "chat": "42 Club chat",
+            "session_id": "42 Club chat-S0002"
+          }
+        },
+        {
+          "id": "42 Club chat-S0006-M0218",
+          "text": "Так там могут разрабы крутить и комсу возвращать",
+          "score": 0.00923076923076923,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "chat": "42 Club chat",
+            "has_context": true,
+            "chat_mode": "group",
+            "msg_id": "42 Club chat-S0006-M0218",
+            "context_length": 966,
+            "replaced_urls": "",
+            "session_id": "42 Club chat-S0006",
+            "date_utc": "2025-10-06T22:55:32Z"
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0190",
+          "text": "Может это колл что пора фиксировать",
+          "score": 0.00909090909090909,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "chat": "42 Club chat",
+            "msg_id": "42 Club chat-S0007-M0190",
+            "chat_mode": "group",
+            "has_context": true,
+            "replaced_urls": "",
+            "date_utc": "2025-10-08T04:44:20Z",
+            "session_id": "42 Club chat-S0007",
+            "context_length": 354
+          }
+        },
+        {
+          "id": "42 Club chat-S0002-M0035",
+          "text": "Ага, был как то в чате скруджа, неделю продержался, устал слушать как школьники обсуждают куда поступить после школы",
+          "score": 0.008955223880597015,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "replaced_urls": "",
+            "msg_id": "42 Club chat-S0002-M0035",
+            "chat": "42 Club chat",
+            "has_context": true,
+            "session_id": "42 Club chat-S0002",
+            "date_utc": "2025-10-01T09:48:19Z",
+            "chat_mode": "group",
+            "context_length": 912
+          }
+        }
+      ],
+      "relevance_analysis": {
+        "overall_score": 0.1,
+        "individual_scores": [
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01
+        ],
+        "problems": {
+          "indexing": 0,
+          "search": 9,
+          "context": 0
+        },
+        "explanation": "Все найденные сообщения не содержат ключевого слова \"Полностью\" в смысле запроса. Вероятно, запрос был интерпретирован как часть фразы, а не как отдельный термин. Результаты относятся к другим темам, поэтому релевантность крайне низкая.",
+        "recommendations": [
+          "Уточните запрос, добавив кавычки вокруг слова \"Полностью\" для поиска точного совпадения.",
+          "Попробуйте использовать более конкретные ключевые слова, связанные с темой, которую ищете.",
+          "Проверьте, что слово не является частью другого слова (например, \"полностью\" в составе фразы).",
+          "Если слово является именем, уточните его написание и контекст."
+        ]
+      },
+      "timestamp": "2025-10-09T01:22:12.212313",
+      "error": null
+    },
+    {
+      "query": {
+        "id": "42 Club chat_2",
+        "query": "кто упоминал Полностью?",
+        "type": "factual",
+        "chat_name": "42 Club chat",
+        "entity": "Полностью",
+        "timeframe": null,
+        "generated_at": "2025-10-09T01:21:58.531292"
+      },
+      "search_results": [
+        {
+          "id": "42 Club chat-S0006-M0327",
+          "text": "И все кто писали про него, так себе каналы",
+          "score": 0.011122448979591837,
+          "query_id": "42 Club chat_2",
+          "metadata": {
+            "date_utc": "2025-10-07T12:19:47Z",
+            "has_context": true,
+            "replaced_urls": "",
+            "session_id": "42 Club chat-S0006",
+            "context_length": 1140,
+            "chat_mode": "group",
+            "chat": "42 Club chat",
+            "msg_id": "42 Club chat-S0006-M0327"
+          }
+        },
+        {
+          "id": "42 Club chat-S0001-M0122",
+          "text": "19.5 флор 🫣🫣",
+          "score": 0.009836065573770491,
+          "query_id": "42 Club chat_2",
+          "metadata": {
+            "chat_mode": "group",
+            "session_id": "42 Club chat-S0001",
+            "chat": "42 Club chat",
+            "context_length": 565,
+            "replaced_urls": "",
+            "date_utc": "2025-09-30T16:40:47Z",
+            "has_context": true,
+            "msg_id": "42 Club chat-S0001-M0122"
+          }
+        },
+        {
+          "id": "42 Club chat-S0001-M0125",
+          "text": "объем за аукционы считался?",
+          "score": 0.00967741935483871,
+          "query_id": "42 Club chat_2",
+          "metadata": {
+            "has_context": true,
+            "chat": "42 Club chat",
+            "msg_id": "42 Club chat-S0001-M0125",
+            "context_length": 426,
+            "replaced_urls": "",
+            "chat_mode": "group",
+            "date_utc": "2025-09-30T16:47:28Z",
+            "session_id": "42 Club chat-S0001"
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0190",
+          "text": "Может это колл что пора фиксировать",
+          "score": 0.009523809523809523,
+          "query_id": "42 Club chat_2",
+          "metadata": {
+            "chat": "42 Club chat",
+            "msg_id": "42 Club chat-S0007-M0190",
+            "chat_mode": "group",
+            "has_context": true,
+            "replaced_urls": "",
+            "date_utc": "2025-10-08T04:44:20Z",
+            "session_id": "42 Club chat-S0007",
+            "context_length": 354
+          }
+        },
+        {
+          "id": "42 Club chat-S0002-M0018",
+          "text": "а кто в итоге нафлипал несколько лямов, не знаете? там дуров про кого то говорил",
+          "score": 0.009429280397022333,
+          "query_id": "42 Club chat_2",
+          "metadata": {
+            "msg_id": "42 Club chat-S0002-M0018",
+            "date_utc": "2025-10-01T09:32:34Z",
+            "context_length": 387,
+            "replaced_urls": "",
+            "session_id": "42 Club chat-S0002",
+            "chat_mode": "group",
+            "has_context": true,
+            "chat": "42 Club chat"
+          }
+        },
+        {
+          "id": "42 Club chat-S0001-M0124",
+          "text": "NVIDIA первыми прошли рубеж капитализации в 4,5 триллиона долларов. Это больше, чем ВВП Индии — 4,187 трлн. Но меньше, чем Германии, хоть и не сильно — 4,921 трлн.",
+          "score": 0.009375,
+          "query_id": "42 Club chat_2",
+          "metadata": {
+            "chat": "42 Club chat",
+            "session_id": "42 Club chat-S0001",
+            "chat_mode": "group",
+            "msg_id": "42 Club chat-S0001-M0124",
+            "replaced_urls": "",
+            "has_context": true,
+            "date_utc": "2025-09-30T16:45:09Z",
+            "context_length": 305
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0374",
+          "text": "Да, это точно 👍",
+          "score": 0.00923076923076923,
+          "query_id": "42 Club chat_2",
+          "metadata": {
+            "date_utc": "2025-10-08T10:54:41Z",
+            "replaced_urls": "",
+            "chat_mode": "group",
+            "chat": "42 Club chat",
+            "session_id": "42 Club chat-S0007",
+            "has_context": true,
+            "msg_id": "42 Club chat-S0007-M0374",
+            "context_length": 1718
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0123",
+          "text": "Прямых слов о выплате за сбт не было, ну а так конечно столько лет собирать их, хотелось бы))",
+          "score": 0.00909090909090909,
+          "query_id": "42 Club chat_2",
+          "metadata": {
+            "msg_id": "42 Club chat-S0007-M0123",
+            "chat": "42 Club chat",
+            "context_length": 458,
+            "date_utc": "2025-10-07T21:25:14Z",
+            "has_context": true,
+            "session_id": "42 Club chat-S0007",
+            "replaced_urls": "",
+            "chat_mode": "group"
+          }
+        },
+        {
+          "id": "42 Club chat-S0002-M0256",
+          "text": "Наглое враньё",
+          "score": 0.008955223880597015,
+          "query_id": "42 Club chat_2",
+          "metadata": {
+            "date_utc": "2025-10-01T19:31:23Z",
+            "msg_id": "42 Club chat-S0002-M0256",
+            "chat_mode": "group",
+            "context_length": 1081,
+            "has_context": true,
+            "chat": "42 Club chat",
+            "replaced_urls": "",
+            "session_id": "42 Club chat-S0002"
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0373",
+          "text": "Самое интересное каких-то реально прикольных моделей, со смыслом найти легче иногда и купить, чем что-то по проще. Тут еще видимо фактор случайности в какие руки попадает подарок. Вообще если бы каждый на своем фоне просто собирал бы клеверы то их не стало бы уже очень скоро. Но в тоже время хорошо, что так не делают))) Приятно через время иметь будет, что-то эксклюзивное.",
+          "score": 0.008823529411764706,
+          "query_id": "42 Club chat_2",
+          "metadata": {
+            "date_utc": "2025-10-08T10:53:51Z",
+            "chat": "42 Club chat",
+            "msg_id": "42 Club chat-S0007-M0373",
+            "has_context": true,
+            "chat_mode": "group",
+            "replaced_urls": "",
+            "session_id": "42 Club chat-S0007",
+            "context_length": 1347
+          }
+        }
+      ],
+      "relevance_analysis": {
+        "overall_score": 0.05,
+        "individual_scores": [
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01
+        ],
+        "problems": {
+          "indexing": 0,
+          "search": 10,
+          "context": 0
+        },
+        "explanation": "Все найденные сообщения принадлежат одному чату и не содержат упоминания слова \"Полностью\" или информации о том, кто его упоминал. Поэтому релевантность крайне низкая, и пользователь не получит нужной информации.",
+        "recommendations": [
+          "Проверьте, правильно ли сформулирован запрос: уточните, о каком именно \"Полностью\" идёт речь (имя, термин, название).",
+          "Добавьте ключевые слова, которые могут помочь системе найти нужный контекст, например \"упоминал\", \"ссылка\", \"тема\".",
+          "Если это внутренний чат, убедитесь, что индексация всех сообщений включена и обновлена.",
+          "Попробуйте использовать более точный поиск по датам или авторам, если это возможно."
+        ]
+      },
+      "timestamp": "2025-10-09T01:22:26.588788",
+      "error": null
+    },
+    {
+      "query": {
+        "id": "42 Club chat_3",
+        "query": "какие решения принимали по Один в последнюю неделю?",
+        "type": "contextual",
+        "chat_name": "42 Club chat",
+        "entity": "Один",
+        "timeframe": "последнюю неделю",
+        "generated_at": "2025-10-09T01:21:58.531293"
+      },
+      "search_results": [
+        {
+          "id": "42 Club chat-S0005-M0042",
+          "text": "Тут в чате один аналитик есть, можете позвать",
+          "score": 0.014864572047670638,
+          "query_id": "42 Club chat_3",
+          "metadata": {
+            "replaced_urls": "",
+            "chat": "42 Club chat",
+            "date_utc": "2025-10-04T16:36:14Z",
+            "chat_mode": "group",
+            "msg_id": "42 Club chat-S0005-M0042",
+            "session_id": "42 Club chat-S0005",
+            "has_context": true,
+            "context_length": 1115
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0088",
+          "text": "Официально подтверждённый пока один, МИД выражает озабоченность 😫",
+          "score": 0.011946386946386946,
+          "query_id": "42 Club chat_3",
+          "metadata": {
+            "replaced_urls": "",
+            "chat": "42 Club chat",
+            "msg_id": "42 Club chat-S0005-M0088",
+            "session_id": "42 Club chat-S0005",
+            "has_context": true,
+            "date_utc": "2025-10-04T18:30:45Z",
+            "chat_mode": "group",
+            "context_length": 1526
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0101",
+          "text": "Лол попы на 5 месте в тоннеле за неделю",
+          "score": 0.011371237458193979,
+          "query_id": "42 Club chat_3",
+          "metadata": {
+            "chat_mode": "group",
+            "session_id": "42 Club chat-S0007",
+            "context_length": 1263,
+            "msg_id": "42 Club chat-S0007-M0101",
+            "date_utc": "2025-10-07T20:28:17Z",
+            "chat": "42 Club chat",
+            "has_context": true,
+            "replaced_urls": ""
+          }
+        },
+        {
+          "id": "42 Club chat-S0002-M0035",
+          "text": "Ага, был как то в чате скруджа, неделю продержался, устал слушать как школьники обсуждают куда поступить после школы",
+          "score": 0.011111111111111112,
+          "query_id": "42 Club chat_3",
+          "metadata": {
+            "replaced_urls": "",
+            "msg_id": "42 Club chat-S0002-M0035",
+            "chat": "42 Club chat",
+            "has_context": true,
+            "session_id": "42 Club chat-S0002",
+            "date_utc": "2025-10-01T09:48:19Z",
+            "chat_mode": "group",
+            "context_length": 912
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0190",
+          "text": "Может это колл что пора фиксировать",
+          "score": 0.009836065573770491,
+          "query_id": "42 Club chat_3",
+          "metadata": {
+            "chat": "42 Club chat",
+            "msg_id": "42 Club chat-S0007-M0190",
+            "chat_mode": "group",
+            "has_context": true,
+            "replaced_urls": "",
+            "date_utc": "2025-10-08T04:44:20Z",
+            "session_id": "42 Club chat-S0007",
+            "context_length": 354
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0095",
+          "text": "Интересная идея",
+          "score": 0.00967741935483871,
+          "query_id": "42 Club chat_3",
+          "metadata": {
+            "replaced_urls": "",
+            "has_context": true,
+            "date_utc": "2025-10-04T19:55:04Z",
+            "session_id": "42 Club chat-S0005",
+            "chat_mode": "group",
+            "msg_id": "42 Club chat-S0005-M0095",
+            "chat": "42 Club chat",
+            "context_length": 471
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0041",
+          "text": "Посмотрели график EVAA, что думаете? шорт или лонг? не совсем понятно будет ли их протокол массово использоваться и будет ли расти TVL (сейчас там около 20 млн$ и то от их инвесторов наверное) а комьюнити TON c DeFi вообще не дружит судя по ликвидности.",
+          "score": 0.009523809523809523,
+          "query_id": "42 Club chat_3",
+          "metadata": {
+            "chat": "42 Club chat",
+            "chat_mode": "group",
+            "date_utc": "2025-10-04T16:35:05Z",
+            "msg_id": "42 Club chat-S0005-M0041",
+            "session_id": "42 Club chat-S0005",
+            "has_context": true,
+            "context_length": 906,
+            "replaced_urls": ""
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0189",
+          "text": "Он простил",
+          "score": 0.009375,
+          "query_id": "42 Club chat_3",
+          "metadata": {
+            "chat": "42 Club chat",
+            "date_utc": "2025-10-08T03:28:47Z",
+            "msg_id": "42 Club chat-S0007-M0189",
+            "session_id": "42 Club chat-S0007",
+            "has_context": true,
+            "chat_mode": "group",
+            "context_length": 353,
+            "replaced_urls": ""
+          }
+        },
+        {
+          "id": "42 Club chat-S0004-M0204",
+          "text": "Поношенный",
+          "score": 0.00909090909090909,
+          "query_id": "42 Club chat_3",
+          "metadata": {
+            "chat": "42 Club chat",
+            "session_id": "42 Club chat-S0004",
+            "replaced_urls": "",
+            "chat_mode": "group",
+            "msg_id": "42 Club chat-S0004-M0204",
+            "date_utc": "2025-10-04T09:38:31Z",
+            "context_length": 570,
+            "has_context": true
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0043",
+          "text": "Он правда пока ни разу не был прав в своих прогнозах, но это не важно",
+          "score": 0.008955223880597015,
+          "query_id": "42 Club chat_3",
+          "metadata": {
+            "has_context": true,
+            "chat": "42 Club chat",
+            "chat_mode": "group",
+            "replaced_urls": "",
+            "date_utc": "2025-10-04T16:36:36Z",
+            "context_length": 1055,
+            "msg_id": "42 Club chat-S0005-M0043",
+            "session_id": "42 Club chat-S0005"
+          }
+        }
+      ],
+      "relevance_analysis": {
+        "overall_score": 0.05,
+        "individual_scores": [
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01
+        ],
+        "problems": {
+          "indexing": 0,
+          "search": 8,
+          "context": 8
+        },
+        "explanation": "The query asks for decisions made about \"Один\" (likely a project or entity named Odin) in the last week. All returned results are from a single chat and discuss unrelated topics such as a single analyst, a minister’s concern, or random chat comments. None of the snippets mention Odin, decisions, or a recent time frame. Therefore, the relevance is extremely low. The search algorithm retrieved irrelevant content, indicating a search problem. Contextual mismatch is also high because the query’s subject does not align with the content of the results.",
+        "recommendations": [
+          "Refine the query to include more specific keywords (e.g., \"решения по Odin\", \"принятые решения\", \"последняя неделя\").",
+          "Add a date filter or time range to limit results to the last week.",
+          "Search in a broader set of chats or documents, not just a single club chat.",
+          "Use a different search engine or index that includes project-specific metadata.",
+          "Verify that the term \"Один\" is correctly spelled and not confused with the Russian word \"один\"."
+        ]
+      },
+      "timestamp": "2025-10-09T01:22:45.998054",
+      "error": null
+    },
+    {
+      "query": {
+        "id": "42 Club chat_4",
+        "query": "какие решения принимали по Один в прошлую неделю?",
+        "type": "contextual",
+        "chat_name": "42 Club chat",
+        "entity": "Один",
+        "timeframe": "прошлую неделю",
+        "generated_at": "2025-10-09T01:21:58.531294"
+      },
+      "search_results": [
+        {
+          "id": "42 Club chat-S0005-M0042",
+          "text": "Тут в чате один аналитик есть, можете позвать",
+          "score": 0.014724711907810498,
+          "query_id": "42 Club chat_4",
+          "metadata": {
+            "replaced_urls": "",
+            "chat": "42 Club chat",
+            "date_utc": "2025-10-04T16:36:14Z",
+            "chat_mode": "group",
+            "msg_id": "42 Club chat-S0005-M0042",
+            "session_id": "42 Club chat-S0005",
+            "has_context": true,
+            "context_length": 1115
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0088",
+          "text": "Официально подтверждённый пока один, МИД выражает озабоченность 😫",
+          "score": 0.012445278298936834,
+          "query_id": "42 Club chat_4",
+          "metadata": {
+            "replaced_urls": "",
+            "chat": "42 Club chat",
+            "msg_id": "42 Club chat-S0005-M0088",
+            "session_id": "42 Club chat-S0005",
+            "has_context": true,
+            "date_utc": "2025-10-04T18:30:45Z",
+            "chat_mode": "group",
+            "context_length": 1526
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0024",
+          "text": "Согласен. Это в целом беда многих главное успеть пока хайп, а потом уже думать а зачем и какие минусы в этом подходе",
+          "score": 0.010210469508904479,
+          "query_id": "42 Club chat_4",
+          "metadata": {
+            "session_id": "42 Club chat-S0005",
+            "msg_id": "42 Club chat-S0005-M0024",
+            "context_length": 1141,
+            "chat_mode": "group",
+            "chat": "42 Club chat",
+            "date_utc": "2025-10-04T15:56:38Z",
+            "replaced_urls": "",
+            "has_context": true
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0101",
+          "text": "Лол попы на 5 месте в тоннеле за неделю",
+          "score": 0.01004995004995005,
+          "query_id": "42 Club chat_4",
+          "metadata": {
+            "chat_mode": "group",
+            "session_id": "42 Club chat-S0007",
+            "context_length": 1263,
+            "msg_id": "42 Club chat-S0007-M0101",
+            "date_utc": "2025-10-07T20:28:17Z",
+            "chat": "42 Club chat",
+            "has_context": true,
+            "replaced_urls": ""
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0190",
+          "text": "Может это колл что пора фиксировать",
+          "score": 0.009836065573770491,
+          "query_id": "42 Club chat_4",
+          "metadata": {
+            "chat": "42 Club chat",
+            "msg_id": "42 Club chat-S0007-M0190",
+            "chat_mode": "group",
+            "has_context": true,
+            "replaced_urls": "",
+            "date_utc": "2025-10-08T04:44:20Z",
+            "session_id": "42 Club chat-S0007",
+            "context_length": 354
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0095",
+          "text": "Интересная идея",
+          "score": 0.00967741935483871,
+          "query_id": "42 Club chat_4",
+          "metadata": {
+            "replaced_urls": "",
+            "has_context": true,
+            "date_utc": "2025-10-04T19:55:04Z",
+            "session_id": "42 Club chat-S0005",
+            "chat_mode": "group",
+            "msg_id": "42 Club chat-S0005-M0095",
+            "chat": "42 Club chat",
+            "context_length": 471
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0189",
+          "text": "Он простил",
+          "score": 0.009523809523809523,
+          "query_id": "42 Club chat_4",
+          "metadata": {
+            "chat": "42 Club chat",
+            "date_utc": "2025-10-08T03:28:47Z",
+            "msg_id": "42 Club chat-S0007-M0189",
+            "session_id": "42 Club chat-S0007",
+            "has_context": true,
+            "chat_mode": "group",
+            "context_length": 353,
+            "replaced_urls": ""
+          }
+        },
+        {
+          "id": "42 Club chat-S0004-M0204",
+          "text": "Поношенный",
+          "score": 0.009375,
+          "query_id": "42 Club chat_4",
+          "metadata": {
+            "chat": "42 Club chat",
+            "session_id": "42 Club chat-S0004",
+            "replaced_urls": "",
+            "chat_mode": "group",
+            "msg_id": "42 Club chat-S0004-M0204",
+            "date_utc": "2025-10-04T09:38:31Z",
+            "context_length": 570,
+            "has_context": true
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0041",
+          "text": "Посмотрели график EVAA, что думаете? шорт или лонг? не совсем понятно будет ли их протокол массово использоваться и будет ли расти TVL (сейчас там около 20 млн$ и то от их инвесторов наверное) а комьюнити TON c DeFi вообще не дружит судя по ликвидности.",
+          "score": 0.00923076923076923,
+          "query_id": "42 Club chat_4",
+          "metadata": {
+            "chat": "42 Club chat",
+            "chat_mode": "group",
+            "date_utc": "2025-10-04T16:35:05Z",
+            "msg_id": "42 Club chat-S0005-M0041",
+            "session_id": "42 Club chat-S0005",
+            "has_context": true,
+            "context_length": 906,
+            "replaced_urls": ""
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0193",
+          "text": "Хех его знаеееет",
+          "score": 0.008955223880597015,
+          "query_id": "42 Club chat_4",
+          "metadata": {
+            "msg_id": "42 Club chat-S0007-M0193",
+            "context_length": 325,
+            "has_context": true,
+            "chat": "42 Club chat",
+            "date_utc": "2025-10-08T05:10:10Z",
+            "session_id": "42 Club chat-S0007",
+            "chat_mode": "group",
+            "replaced_urls": ""
+          }
+        }
+      ],
+      "relevance_analysis": {
+        "overall_score": 0.08,
+        "individual_scores": [
+          0.02,
+          0.02,
+          0.02,
+          0.02,
+          0.02,
+          0.02,
+          0.02,
+          0.02,
+          0.02,
+          0.02
+        ],
+        "problems": {
+          "indexing": 0,
+          "search": 10,
+          "context": 10
+        },
+        "explanation": "All returned messages are from the same chat (42 Club chat) and contain no mention of \"Один\" or any decisions made in the past week. The query specifies a time constraint (last week) which cannot be verified because the results lack timestamps. Consequently, the relevance of each result is extremely low. The search algorithm returned irrelevant content, indicating a problem with the search matching logic, and the context is missing, leading to a high context mismatch score.",
+        "recommendations": [
+          "Refine the query to include more specific keywords (e.g., \"решения по Один\", \"принятые решения\", \"последняя неделя\").",
+          "Add a date filter or specify the exact week to narrow the search results.",
+          "Check the search index for proper tokenization of the word \"Один\" and ensure it is not being treated as a stop word.",
+          "Consider using a more advanced search engine that supports phrase matching and date range queries.",
+          "Verify that the chat logs contain timestamps; if not, add them to improve time‑based filtering."
+        ]
+      },
+      "timestamp": "2025-10-09T01:23:04.594184",
+      "error": null
+    },
+    {
+      "query": {
+        "id": "42 Club chat_5",
+        "query": "как развивалась ситуация с Один в прошлую неделю?",
+        "type": "contextual",
+        "chat_name": "42 Club chat",
+        "entity": "Один",
+        "timeframe": "прошлую неделю",
+        "generated_at": "2025-10-09T01:21:58.531295"
+      },
+      "search_results": [
+        {
+          "id": "42 Club chat-S0005-M0042",
+          "text": "Тут в чате один аналитик есть, можете позвать",
+          "score": 0.0136986301369863,
+          "query_id": "42 Club chat_5",
+          "metadata": {
+            "replaced_urls": "",
+            "chat": "42 Club chat",
+            "date_utc": "2025-10-04T16:36:14Z",
+            "chat_mode": "group",
+            "msg_id": "42 Club chat-S0005-M0042",
+            "session_id": "42 Club chat-S0005",
+            "has_context": true,
+            "context_length": 1115
+          }
+        },
+        {
+          "id": "42 Club chat-S0006-M0037",
+          "text": "А с чего бы вдруг начался ажиотаж? Если бы например тг как-то подогрели, может начался бы",
+          "score": 0.0116353407492648,
+          "query_id": "42 Club chat_5",
+          "metadata": {
+            "msg_id": "42 Club chat-S0006-M0037",
+            "date_utc": "2025-10-06T18:21:11Z",
+            "chat_mode": "group",
+            "has_context": true,
+            "chat": "42 Club chat",
+            "session_id": "42 Club chat-S0006",
+            "replaced_urls": "",
+            "context_length": 1067
+          }
+        },
+        {
+          "id": "42 Club chat-S0002-M0035",
+          "text": "Ага, был как то в чате скруджа, неделю продержался, устал слушать как школьники обсуждают куда поступить после школы",
+          "score": 0.011329661683713611,
+          "query_id": "42 Club chat_5",
+          "metadata": {
+            "replaced_urls": "",
+            "msg_id": "42 Club chat-S0002-M0035",
+            "chat": "42 Club chat",
+            "has_context": true,
+            "session_id": "42 Club chat-S0002",
+            "date_utc": "2025-10-01T09:48:19Z",
+            "chat_mode": "group",
+            "context_length": 912
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0101",
+          "text": "Лол попы на 5 месте в тоннеле за неделю",
+          "score": 0.011287758346581876,
+          "query_id": "42 Club chat_5",
+          "metadata": {
+            "chat_mode": "group",
+            "session_id": "42 Club chat-S0007",
+            "context_length": 1263,
+            "msg_id": "42 Club chat-S0007-M0101",
+            "date_utc": "2025-10-07T20:28:17Z",
+            "chat": "42 Club chat",
+            "has_context": true,
+            "replaced_urls": ""
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0095",
+          "text": "Интересная идея",
+          "score": 0.009836065573770491,
+          "query_id": "42 Club chat_5",
+          "metadata": {
+            "replaced_urls": "",
+            "has_context": true,
+            "date_utc": "2025-10-04T19:55:04Z",
+            "session_id": "42 Club chat-S0005",
+            "chat_mode": "group",
+            "msg_id": "42 Club chat-S0005-M0095",
+            "chat": "42 Club chat",
+            "context_length": 471
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0190",
+          "text": "Может это колл что пора фиксировать",
+          "score": 0.00967741935483871,
+          "query_id": "42 Club chat_5",
+          "metadata": {
+            "chat": "42 Club chat",
+            "msg_id": "42 Club chat-S0007-M0190",
+            "chat_mode": "group",
+            "has_context": true,
+            "replaced_urls": "",
+            "date_utc": "2025-10-08T04:44:20Z",
+            "session_id": "42 Club chat-S0007",
+            "context_length": 354
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0021",
+          "text": "Но, как говориться, понедельник действительно начинается в субботу",
+          "score": 0.009523809523809523,
+          "query_id": "42 Club chat_5",
+          "metadata": {
+            "chat": "42 Club chat",
+            "has_context": true,
+            "replaced_urls": "",
+            "msg_id": "42 Club chat-S0005-M0021",
+            "session_id": "42 Club chat-S0005",
+            "date_utc": "2025-10-04T15:54:37Z",
+            "context_length": 1099,
+            "chat_mode": "group"
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0189",
+          "text": "Он простил",
+          "score": 0.009375,
+          "query_id": "42 Club chat_5",
+          "metadata": {
+            "chat": "42 Club chat",
+            "date_utc": "2025-10-08T03:28:47Z",
+            "msg_id": "42 Club chat-S0007-M0189",
+            "session_id": "42 Club chat-S0007",
+            "has_context": true,
+            "chat_mode": "group",
+            "context_length": 353,
+            "replaced_urls": ""
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0022",
+          "text": "Ну с другой стороны если элитный подарок нереально купить и даешь поносить за деньги на пол года и т.д. То может и ок",
+          "score": 0.00923076923076923,
+          "query_id": "42 Club chat_5",
+          "metadata": {
+            "replaced_urls": "",
+            "chat_mode": "group",
+            "context_length": 1217,
+            "has_context": true,
+            "session_id": "42 Club chat-S0005",
+            "date_utc": "2025-10-04T15:55:00Z",
+            "msg_id": "42 Club chat-S0005-M0022",
+            "chat": "42 Club chat"
+          }
+        },
+        {
+          "id": "42 Club chat-S0004-M0204",
+          "text": "Поношенный",
+          "score": 0.00909090909090909,
+          "query_id": "42 Club chat_5",
+          "metadata": {
+            "chat": "42 Club chat",
+            "session_id": "42 Club chat-S0004",
+            "replaced_urls": "",
+            "chat_mode": "group",
+            "msg_id": "42 Club chat-S0004-M0204",
+            "date_utc": "2025-10-04T09:38:31Z",
+            "context_length": 570,
+            "has_context": true
+          }
+        }
+      ],
+      "relevance_analysis": {
+        "overall_score": 0.05,
+        "individual_scores": [
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01
+        ],
+        "problems": {
+          "indexing": 0,
+          "search": 1,
+          "context": 1
+        },
+        "explanation": "All returned chat snippets are unrelated to the user’s query about the development of the situation with \"Один\" over the past week. The search engine failed to match the key terms and context, resulting in a very low relevance score. No indexing issues were detected; the problem lies in the search matching and contextual understanding.",
+        "recommendations": [
+          "Improve query parsing to detect the entity \"Один\" and the time frame \"прошлую неделю\".",
+          "Enhance contextual filtering so that only chats discussing the specified entity within the relevant time window are considered.",
+          "Add metadata to chats indicating key topics and timestamps to aid precise retrieval.",
+          "Consider using a semantic search model that can understand the relationship between the entity and the time period.",
+          "Implement a feedback loop where low‑relevance results are flagged and used to refine the ranking algorithm."
+        ]
+      },
+      "timestamp": "2025-10-09T01:23:21.563881",
+      "error": null
+    }
+  ],
+  "metrics": {
+    "average_score": 0.066,
+    "median_score": 0.05,
+    "success_rate": 0.0,
+    "total_queries": 5,
+    "successful_queries": 0,
+    "details": {
+      "basic": {
+        "average_score": 0.066,
+        "median_score": 0.05,
+        "min_score": 0.05,
+        "max_score": 0.1,
+        "std_deviation": 0.023021728866442676,
+        "success_rate": 0.0,
+        "total_queries": 5,
+        "successful_queries": 0
+      },
+      "by_type": {
+        "factual": {
+          "average_score": 0.07500000000000001,
+          "median_score": 0.07500000000000001,
+          "success_rate": 0.0,
+          "total_queries": 2,
+          "successful_queries": 0
+        },
+        "contextual": {
+          "average_score": 0.060000000000000005,
+          "median_score": 0.05,
+          "success_rate": 0.0,
+          "total_queries": 3,
+          "successful_queries": 0
+        }
+      },
+      "problems": {
+        "total_problems": {
+          "indexing": 0,
+          "search": 38,
+          "context": 19
+        },
+        "problem_stats": {
+          "indexing": {
+            "total_count": 0,
+            "affected_queries": 0,
+            "average_score_when_problem": 0.0
+          },
+          "search": {
+            "total_count": 38,
+            "affected_queries": 5,
+            "average_score_when_problem": 0.066
+          },
+          "context": {
+            "total_count": 19,
+            "affected_queries": 3,
+            "average_score_when_problem": 0.060000000000000005
+          }
+        },
+        "problem_details": {
+          "indexing": [],
+          "search": [
+            {
+              "query": "найти сообщения про Полностью",
+              "query_type": "factual",
+              "count": 9,
+              "score": 0.1
+            },
+            {
+              "query": "кто упоминал Полностью?",
+              "query_type": "factual",
+              "count": 10,
+              "score": 0.05
+            },
+            {
+              "query": "какие решения принимали по Один в последнюю неделю?",
+              "query_type": "contextual",
+              "count": 8,
+              "score": 0.05
+            },
+            {
+              "query": "какие решения принимали по Один в прошлую неделю?",
+              "query_type": "contextual",
+              "count": 10,
+              "score": 0.08
+            },
+            {
+              "query": "как развивалась ситуация с Один в прошлую неделю?",
+              "query_type": "contextual",
+              "count": 1,
+              "score": 0.05
+            }
+          ],
+          "context": [
+            {
+              "query": "какие решения принимали по Один в последнюю неделю?",
+              "query_type": "contextual",
+              "count": 8,
+              "score": 0.05
+            },
+            {
+              "query": "какие решения принимали по Один в прошлую неделю?",
+              "query_type": "contextual",
+              "count": 10,
+              "score": 0.08
+            },
+            {
+              "query": "как развивалась ситуация с Один в прошлую неделю?",
+              "query_type": "contextual",
+              "count": 1,
+              "score": 0.05
+            }
+          ]
+        }
+      },
+      "temporal": {
+        "hour_1": {
+          "average_score": 0.066,
+          "query_count": 5
+        }
+      },
+      "comparative": {
+        "trend": "no_data",
+        "improvement": 0.0,
+        "comparison_available": false
+      }
+    }
+  },
+  "ai_recommendations": [
+    {
+      "title": "Рекомендации от Ollama",
+      "description": "[",
+      "suggestions": [
+        "[",
+        "{",
+        "\"title\": \"Improve …\",",
+        "...",
+        "We need to produce JSON array with up to 4 recommendations. Each recommendation: title, description, priority, suggestions array.",
+        "We need to consider the analysis: low scores, search problems, context mismatch, indexing not an issue. So we propose recommendations: 1) Enhance query parsing and tokenization for Russian language, including handling of stop words, phrase matching, and entity recognition. 2) Add metadata and timestamps to chat logs, enable date range filtering. 3) Expand index to include all chats and documents, not just 42 Club chat. 4) Implement semantic search model or use embeddings to improve relevance. Also maybe add user feedback loop.",
+        "We need to produce 4 recommendations. Each with 2-4 actions.",
+        "Let's craft them.",
+        "Recommendation 1: \"Enhance Russian language query parsing and tokenization\" priority high. Actions: 1) Update tokenizer to preserve multi-word entities and stop words; 2) Implement phrase matching for quoted terms; 3) Add morphological analyzer to handle inflections; 4) Integrate entity recognition for proper nouns like \"Полностью\" and \"Один\".",
+        "Recommendation 2: \"Add structured metadata and timestamps to chat logs\" priority high. Actions: 1) Ensure each message has a timestamp field; 2) Store message author and chat ID; 3) Index these fields for filtering; 4) Provide UI for date range queries.",
+        "Recommendation 3: \"Expand search scope beyond single chat\" priority medium. Actions: 1) Index all club chats and external documents; 2) Use relevance weighting to prioritize 42 Club chat when relevant; 3) Allow user to select chat scope; 4) Update ranking algorithm to consider chat popularity.",
+        "Recommendation 4: \"Implement semantic search and feedback loop\" priority medium. Actions: 1) Train embeddings on Russian chat corpus; 2) Replace keyword matching with similarity scoring; 3) Collect user feedback on relevance; 4) Retrain model periodically.",
+        "We need to produce JSON array. Let's craft.",
+        "Also we need to ensure each suggestion array has 2-4 actions. Provide 3-4 actions each.",
+        "Let's produce final JSON.<|end|><|start|>assistant<|channel|>final",
+        "[",
+        "{",
+        "\"title\": \"Улучшить обработку запросов на русском языке\",",
+        "\"description\": \"Обновить токенизацию и распознавание сущностей, чтобы корректно обрабатывать слова‑ключи, фразы и склонения.\",",
+        "\"priority\": \"high\",",
+        "\"suggestions\": [",
+        "\"Внедрить морфологический анализатор для нормализации русских слов.\",",
+        "\"Добавить поддержку фразового поиска (\\\"Полностью\\\" в кавычках).\",",
+        "\"Обновить список стоп‑слов, исключив частые но значимые слова.\",",
+        "\"Интегрировать NER‑модуль для распознавания имен собственных и названий проектов.\"",
+        "]",
+        "},",
+        "{",
+        "\"title\": \"Добавить метаданные и временные метки к сообщениям\",",
+        "\"description\": \"Обеспечить наличие точных временных и авторских данных, чтобы можно было фильтровать и ранжировать результаты по дате и источнику.\",",
+        "\"priority\": \"high\",",
+        "\"suggestions\": [",
+        "\"Убедиться, что каждый чат‑сообщение содержит поле timestamp.\",",
+        "\"Сохранять идентификатор автора и ID чата в индексе.\",",
+        "\"Разрешить поиск по диапазону дат в пользовательском интерфейсе.\",",
+        "\"Обновить схему индексации, чтобы включать новые поля.\"",
+        "]",
+        "},",
+        "{",
+        "\"title\": \"Расширить область поиска за пределы одного чата\",",
+        "\"description\": \"Включить в индекс все доступные чаты и документы, чтобы повысить покрытие и релевантность запросов.\",",
+        "\"priority\": \"medium\",",
+        "\"suggestions\": [",
+        "\"Индексировать все клубные чаты и внешние источники.\",",
+        "\"Ввести механизм выбора области поиска пользователем.\",",
+        "\"Переопределить веса релевантности, чтобы приоритет отдавался 42 Club chat, если он релевантен.\",",
+        "\"Проверить баланс между полнотой и скоростью поиска.\"",
+        "]",
+        "},",
+        "{",
+        "\"title\": \"Внедрить семантический поиск и цикл обратной связи\",",
+        "\"description\": \"Перейти от простого ключевого поиска к модели, основанной на эмбеддингах, и использовать пользовательские отклики для улучшения ранжирования.\",",
+        "\"priority\": \"medium\",",
+        "\"suggestions\": [",
+        "\"Обучить модель эмбеддингов на русском корпусе чат‑сообщений.\",",
+        "\""
+      ],
+      "priority": "ai"
+    }
+  ],
+  "report": "# Анализ качества поиска — 42 Club chat\n\n**Дата анализа:** 2025-10-09 01:24:01\n\n## 📊 Общая статистика\n- **Средняя оценка релевантности:** 0.00/10\n- **Медианная оценка:** 0.00/10\n- **Процент успешных поисков:** 0.0%\n- **Всего тестовых запросов:** 0\n- **Успешных запросов:** 0\n\n_Нет данных по типам запросов._\n\n✅ **Проблем не обнаружено**\n\n_Исторические данные отсутствуют._\n\n## 🔍 Детальные результаты\n### Запрос 1\n**Текст:** найти сообщения про Полностью\n**Тип:** factual\n**Оценка:** 0.1/10\n**Объяснение:** Все найденные сообщения не содержат ключевого слова \"Полностью\" в смысле запроса. Вероятно, запрос был интерпретирован как часть фразы, а не как отдельный термин. Результаты относятся к другим темам, поэтому релевантность крайне низкая.\n**Рекомендации:**\n- Уточните запрос, добавив кавычки вокруг слова \"Полностью\" для поиска точного совпадения.\n- Попробуйте использовать более конкретные ключевые слова, связанные с темой, которую ищете.\n- Проверьте, что слово не является частью другого слова (например, \"полностью\" в составе фразы).\n- Если слово является именем, уточните его написание и контекст.\n\n### Запрос 2\n**Текст:** кто упоминал Полностью?\n**Тип:** factual\n**Оценка:** 0.1/10\n**Объяснение:** Все найденные сообщения принадлежат одному чату и не содержат упоминания слова \"Полностью\" или информации о том, кто его упоминал. Поэтому релевантность крайне низкая, и пользователь не получит нужной информации.\n**Рекомендации:**\n- Проверьте, правильно ли сформулирован запрос: уточните, о каком именно \"Полностью\" идёт речь (имя, термин, название).\n- Добавьте ключевые слова, которые могут помочь системе найти нужный контекст, например \"упоминал\", \"ссылка\", \"тема\".\n- Если это внутренний чат, убедитесь, что индексация всех сообщений включена и обновлена.\n- Попробуйте использовать более точный поиск по датам или авторам, если это возможно.\n\n### Запрос 3\n**Текст:** какие решения принимали по Один в последнюю неделю?\n**Тип:** contextual\n**Оценка:** 0.1/10\n**Объяснение:** The query asks for decisions made about \"Один\" (likely a project or entity named Odin) in the last week. All returned results are from a single chat and discuss unrelated topics such as a single analyst, a minister’s concern, or random chat comments. None of the snippets mention Odin, decisions, or a recent time frame. Therefore, the relevance is extremely low. The search algorithm retrieved irrelevant content, indicating a search problem. Contextual mismatch is also high because the query’s subject does not align with the content of the results.\n**Рекомендации:**\n- Refine the query to include more specific keywords (e.g., \"решения по Odin\", \"принятые решения\", \"последняя неделя\").\n- Add a date filter or time range to limit results to the last week.\n- Search in a broader set of chats or documents, not just a single club chat.\n- Use a different search engine or index that includes project-specific metadata.\n- Verify that the term \"Один\" is correctly spelled and not confused with the Russian word \"один\".\n\n### Запрос 4\n**Текст:** какие решения принимали по Один в прошлую неделю?\n**Тип:** contextual\n**Оценка:** 0.1/10\n**Объяснение:** All returned messages are from the same chat (42 Club chat) and contain no mention of \"Один\" or any decisions made in the past week. The query specifies a time constraint (last week) which cannot be verified because the results lack timestamps. Consequently, the relevance of each result is extremely low. The search algorithm returned irrelevant content, indicating a problem with the search matching logic, and the context is missing, leading to a high context mismatch score.\n**Рекомендации:**\n- Refine the query to include more specific keywords (e.g., \"решения по Один\", \"принятые решения\", \"последняя неделя\").\n- Add a date filter or specify the exact week to narrow the search results.\n- Check the search index for proper tokenization of the word \"Один\" and ensure it is not being treated as a stop word.\n- Consider using a more advanced search engine that supports phrase matching and date range queries.\n- Verify that the chat logs contain timestamps; if not, add them to improve time‑based filtering.\n\n### Запрос 5\n**Текст:** как развивалась ситуация с Один в прошлую неделю?\n**Тип:** contextual\n**Оценка:** 0.1/10\n**Объяснение:** All returned chat snippets are unrelated to the user’s query about the development of the situation with \"Один\" over the past week. The search engine failed to match the key terms and context, resulting in a very low relevance score. No indexing issues were detected; the problem lies in the search matching and contextual understanding.\n**Рекомендации:**\n- Improve query parsing to detect the entity \"Один\" and the time frame \"прошлую неделю\".\n- Enhance contextual filtering so that only chats discussing the specified entity within the relevant time window are considered.\n- Add metadata to chats indicating key topics and timestamps to aid precise retrieval.\n- Consider using a semantic search model that can understand the relationship between the entity and the time period.\n- Implement a feedback loop where low‑relevance results are flagged and used to refine the ranking algorithm.\n\n## 💡 Рекомендации\n### Низкое качество поиска\nСредняя оценка релевантности составляет 0.00/10, что указывает на серьезные проблемы.\n**Предлагаемые действия:**\n- Проверить настройки индексации\n- Улучшить качество эмбеддингов\n- Настроить параметры поиска\n- Проверить фильтрацию результатов\n\n### Рекомендации от Ollama\n[\n**Приоритет:** ai\n**Предлагаемые действия:**\n- [\n- {\n- \"title\": \"Improve …\",\n- ...\n- We need to produce JSON array with up to 4 recommendations. Each recommendation: title, description, priority, suggestions array.\n- We need to consider the analysis: low scores, search problems, context mismatch, indexing not an issue. So we propose recommendations: 1) Enhance query parsing and tokenization for Russian language, including handling of stop words, phrase matching, and entity recognition. 2) Add metadata and timestamps to chat logs, enable date range filtering. 3) Expand index to include all chats and documents, not just 42 Club chat. 4) Implement semantic search model or use embeddings to improve relevance. Also maybe add user feedback loop.\n- We need to produce 4 recommendations. Each with 2-4 actions.\n- Let's craft them.\n- Recommendation 1: \"Enhance Russian language query parsing and tokenization\" priority high. Actions: 1) Update tokenizer to preserve multi-word entities and stop words; 2) Implement phrase matching for quoted terms; 3) Add morphological analyzer to handle inflections; 4) Integrate entity recognition for proper nouns like \"Полностью\" and \"Один\".\n- Recommendation 2: \"Add structured metadata and timestamps to chat logs\" priority high. Actions: 1) Ensure each message has a timestamp field; 2) Store message author and chat ID; 3) Index these fields for filtering; 4) Provide UI for date range queries.\n- Recommendation 3: \"Expand search scope beyond single chat\" priority medium. Actions: 1) Index all club chats and external documents; 2) Use relevance weighting to prioritize 42 Club chat when relevant; 3) Allow user to select chat scope; 4) Update ranking algorithm to consider chat popularity.\n- Recommendation 4: \"Implement semantic search and feedback loop\" priority medium. Actions: 1) Train embeddings on Russian chat corpus; 2) Replace keyword matching with similarity scoring; 3) Collect user feedback on relevance; 4) Retrain model periodically.\n- We need to produce JSON array. Let's craft.\n- Also we need to ensure each suggestion array has 2-4 actions. Provide 3-4 actions each.\n- Let's produce final JSON.<|end|><|start|>assistant<|channel|>final\n- [\n- {\n- \"title\": \"Улучшить обработку запросов на русском языке\",\n- \"description\": \"Обновить токенизацию и распознавание сущностей, чтобы корректно обрабатывать слова‑ключи, фразы и склонения.\",\n- \"priority\": \"high\",\n- \"suggestions\": [\n- \"Внедрить морфологический анализатор для нормализации русских слов.\",\n- \"Добавить поддержку фразового поиска (\\\"Полностью\\\" в кавычках).\",\n- \"Обновить список стоп‑слов, исключив частые но значимые слова.\",\n- \"Интегрировать NER‑модуль для распознавания имен собственных и названий проектов.\"\n- ]\n- },\n- {\n- \"title\": \"Добавить метаданные и временные метки к сообщениям\",\n- \"description\": \"Обеспечить наличие точных временных и авторских данных, чтобы можно было фильтровать и ранжировать результаты по дате и источнику.\",\n- \"priority\": \"high\",\n- \"suggestions\": [\n- \"Убедиться, что каждый чат‑сообщение содержит поле timestamp.\",\n- \"Сохранять идентификатор автора и ID чата в индексе.\",\n- \"Разрешить поиск по диапазону дат в пользовательском интерфейсе.\",\n- \"Обновить схему индексации, чтобы включать новые поля.\"\n- ]\n- },\n- {\n- \"title\": \"Расширить область поиска за пределы одного чата\",\n- \"description\": \"Включить в индекс все доступные чаты и документы, чтобы повысить покрытие и релевантность запросов.\",\n- \"priority\": \"medium\",\n- \"suggestions\": [\n- \"Индексировать все клубные чаты и внешние источники.\",\n- \"Ввести механизм выбора области поиска пользователем.\",\n- \"Переопределить веса релевантности, чтобы приоритет отдавался 42 Club chat, если он релевантен.\",\n- \"Проверить баланс между полнотой и скоростью поиска.\"\n- ]\n- },\n- {\n- \"title\": \"Внедрить семантический поиск и цикл обратной связи\",\n- \"description\": \"Перейти от простого ключевого поиска к модели, основанной на эмбеддингах, и использовать пользовательские отклики для улучшения ранжирования.\",\n- \"priority\": \"medium\",\n- \"suggestions\": [\n- \"Обучить модель эмбеддингов на русском корпусе чат‑сообщений.\",\n- \"\n"
+}

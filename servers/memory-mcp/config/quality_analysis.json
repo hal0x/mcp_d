@@ -1,0 +1,50 @@
+{
+  "quality_analysis": {
+    "ollama": {
+      "model": "gpt-oss-20b:latest",
+      "base_url": "http://localhost:11434",
+      "max_context_tokens": 12000,
+      "temperature": 0.1,
+      "max_tokens": 1000,
+      "thinking_level": "high"
+    },
+    "query_generation": {
+      "max_queries_per_chat": 10,
+      "factual_weight": 1.0,
+      "contextual_weight": 1.2,
+      "analytical_weight": 1.5,
+      "custom_weight": 1.0
+    },
+    "analysis": {
+      "batch_size": null,
+      "max_context_tokens": 12000,
+      "relevance_threshold": 5.0,
+      "success_rate_threshold": 0.7,
+      "results_per_query": 10,
+      "chroma_path": "artifacts/chroma_db",
+      "search_collection": "chat_messages",
+      "hybrid_alpha": 0.6,
+      "chats_dir": "chats",
+      "batch_max_size": 10,
+      "system_prompt_reserve": 0.2,
+      "max_query_tokens": 6000
+    },
+    "reporting": {
+      "reports_dir": "artifacts/reports/quality_analysis",
+      "history_dir": "quality_analysis_history",
+      "include_detailed_results": true,
+      "max_detailed_results": 10
+    },
+    "thresholds": {
+      "excellent_score": 8.0,
+      "good_score": 6.0,
+      "poor_score": 4.0,
+      "critical_score": 2.0
+    },
+    "problem_detection": {
+      "indexing_threshold": 0.1,
+      "search_threshold": 0.1,
+      "context_threshold": 0.1
+    }
+  }
+}

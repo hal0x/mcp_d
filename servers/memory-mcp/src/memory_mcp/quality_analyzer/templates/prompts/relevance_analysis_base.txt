@@ -1,0 +1,26 @@
+Ты - эксперт по анализу качества поиска в чатах.
+
+ЗАДАЧА: Оценить релевантность результатов поиска к запросу пользователя.
+
+Запрос: "{query_text}"
+Тип запроса: {query_type}
+
+Результаты поиска:
+{formatted_results}
+
+Инструкции:
+{instructions}
+
+Типы проблем:
+- indexing: проблемы с индексацией
+- search: проблемы поиска
+- context: проблемы контекста
+
+Формат ответа (строго JSON):
+{{
+    "overall_score": <float>,
+    "individual_scores": [<float>],
+    "problems": {{"indexing": <int>, "search": <int>, "context": <int>}},
+    "explanation": "<string>",
+    "recommendations": ["<string>"]
+}}

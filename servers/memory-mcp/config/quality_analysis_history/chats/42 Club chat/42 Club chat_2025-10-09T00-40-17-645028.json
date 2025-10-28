@@ -1,0 +1,288 @@
+{
+  "chat_name": "42 Club chat",
+  "timestamp": "2025-10-09T00:40:17.645028",
+  "total_queries": 1,
+  "results": [
+    {
+      "query": {
+        "id": "42 Club chat_1",
+        "query": "как развивалась ситуация с Хорошая в прошлую неделю?",
+        "type": "contextual",
+        "chat_name": "42 Club chat",
+        "entity": "Хорошая",
+        "timeframe": "прошлую неделю",
+        "generated_at": "2025-10-09T00:39:17.749752"
+      },
+      "search_results": [
+        {
+          "id": "42 Club chat-S0006-M0037",
+          "text": "А с чего бы вдруг начался ажиотаж? Если бы например тг как-то подогрели, может начался бы",
+          "score": 0.013796791443850268,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "msg_id": "42 Club chat-S0006-M0037",
+            "context_length": 1067,
+            "date_utc": "2025-10-06T18:21:11Z",
+            "replaced_urls": "",
+            "has_context": true,
+            "chat": "42 Club chat",
+            "chat_mode": "group",
+            "session_id": "42 Club chat-S0006"
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0021",
+          "text": "Но, как говориться, понедельник действительно начинается в субботу",
+          "score": 0.013397435897435896,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "session_id": "42 Club chat-S0005",
+            "date_utc": "2025-10-04T15:54:37Z",
+            "msg_id": "42 Club chat-S0005-M0021",
+            "chat": "42 Club chat",
+            "replaced_urls": "",
+            "has_context": true,
+            "chat_mode": "group",
+            "context_length": 1099
+          }
+        },
+        {
+          "id": "42 Club chat-S0002-M0035",
+          "text": "Ага, был как то в чате скруджа, неделю продержался, устал слушать как школьники обсуждают куда поступить после школы",
+          "score": 0.010727611940298507,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "chat": "42 Club chat",
+            "session_id": "42 Club chat-S0002",
+            "date_utc": "2025-10-01T09:48:19Z",
+            "chat_mode": "group",
+            "context_length": 912,
+            "replaced_urls": "",
+            "msg_id": "42 Club chat-S0002-M0035",
+            "has_context": true
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0190",
+          "text": "Может это колл что пора фиксировать",
+          "score": 0.009836065573770491,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "chat_mode": "group",
+            "session_id": "42 Club chat-S0007",
+            "replaced_urls": "",
+            "msg_id": "42 Club chat-S0007-M0190",
+            "date_utc": "2025-10-08T04:44:20Z",
+            "has_context": true,
+            "context_length": 354,
+            "chat": "42 Club chat"
+          }
+        },
+        {
+          "id": "42 Club chat-S0007-M0189",
+          "text": "Он простил",
+          "score": 0.00967741935483871,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "msg_id": "42 Club chat-S0007-M0189",
+            "date_utc": "2025-10-08T03:28:47Z",
+            "context_length": 353,
+            "chat": "42 Club chat",
+            "replaced_urls": "",
+            "has_context": true,
+            "chat_mode": "group",
+            "session_id": "42 Club chat-S0007"
+          }
+        },
+        {
+          "id": "42 Club chat-S0004-M0204",
+          "text": "Поношенный",
+          "score": 0.009523809523809523,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "chat": "42 Club chat",
+            "session_id": "42 Club chat-S0004",
+            "msg_id": "42 Club chat-S0004-M0204",
+            "context_length": 570,
+            "date_utc": "2025-10-04T09:38:31Z",
+            "has_context": true,
+            "replaced_urls": "",
+            "chat_mode": "group"
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0046",
+          "text": "В тоне актуален шорт, как тоьок дадут на продажу, цена очень переоценена",
+          "score": 0.00945260347129506,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "session_id": "42 Club chat-S0005",
+            "context_length": 1488,
+            "date_utc": "2025-10-04T16:46:47Z",
+            "chat": "42 Club chat",
+            "chat_mode": "group",
+            "replaced_urls": "",
+            "has_context": true,
+            "msg_id": "42 Club chat-S0005-M0046"
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0022",
+          "text": "Ну с другой стороны если элитный подарок нереально купить и даешь поносить за деньги на пол года и т.д. То может и ок",
+          "score": 0.009375,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "chat": "42 Club chat",
+            "chat_mode": "group",
+            "context_length": 1217,
+            "date_utc": "2025-10-04T15:55:00Z",
+            "replaced_urls": "",
+            "has_context": true,
+            "msg_id": "42 Club chat-S0005-M0022",
+            "session_id": "42 Club chat-S0005"
+          }
+        },
+        {
+          "id": "42 Club chat-S0006-M0038",
+          "text": "Не знаю, почему-то преобладает стойкое ощущение, что чем больше тг выходит в профит, тем больше дуров начинает забивать на качество и становиться бизнесменом.\nЛибо же он просто делегировал какую-то важную часть своих полномочий по контролю над развитием всего тг и решил пожить для себя или позаниматься ещё какие-нибудь делами.\nИ теперь основная цель это монетизация всего и вся (в том числе даже упомянутого удаления комментариев), так сказать срубить здесь и сейчас. А годовщина никак не монетизируется, к сожалению, в краткосрочной перспективе. А в долгосрок никто ничего теперь не планирует. То есть тоновская политика зарабатывания теперь является целевой и всеобъемлющей.",
+          "score": 0.008955223880597015,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "session_id": "42 Club chat-S0006",
+            "chat": "42 Club chat",
+            "replaced_urls": "",
+            "date_utc": "2025-10-06T18:21:27Z",
+            "msg_id": "42 Club chat-S0006-M0038",
+            "chat_mode": "group",
+            "context_length": 488,
+            "has_context": true
+          }
+        },
+        {
+          "id": "42 Club chat-S0005-M0025",
+          "text": "Но влиять на флор это будет негативно в любом случае.",
+          "score": 0.008823529411764706,
+          "query_id": "42 Club chat_1",
+          "metadata": {
+            "replaced_urls": "",
+            "context_length": 1313,
+            "chat": "42 Club chat",
+            "session_id": "42 Club chat-S0005",
+            "chat_mode": "group",
+            "has_context": true,
+            "date_utc": "2025-10-04T15:57:14Z",
+            "msg_id": "42 Club chat-S0005-M0025"
+          }
+        }
+      ],
+      "relevance_analysis": {
+        "overall_score": 0.1,
+        "individual_scores": [
+          0.008,
+          0.007,
+          0.006,
+          0.006,
+          0.006,
+          0.006,
+          0.006,
+          0.006,
+          0.006,
+          0.006
+        ],
+        "problems": {
+          "indexing": 0,
+          "search": 1,
+          "context": 9
+        },
+        "explanation": "Запрос требует информации о развитии ситуации с 'Хорошая' за прошлую неделю. Результаты поиска не содержат конкретной информации о развитии ситуации. Все результаты представляют собой общие обсуждения в чате, не связанные напрямую с запросом.  Временной интервал (прошлую неделю) не учитывается в результатах. Контекст запроса (развитие ситуации) практически отсутствует в предложенных ответах.  Поиск не смог предоставить релевантную информацию, несмотря на то, что запрос контекстуальный.",
+        "recommendations": []
+      },
+      "timestamp": "2025-10-09T00:40:17.639630",
+      "error": null
+    }
+  ],
+  "metrics": {
+    "average_score": 0.1,
+    "median_score": 0.1,
+    "success_rate": 0.0,
+    "total_queries": 1,
+    "successful_queries": 0,
+    "details": {
+      "basic": {
+        "average_score": 0.1,
+        "median_score": 0.1,
+        "min_score": 0.1,
+        "max_score": 0.1,
+        "std_deviation": 0.0,
+        "success_rate": 0.0,
+        "total_queries": 1,
+        "successful_queries": 0
+      },
+      "by_type": {
+        "contextual": {
+          "average_score": 0.1,
+          "median_score": 0.1,
+          "success_rate": 0.0,
+          "total_queries": 1,
+          "successful_queries": 0
+        }
+      },
+      "problems": {
+        "total_problems": {
+          "indexing": 0,
+          "search": 1,
+          "context": 9
+        },
+        "problem_stats": {
+          "indexing": {
+            "total_count": 0,
+            "affected_queries": 0,
+            "average_score_when_problem": 0.0
+          },
+          "search": {
+            "total_count": 1,
+            "affected_queries": 1,
+            "average_score_when_problem": 0.1
+          },
+          "context": {
+            "total_count": 9,
+            "affected_queries": 1,
+            "average_score_when_problem": 0.1
+          }
+        },
+        "problem_details": {
+          "indexing": [],
+          "search": [
+            {
+              "query": "как развивалась ситуация с Хорошая в прошлую неделю?",
+              "query_type": "contextual",
+              "count": 1,
+              "score": 0.1
+            }
+          ],
+          "context": [
+            {
+              "query": "как развивалась ситуация с Хорошая в прошлую неделю?",
+              "query_type": "contextual",
+              "count": 9,
+              "score": 0.1
+            }
+          ]
+        }
+      },
+      "temporal": {
+        "hour_0": {
+          "average_score": 0.1,
+          "query_count": 1
+        }
+      },
+      "comparative": {
+        "trend": "no_data",
+        "improvement": 0.0,
+        "comparison_available": false
+      }
+    }
+  },
+  "ai_recommendations": [],
+  "report": ""
+}

@@ -1,0 +1,2535 @@
+#!/usr/bin/env python3
+"""
+CLI интерфейс для Telegram Dump Manager
+Оптимизированная версия 2.0 - только двухуровневая индексация и граф инсайтов
+"""
+
+import asyncio
+import hashlib
+import json
+import logging
+import math
+import os
+import re
+import signal
+import subprocess
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
+
+import click
+
+# Импортируем улучшенную токенизацию
+from ..utils.russian_tokenizer import tokenize_text as enhanced_tokenize
+
+# Отключаем телеметрию ChromaDB
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY_IMPL"] = ""
+
+from ..analysis.insight_graph import SummaryInsightAnalyzer
+from ..analysis.instruction_manager import InstructionManager
+from ..core.indexer import TwoLevelIndexer
+from ..indexing import TelegramIndexer
+from ..memory.ingest import MemoryIngestor
+from ..memory.typed_graph import TypedGraphMemory
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+
+class MessageExtractor:
+    """Класс для извлечения новых сообщений с расширенной функциональностью."""
+
+    def __init__(self, input_dir: str = "input", chats_dir: str = "chats"):
+        self.input_dir = Path(input_dir)
+        self.chats_dir = Path(chats_dir)
+        current_year = datetime.now().year
+        self.cutoff_date = datetime(current_year, 1, 1, tzinfo=timezone.utc)
+        self.stats = {
+            "total_chats": 0,
+            "processed_chats": 0,
+            "skipped_chats": 0,
+            "total_messages_input": 0,
+            "total_messages_output": 0,
+            "messages_copied": 0,
+            "messages_filtered_by_date": 0,
+            "duplicates_skipped": 0,
+            "errors": 0,
+            "files_processed": 0,
+            "files_skipped": 0,
+        }
+        self.existing_messages_cache = {}
+
+    def parse_date(self, date_str: str) -> Optional[datetime]:
+        """Парсинг даты из различных форматов."""
+        if not date_str:
+            return None
+
+        try:
+            # Пробуем разные форматы
+            formats = [
+                "%Y-%m-%dT%H:%M:%S.%fZ",
+                "%Y-%m-%dT%H:%M:%SZ",
+                "%Y-%m-%dT%H:%M:%S.%f%z",
+                "%Y-%m-%dT%H:%M:%S%z",
+                "%Y-%m-%dT%H:%M:%S.%f",
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%d %H:%M:%S.%f",
+                "%Y-%m-%d %H:%M:%S",
+            ]
+
+            for fmt in formats:
+                try:
+                    dt = datetime.strptime(date_str, fmt)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt
+                except ValueError:
+                    continue
+
+            # Если ничего не сработало, пробуем ISO формат
+            if date_str.endswith("Z"):
+                date_str = date_str[:-1] + "+00:00"
+            return datetime.fromisoformat(date_str)
+
+        except Exception:
+            return None
+
+    def get_message_hash(self, message: Dict) -> str:
+        """Получение хеша сообщения для дедупликации."""
+        content = ""
+        if isinstance(message, dict):
+            # Собираем ключевые поля для хеширования
+            fields = ["text", "caption", "file_name", "sticker_emoji"]
+            for field in fields:
+                if field in message and message[field]:
+                    content += str(message[field])
+
+        return hashlib.md5(content.encode("utf-8")).hexdigest()
+
+    def load_existing_messages(self, chat_dir: Path) -> Tuple[Set[str], Set[str]]:
+        """Загрузка существующих сообщений для дедупликации."""
+        existing_ids = set()
+        existing_hashes = set()
+
+        if chat_dir not in self.existing_messages_cache:
+            for json_file in chat_dir.glob("*.json"):
+                try:
+                    with open(json_file, encoding="utf-8") as f:
+                        for line in f:
+                            try:
+                                message = json.loads(line.strip())
+                                if isinstance(message, dict) and "id" in message:
+                                    existing_ids.add(str(message["id"]))
+                                    # Добавляем хеш для дополнительной дедупликации
+                                    msg_hash = self.get_message_hash(message)
+                                    existing_hashes.add(msg_hash)
+                            except json.JSONDecodeError:
+                                continue
+                except Exception:
+                    continue
+
+            self.existing_messages_cache[chat_dir] = (existing_ids, existing_hashes)
+
+        return self.existing_messages_cache[chat_dir]
+
+    def filter_messages(
+        self,
+        messages: List[Dict],
+        existing_ids: Set[str],
+        existing_hashes: Set[str],
+        filter_by_date: bool = True,
+    ) -> List[Dict]:
+        """Фильтрация сообщений по дате и дубликатам."""
+        filtered = []
+
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+
+            # Проверка дубликатов по ID
+            if "id" in message and str(message["id"]) in existing_ids:
+                self.stats["duplicates_skipped"] += 1
+                continue
+
+            # Проверка дубликатов по хешу
+            msg_hash = self.get_message_hash(message)
+            if msg_hash in existing_hashes:
+                self.stats["duplicates_skipped"] += 1
+                continue
+
+            # Фильтрация по дате
+            if filter_by_date and "date" in message:
+                msg_date = self.parse_date(message["date"])
+                if msg_date and msg_date < self.cutoff_date:
+                    self.stats["messages_filtered_by_date"] += 1
+                    continue
+
+            filtered.append(message)
+            self.stats["messages_copied"] += 1
+
+        return filtered
+
+    def extract_chat_messages(
+        self,
+        input_chat_dir: Path,
+        chats_chat_dir: Path,
+        dry_run: bool = False,
+        filter_by_date: bool = True,
+    ) -> Dict[str, int]:
+        """Извлечение сообщений для одного чата."""
+        chat_stats = {
+            "files_processed": 0,
+            "files_skipped": 0,
+            "messages_copied": 0,
+            "messages_filtered_by_date": 0,
+            "duplicates_skipped": 0,
+            "errors": 0,
+        }
+
+        if not input_chat_dir.exists():
+            return chat_stats
+
+        # Загружаем существующие сообщения для дедупликации
+        existing_ids, existing_hashes = self.load_existing_messages(chats_chat_dir)
+
+        # Обрабатываем все JSON файлы в директории чата
+        for json_file in input_chat_dir.glob("*.json"):
+            try:
+                with open(json_file, encoding="utf-8") as f:
+                    messages = []
+                    for line in f:
+                        try:
+                            message = json.loads(line.strip())
+                            messages.append(message)
+                        except json.JSONDecodeError:
+                            continue
+
+                # Фильтруем сообщения
+                filtered_messages = self.filter_messages(
+                    messages, existing_ids, existing_hashes, filter_by_date
+                )
+
+                if filtered_messages:
+                    if not dry_run:
+                        # Создаем директорию если не существует
+                        chats_chat_dir.mkdir(parents=True, exist_ok=True)
+
+                        # Записываем новые сообщения
+                        output_file = chats_chat_dir / json_file.name
+                        with open(output_file, "a", encoding="utf-8") as f:
+                            for message in filtered_messages:
+                                f.write(json.dumps(message, ensure_ascii=False) + "\n")
+
+                    chat_stats["files_processed"] += 1
+                    chat_stats["messages_copied"] += len(filtered_messages)
+                else:
+                    chat_stats["files_skipped"] += 1
+
+            except Exception as e:
+                logger.error(f"Ошибка обработки файла {json_file}: {e}")
+                chat_stats["errors"] += 1
+
+        return chat_stats
+
+    def extract_all_messages(
+        self,
+        dry_run: bool = False,
+        filter_by_date: bool = True,
+        chat_filter: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """Извлечение сообщений для всех чатов."""
+        if not self.input_dir.exists():
+            logger.error(f"Директория {self.input_dir} не найдена")
+            return self.stats
+
+        # Получаем список всех чатов
+        chat_dirs = [d for d in self.input_dir.iterdir() if d.is_dir()]
+        self.stats["total_chats"] = len(chat_dirs)
+
+        for chat_dir in chat_dirs:
+            chat_name = chat_dir.name
+
+            # Фильтрация по названию чата
+            if chat_filter and chat_filter.lower() not in chat_name.lower():
+                self.stats["skipped_chats"] += 1
+                continue
+
+            chats_chat_dir = self.chats_dir / chat_name
+
+            logger.info(f"Обработка чата: {chat_name}")
+
+            # Извлекаем сообщения для чата
+            chat_stats = self.extract_chat_messages(
+                chat_dir, chats_chat_dir, dry_run, filter_by_date
+            )
+
+            # Обновляем общую статистику
+            for key, value in chat_stats.items():
+                self.stats[key] += value
+
+            self.stats["processed_chats"] += 1
+
+            logger.info(
+                f"Чата {chat_name}: {chat_stats['messages_copied']} сообщений скопировано"
+            )
+
+        return self.stats
+
+    def print_stats(self):
+        """Вывод статистики извлечения."""
+        print("\n" + "=" * 60)
+        print("📊 СТАТИСТИКА ИЗВЛЕЧЕНИЯ СООБЩЕНИЙ")
+        print("=" * 60)
+        print(f"📁 Всего чатов: {self.stats['total_chats']}")
+        print(f"✅ Обработано чатов: {self.stats['processed_chats']}")
+        print(f"⏭️  Пропущено чатов: {self.stats['skipped_chats']}")
+        print(f"📄 Обработано файлов: {self.stats['files_processed']}")
+        print(f"⏭️  Пропущено файлов: {self.stats['files_skipped']}")
+        print(f"📨 Всего сообщений на входе: {self.stats['total_messages_input']}")
+        print(f"📤 Сообщений скопировано: {self.stats['messages_copied']}")
+        print(f"📅 Отфильтровано по дате: {self.stats['messages_filtered_by_date']}")
+        print(f"🔄 Пропущено дубликатов: {self.stats['duplicates_skipped']}")
+        print(f"❌ Ошибок: {self.stats['errors']}")
+        print("=" * 60)
+
+
+class MessageDeduplicator:
+    """Класс для удаления дубликатов сообщений по полю 'id'."""
+
+    def __init__(self, chats_dir: str = "chats"):
+        self.chats_dir = Path(chats_dir)
+        self.stats = {
+            "total_chats": 0,
+            "processed_chats": 0,
+            "total_messages": 0,
+            "duplicates_removed": 0,
+            "unique_messages": 0,
+            "errors": 0,
+        }
+
+    def deduplicate_chat(self, chat_dir: Path) -> Dict[str, int]:
+        """Дедупликация сообщений в одном чате."""
+        chat_stats = {
+            "total_messages": 0,
+            "duplicates_removed": 0,
+            "unique_messages": 0,
+            "errors": 0,
+        }
+
+        if not chat_dir.exists():
+            return chat_stats
+
+        # Собираем все сообщения из всех файлов чата
+        all_messages = []
+        for json_file in chat_dir.glob("*.json"):
+            try:
+                with open(json_file, encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            message = json.loads(line.strip())
+                            if isinstance(message, dict):
+                                all_messages.append(message)
+                        except json.JSONDecodeError:
+                            continue
+            except Exception as e:
+                logger.error(f"Ошибка чтения файла {json_file}: {e}")
+                chat_stats["errors"] += 1
+
+        chat_stats["total_messages"] = len(all_messages)
+
+        # Дедупликация по полю 'id'
+        seen_ids = set()
+        unique_messages = []
+
+        for message in all_messages:
+            if "id" in message:
+                msg_id = str(message["id"])
+                if msg_id not in seen_ids:
+                    seen_ids.add(msg_id)
+                    unique_messages.append(message)
+                else:
+                    chat_stats["duplicates_removed"] += 1
+            else:
+                # Сообщения без ID добавляем как есть
+                unique_messages.append(message)
+
+        chat_stats["unique_messages"] = len(unique_messages)
+
+        # Перезаписываем файлы с уникальными сообщениями
+        if unique_messages != all_messages:
+            # Создаем временный файл
+            temp_file = chat_dir / "temp_dedup.json"
+            try:
+                with open(temp_file, "w", encoding="utf-8") as f:
+                    for message in unique_messages:
+                        f.write(json.dumps(message, ensure_ascii=False) + "\n")
+
+                # Заменяем оригинальные файлы
+                for json_file in chat_dir.glob("*.json"):
+                    if json_file.name != "temp_dedup.json":
+                        json_file.unlink()
+
+                # Переименовываем временный файл
+                final_file = chat_dir / "messages.json"
+                temp_file.rename(final_file)
+
+            except Exception as e:
+                logger.error(f"Ошибка записи файла для чата {chat_dir.name}: {e}")
+                chat_stats["errors"] += 1
+                if temp_file.exists():
+                    temp_file.unlink()
+
+        return chat_stats
+
+    def deduplicate_all_chats(self) -> Dict[str, int]:
+        """Дедупликация сообщений во всех чатах."""
+        if not self.chats_dir.exists():
+            logger.error(f"Директория {self.chats_dir} не найдена")
+            return self.stats
+
+        # Получаем список всех чатов
+        chat_dirs = [d for d in self.chats_dir.iterdir() if d.is_dir()]
+        self.stats["total_chats"] = len(chat_dirs)
+
+        for chat_dir in chat_dirs:
+            logger.info(f"Дедупликация чата: {chat_dir.name}")
+
+            # Дедуплицируем сообщения в чате
+            chat_stats = self.deduplicate_chat(chat_dir)
+
+            # Обновляем общую статистику
+            for key, value in chat_stats.items():
+                self.stats[key] += value
+
+            self.stats["processed_chats"] += 1
+
+            logger.info(
+                f"Чата {chat_dir.name}: {chat_stats['duplicates_removed']} дубликатов удалено"
+            )
+
+        return self.stats
+
+    def print_stats(self):
+        """Вывод статистики дедупликации."""
+        print("\n" + "=" * 60)
+        print("📊 СТАТИСТИКА ДЕДУПЛИКАЦИИ")
+        print("=" * 60)
+        print(f"📁 Всего чатов: {self.stats['total_chats']}")
+        print(f"✅ Обработано чатов: {self.stats['processed_chats']}")
+        print(f"📨 Всего сообщений: {self.stats['total_messages']}")
+        print(f"🔄 Дубликатов удалено: {self.stats['duplicates_removed']}")
+        print(f"✨ Уникальных сообщений: {self.stats['unique_messages']}")
+        print(f"❌ Ошибок: {self.stats['errors']}")
+        print("=" * 60)
+
+
+class ProcessManager:
+    """Класс для управления процессами индексации."""
+
+    @staticmethod
+    def kill_processes_by_name(pattern: str) -> int:
+        """Убивает процессы по имени."""
+        killed_count = 0
+        try:
+            # Получаем список процессов
+            result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
+            lines = result.stdout.split("\n")
+
+            for line in lines:
+                if pattern in line and "grep" not in line:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        pid = parts[1]
+                        try:
+                            os.kill(int(pid), signal.SIGTERM)
+                            killed_count += 1
+                            logger.info(f"Процесс {pid} ({pattern}) остановлен")
+                        except (ValueError, ProcessLookupError):
+                            continue
+        except Exception as e:
+            logger.error(f"Ошибка при остановке процессов {pattern}: {e}")
+
+        return killed_count
+
+    @staticmethod
+    def stop_ollama():
+        """Остановка Ollama сервера."""
+        logger.info("🛑 Остановка Ollama сервера...")
+
+        # Пробуем остановить через ollama stop
+        try:
+            result = subprocess.run(
+                ["ollama", "stop"], capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                logger.info("✅ Ollama сервер остановлен")
+            else:
+                logger.warning("⚠️ Ollama stop не сработал, пробуем kill")
+                ProcessManager.kill_processes_by_name("ollama")
+        except subprocess.TimeoutExpired:
+            logger.warning("⚠️ Timeout при остановке Ollama, пробуем kill")
+            ProcessManager.kill_processes_by_name("ollama")
+        except FileNotFoundError:
+            logger.warning("⚠️ Ollama не найден в PATH, пробуем kill")
+            ProcessManager.kill_processes_by_name("ollama")
+        except Exception as e:
+            logger.error(f"❌ Ошибка остановки Ollama: {e}")
+
+    @staticmethod
+    def stop_indexing_processes():
+        """Остановка процессов индексации."""
+        logger.info("🛑 Остановка процессов индексации...")
+
+        patterns = [
+            "tg_dump.py",
+            "index_messages.py",
+            "summarize_chats.py",
+            "index_summaries.py",
+            "cross_analyze.py",
+            "ollama",
+        ]
+
+        total_killed = 0
+        for pattern in patterns:
+            killed = ProcessManager.kill_processes_by_name(pattern)
+            total_killed += killed
+
+        if total_killed > 0:
+            logger.info(f"✅ Остановлено процессов: {total_killed}")
+        else:
+            logger.info("ℹ️ Процессы индексации не найдены")
+
+    @staticmethod
+    def check_remaining_processes():
+        """Проверка оставшихся процессов."""
+        logger.info("🔍 Проверка оставшихся процессов...")
+
+        patterns = [
+            "tg_dump.py",
+            "index_messages.py",
+            "summarize_chats.py",
+            "index_summaries.py",
+            "cross_analyze.py",
+            "ollama",
+        ]
+
+        remaining = []
+        try:
+            result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
+            lines = result.stdout.split("\n")
+
+            for line in lines:
+                for pattern in patterns:
+                    if pattern in line and "grep" not in line:
+                        remaining.append(line.strip())
+                        break
+        except Exception as e:
+            logger.error(f"Ошибка проверки процессов: {e}")
+
+        if remaining:
+            logger.warning(f"⚠️ Найдено {len(remaining)} оставшихся процессов:")
+            for proc in remaining:
+                logger.warning(f"   {proc}")
+        else:
+            logger.info("✅ Все процессы остановлены")
+
+    @staticmethod
+    def stop_all_indexing():
+        """Остановка всех процессов индексации."""
+        logger.info("🛑 ОСТАНОВКА ВСЕХ ПРОЦЕССОВ ИНДЕКСАЦИИ")
+        logger.info("=" * 50)
+
+        # Останавливаем процессы индексации
+        ProcessManager.stop_indexing_processes()
+
+        # Останавливаем Ollama
+        ProcessManager.stop_ollama()
+
+        # Небольшая пауза
+        import time
+
+        time.sleep(2)
+
+        # Проверяем оставшиеся процессы
+        ProcessManager.check_remaining_processes()
+
+        logger.info("=" * 50)
+        logger.info("✅ Остановка процессов завершена")
+
+
+@click.group()
+@click.version_option(version="2.0.0", prog_name="memory_mcp")
+@click.option("--verbose", "-v", is_flag=True, help="Подробный вывод")
+@click.option("--quiet", "-q", is_flag=True, help="Тихий режим")
+def cli(verbose, quiet):
+    """🚀 Telegram Dump Manager v2.0 - Управление дампами Telegram чатов
+
+    Современный CLI для двухуровневой индексации и анализа Telegram чатов.
+
+    Основные команды:
+      • index              - Двухуровневая индексация (сессии + сообщения + задачи)
+      • ingest-telegram    - Прямая загрузка чатов в граф памяти
+      • indexing-progress  - Управление прогрессом инкрементальной индексации
+      • update-summaries   - Обновление markdown-отчетов без полной индексации
+      • review-summaries   - Автоматическое ревью и исправление саммаризаций
+      • rebuild-vector-db  - Пересоздание векторной базы данных из существующих артефактов
+      • search             - Поиск по индексированным данным
+      • insight-graph      - Построение графа знаний
+      • stats              - Статистика системы
+      • check              - Проверка системы
+      • extract-messages   - Извлечение новых сообщений из input в chats
+      • deduplicate        - Удаление дубликатов сообщений
+      • stop-indexing      - Остановка всех процессов индексации
+    """
+    # Настройка логирования
+    if verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+    elif quiet:
+        logging.getLogger().setLevel(logging.WARNING)
+    else:
+        logging.getLogger().setLevel(logging.INFO)
+
+
+@cli.command("ingest-telegram")
+@click.option(
+    "--chats-dir",
+    default="chats",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Директория с экспортами Telegram",
+)
+@click.option(
+    "--db-path",
+    default="memory_graph.db",
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Путь к SQLite базе типизированной памяти",
+)
+@click.option(
+    "--chat",
+    "selected_chats",
+    multiple=True,
+    help="Имя чата для выборочной индексации (можно указать несколько)",
+)
+def ingest_telegram(chats_dir: Path, db_path: Path, selected_chats: tuple[str, ...]):
+    """📚 Загрузка сообщений Telegram напрямую в граф памяти."""
+
+    chosen = [chat for chat in selected_chats if chat] or None
+    indexer = TelegramIndexer(chats_dir=str(chats_dir), selected_chats=chosen)
+    graph: TypedGraphMemory | None = None
+
+    try:
+        indexer.prepare()
+        graph = TypedGraphMemory(db_path=str(db_path))
+        ingestor = MemoryIngestor(graph)
+        ingest_stats = ingestor.ingest(indexer.iter_records())
+        index_stats = indexer.finalize()
+    except Exception as exc:
+        raise click.ClickException(f"Не удалось выполнить индексацию: {exc}") from exc
+    try:
+        indexer.close()
+    except Exception:  # pragma: no cover - best effort
+        logger.debug("Не удалось корректно закрыть индексатор", exc_info=True)
+
+    try:
+        if graph is not None:
+            graph.conn.close()
+    except Exception:  # pragma: no cover - best effort
+        logger.debug("Не удалось закрыть соединение с БД графа", exc_info=True)
+
+    skipped = max(0, index_stats.records_indexed - ingest_stats.records_ingested)
+
+    click.echo("")
+    click.echo("📥 Индексация Telegram завершена")
+    click.echo(f"• Чатов обработано: {index_stats.sources_processed}")
+    click.echo(
+        f"• Записей создано: {ingest_stats.records_ingested} "
+        f"(вложения: {ingest_stats.attachments_ingested})"
+    )
+    if skipped:
+        click.echo(f"• Пропущено из-за дубликатов: {skipped}")
+    if index_stats.warnings:
+        click.echo("")
+        click.echo("⚠️  Предупреждения:")
+        for warning in index_stats.warnings:
+            click.echo(f"  - {warning}")
+
+
+@cli.command()
+@click.option(
+    "--embedding-model", default="hf.co/lmstudio-community/Magistral-Small-2509-GGUF:Q4_K_M", help="Модель для эмбеддингов"
+)
+def check(embedding_model):
+    """🔧 Проверка системы и подключений"""
+
+    async def _check():
+        import chromadb
+
+        from ..core.ollama_client import OllamaEmbeddingClient
+
+        click.echo("🔧 Проверка системы...")
+
+        # Проверяем Ollama
+        try:
+            ollama_client = OllamaEmbeddingClient(model_name=embedding_model)
+            async with ollama_client:
+                available = await ollama_client.test_connection()
+                if not available or not available.get("ollama_available", False):
+                    click.echo("❌ Ollama недоступен")
+                    click.echo("Убедитесь, что Ollama запущен: ollama serve")
+                    return False
+
+                if not available.get("model_available", False):
+                    click.echo("❌ Модель для эмбеддингов не найдена")
+                    click.echo(f"Установка: ollama pull {embedding_model}")
+                    return False
+
+                click.echo("✅ Ollama доступен")
+        except Exception as e:
+            click.echo(f"❌ Ошибка при проверке Ollama: {e}")
+            return False
+
+        # Проверяем ChromaDB коллекции
+        try:
+            chroma_client = chromadb.PersistentClient(path="./chroma_db")
+
+            # Проверяем новые коллекции
+            collections_status = []
+            try:
+                sessions_collection = chroma_client.get_collection("chat_sessions")
+                click.echo(
+                    f"✅ ChromaDB chat_sessions: {sessions_collection.count()} записей"
+                )
+                collections_status.append(True)
+            except:
+                click.echo("⚠️  ChromaDB коллекция chat_sessions не найдена")
+                collections_status.append(False)
+
+            try:
+                messages_collection = chroma_client.get_collection("chat_messages")
+                click.echo(
+                    f"✅ ChromaDB chat_messages: {messages_collection.count()} записей"
+                )
+                collections_status.append(True)
+            except:
+                click.echo("⚠️  ChromaDB коллекция chat_messages не найдена")
+                collections_status.append(False)
+
+            try:
+                tasks_collection = chroma_client.get_collection("chat_tasks")
+                click.echo(f"✅ ChromaDB chat_tasks: {tasks_collection.count()} записей")
+                collections_status.append(True)
+            except:
+                click.echo("⚠️  ChromaDB коллекция chat_tasks не найдена")
+                collections_status.append(False)
+
+            if not any(collections_status):
+                click.echo(
+                    "\n💡 Подсказка: Запустите 'memory_mcp index' для создания индексов"
+                )
+
+        except Exception as e:
+            click.echo(f"❌ Ошибка при проверке ChromaDB: {e}")
+
+        # Проверяем файлы
+        chats_path = Path("chats")
+        if chats_path.exists():
+            json_files = list(chats_path.glob("**/*.json"))
+            click.echo(f"✅ Найдено JSON файлов: {len(json_files)}")
+        else:
+            click.echo("❌ Директория chats не найдена")
+
+        # Проверяем саммаризации
+        summaries_path = Path("artifacts/reports")
+        if summaries_path.exists():
+            md_files = list(summaries_path.glob("**/*.md"))
+            click.echo(f"✅ Найдено MD файлов: {len(md_files)}")
+        else:
+            click.echo(
+                "⚠️  Директория artifacts/reports не найдена (будет создана при индексации)"
+            )
+
+        click.echo("\n🎉 Система готова к работе!")
+        return True
+
+    asyncio.run(_check())
+
+
+@cli.command()
+@click.option(
+    "--scope",
+    default="all",
+    type=click.Choice(["all", "chat"]),
+    help="Область индексации: all (все чаты) или chat (один чат)",
+)
+@click.option("--chat", help="Название чата для индексации (если scope=chat)")
+@click.option("--force-full", is_flag=True, help="Полная пересборка индекса")
+@click.option(
+    "--recent-days", default=7, type=int, help="Пересаммаризировать последние N дней"
+)
+@click.option("--progress", is_flag=True, help="Показать прогресс-бар")
+@click.option(
+    "--no-quality-check",
+    is_flag=True,
+    help="Отключить проверку качества саммаризации (быстрее)",
+)
+@click.option(
+    "--no-improvement",
+    is_flag=True,
+    help="Отключить автоматическое улучшение саммаризации",
+)
+@click.option(
+    "--min-quality", default=90.0, type=float, help="Минимальный балл качества (0-100)"
+)
+@click.option(
+    "--enable-clustering",
+    is_flag=True,
+    help="Включить кластеризацию сессий для группировки",
+)
+@click.option(
+    "--clustering-threshold",
+    default=0.8,
+    type=float,
+    help="Порог сходства для кластеризации (0.0-1.0)",
+)
+@click.option(
+    "--min-cluster-size", default=2, type=int, help="Минимальный размер кластера сессий"
+)
+@click.option(
+    "--max-messages-per-group",
+    default=200,
+    type=int,
+    help="Максимальное количество сообщений в группе (больше = меньше сессий)",
+)
+@click.option(
+    "--max-session-hours",
+    default=12,
+    type=int,
+    help="Максимальная длительность сессии в часах (больше = меньше сессий)",
+)
+@click.option(
+    "--gap-minutes",
+    default=120,
+    type=int,
+    help="Максимальный разрыв между сообщениями в минутах (больше = меньше сессий)",
+)
+@click.option(
+    "--enable-smart-aggregation",
+    is_flag=True,
+    help="Включить умную группировку с скользящими окнами (NOW/FRESH/RECENT/OLD)",
+)
+@click.option(
+    "--aggregation-strategy",
+    default="smart",
+    type=click.Choice(["smart", "channel", "legacy"]),
+    help="Стратегия группировки: smart (умная), channel (для каналов), legacy (старая)",
+)
+@click.option(
+    "--now-window-hours",
+    default=24,
+    type=int,
+    help="Размер NOW окна в часах (по умолчанию: 24)",
+)
+@click.option(
+    "--fresh-window-days",
+    default=14,
+    type=int,
+    help="Размер FRESH окна в днях (по умолчанию: 14)",
+)
+@click.option(
+    "--recent-window-days",
+    default=30,
+    type=int,
+    help="Размер RECENT окна в днях (по умолчанию: 30)",
+)
+@click.option(
+    "--strategy-threshold",
+    default=1000,
+    type=int,
+    help="Порог количества сообщений для перехода между стратегиями (по умолчанию: 1000)",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Принудительно пересоздать существующие артефакты",
+)
+@click.option(
+    "--embedding-model", 
+    default="hf.co/lmstudio-community/Magistral-Small-2509-GGUF:Q4_K_M", 
+    help="Модель для эмбеддингов"
+)
+def index(
+    scope,
+    chat,
+    force_full,
+    recent_days,
+    progress,
+    no_quality_check,
+    no_improvement,
+    min_quality,
+    enable_clustering,
+    clustering_threshold,
+    min_cluster_size,
+    max_messages_per_group,
+    max_session_hours,
+    gap_minutes,
+    enable_smart_aggregation,
+    aggregation_strategy,
+    now_window_hours,
+    fresh_window_days,
+    recent_window_days,
+    strategy_threshold,
+    force,
+    embedding_model,
+):
+    """📚 Двухуровневая индексация чатов (L1: сессии + саммари, L2: сообщения, L3: задачи)
+
+    Продвинутая индексация с умной группировкой сообщений в сессии,
+    извлечением сущностей и задач, созданием Markdown отчётов.
+    """
+
+    async def _index():
+        click.echo("=" * 80)
+        click.echo("🚀 Telegram Dump Manager - Двухуровневая индексация v2.0")
+        click.echo("=" * 80)
+        click.echo()
+
+        # Валидация параметров
+        if scope == "chat" and not chat:
+            click.echo("❌ Для scope='chat' необходимо указать --chat")
+            return
+
+        # Создаём индексатор с параметрами качества и кластеризации
+        click.echo("📦 Инициализация индексатора...")
+        from ..core.ollama_client import OllamaEmbeddingClient
+        ollama_client = OllamaEmbeddingClient(model_name=embedding_model)
+        indexer = TwoLevelIndexer(
+            ollama_client=ollama_client,
+            enable_quality_check=not no_quality_check,
+            enable_iterative_refinement=not no_improvement,
+            min_quality_score=min_quality,
+            enable_clustering=enable_clustering,
+            clustering_threshold=clustering_threshold,
+            min_cluster_size=min_cluster_size,
+            max_messages_per_group=max_messages_per_group,
+            max_session_hours=max_session_hours,
+            gap_minutes=gap_minutes,
+            enable_smart_aggregation=enable_smart_aggregation,
+            aggregation_strategy=aggregation_strategy,
+            now_window_hours=now_window_hours,
+            fresh_window_days=fresh_window_days,
+            recent_window_days=recent_window_days,
+            strategy_threshold=strategy_threshold,
+            force=force,
+        )
+        click.echo("✅ Индексатор готов")
+        click.echo()
+
+        # Параметры индексации
+        click.echo("⚙️  Параметры индексации:")
+        click.echo(f"   - Scope: {scope}")
+        click.echo(f"   - Chat: {chat or 'все чаты'}")
+        click.echo(f"   - Force full rebuild: {force_full}")
+        click.echo(f"   - Force artifacts: {force}")
+        click.echo(f"   - Recent days resummary: {recent_days}")
+        click.echo()
+        click.echo("🎯 Параметры качества саммаризации:")
+        click.echo(
+            f"   - Проверка качества: {'❌ Отключена' if no_quality_check else '✅ Включена'}"
+        )
+        click.echo(
+            f"   - Автоулучшение: {'❌ Отключено' if no_improvement else '✅ Включено'}"
+        )
+        click.echo(
+            f"   - Минимальный балл: {min_quality}/100 {'(строгий режим)' if min_quality >= 80 else '(стандартный режим)' if min_quality >= 60 else '(мягкий режим)'}"
+        )
+        click.echo()
+        click.echo("🔗 Параметры кластеризации сессий:")
+        click.echo(
+            f"   - Кластеризация: {'✅ Включена' if enable_clustering else '❌ Отключена'}"
+        )
+        if enable_clustering:
+            click.echo(f"   - Порог сходства: {clustering_threshold}")
+            click.echo(f"   - Минимальный размер кластера: {min_cluster_size}")
+        click.echo()
+        click.echo("📊 Параметры группировки сессий:")
+        click.echo(f"   - Максимум сообщений в группе: {max_messages_per_group}")
+        click.echo(f"   - Максимальная длительность сессии: {max_session_hours} часов")
+        click.echo(f"   - Максимальный разрыв между сообщениями: {gap_minutes} минут")
+        click.echo()
+
+        if enable_smart_aggregation:
+            click.echo("🧠 Умная группировка с скользящими окнами:")
+            click.echo(f"   - Стратегия: {aggregation_strategy}")
+            click.echo(f"   - NOW окно: {now_window_hours} часов (сегодня)")
+            click.echo(f"   - FRESH окно: {fresh_window_days} дней (детально)")
+            click.echo(f"   - RECENT окно: {recent_window_days} дней (по неделям)")
+            click.echo(f"   - OLD окно: >{recent_window_days} дней (по месяцам)")
+            click.echo(f"   - Порог перехода стратегий: {strategy_threshold} сообщений")
+            click.echo("   - Контекстная саммаризация для NOW окна")
+            click.echo("   - Оптимизация запросов к Ollama")
+        else:
+            click.echo("📊 Классический алгоритм группировки:")
+            click.echo("   - Оптимизированная группировка по дням")
+            click.echo("   - 10-100 сообщений в группе")
+            click.echo("   - Естественные разрывы в обсуждениях (>4 часов)")
+            click.echo("   - Фильтрация пустых и сервисных сообщений")
+            click.echo("   - Дедупликация последовательных похожих сообщений")
+            click.echo("   - Объединение маленьких групп")
+        click.echo()
+
+        # Запускаем индексацию
+        click.echo("🔄 Начало индексации...")
+        click.echo()
+
+        try:
+            stats = await indexer.build_index(
+                scope=scope, chat=chat, force_full=force_full, recent_days=recent_days
+            )
+
+            click.echo()
+            click.echo("=" * 80)
+            click.echo("✅ Индексация завершена успешно!")
+            click.echo("=" * 80)
+            click.echo()
+            click.echo("📊 Статистика:")
+            click.echo(f"   - Проиндексировано чатов: {len(stats['indexed_chats'])}")
+            click.echo(f"   - Сессий (L1): {stats['sessions_indexed']}")
+            click.echo(f"   - Сообщений (L2): {stats['messages_indexed']}")
+            click.echo(f"   - Задач (L3): {stats['tasks_indexed']}")
+            click.echo()
+
+            if stats["indexed_chats"]:
+                click.echo("📁 Проиндексированные чаты:")
+                for chat_name in stats["indexed_chats"]:
+                    click.echo(f"   - {chat_name}")
+                click.echo()
+
+            click.echo("📂 Результаты сохранены в:")
+            click.echo("   - Markdown отчёты: ./artifacts/reports/")
+            click.echo("   - Векторная база: ./chroma_db/")
+            click.echo("   - Коллекции: chat_sessions, chat_messages, chat_tasks")
+            click.echo()
+
+        except Exception as e:
+            click.echo()
+            click.echo("=" * 80)
+            click.echo("❌ Ошибка при индексации!")
+            click.echo("=" * 80)
+            click.echo(f"Ошибка: {e}")
+            click.echo()
+            import traceback
+
+            traceback.print_exc()
+
+    asyncio.run(_index())
+
+
+@cli.command("set-instruction")
+@click.option(
+    "--chat", help="Название чата (как папка в chats/) для индивидуальной инструкции"
+)
+@click.option(
+    "--mode",
+    type=click.Choice(["group", "channel"]),
+    help="Общая инструкция для всех чатов выбранного типа",
+)
+@click.option("--text", help="Текст инструкции прямо в аргументе")
+@click.option(
+    "--file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Путь к файлу с инструкцией",
+)
+@click.option(
+    "--clear",
+    is_flag=True,
+    help="Удалить сохранённую инструкцию для указанного чата или типа",
+)
+def set_instruction(chat, mode, text, file, clear):
+    """📝 Сохранить или удалить специальную инструкцию саммаризации."""
+    target_count = sum(1 for value in (chat, mode) if value)
+    if target_count != 1:
+        raise click.UsageError(
+            "Нужно указать ровно один из параметров: --chat или --mode"
+        )
+
+    manager = InstructionManager()
+
+    if clear:
+        if chat:
+            manager.clear_chat_instruction(chat)
+            click.echo(f"🗑️ Индивидуальная инструкция для '{chat}' удалена")
+        else:
+            manager.clear_mode_instruction(mode)
+            click.echo(f"🗑️ Общая инструкция для типа '{mode}' очищена")
+        return
+
+    instruction_text = text or ""
+    if file:
+        instruction_text = file.read_text(encoding="utf-8")
+    if not instruction_text.strip():
+        raise click.UsageError(
+            "Необходимо передать текст инструкции через --text или --file (или используйте --clear)."
+        )
+
+    if chat:
+        manager.set_chat_instruction(chat, instruction_text)
+        click.echo(f"✅ Сохранена индивидуальная инструкция для чата '{chat}'")
+    else:
+        manager.set_mode_instruction(mode, instruction_text)
+        click.echo(f"✅ Сохранена общая инструкция для типа '{mode}'")
+
+
+@cli.command("list-instructions")
+def list_instructions():
+    """📋 Показать сохранённые инструкции саммаризации."""
+    manager = InstructionManager()
+    data = manager.export()
+
+    click.echo("📌 Индивидуальные инструкции по чатам:")
+    if data["chats"]:
+        for name, instruction in sorted(data["chats"].items()):
+            preview = instruction.strip().replace("\n", " ")
+            if len(preview) > 120:
+                preview = preview[:117] + "..."
+            click.echo(f"  • {name}: {preview}")
+    else:
+        click.echo("  (Нет индивидуальных инструкций)")
+
+    click.echo("\n📌 Инструкции по типам чатов:")
+    for mode in ("group", "channel"):
+        instruction = data["modes"].get(mode, "").strip()
+        if instruction:
+            preview = instruction.replace("\n", " ")
+            if len(preview) > 120:
+                preview = preview[:117] + "..."
+            click.echo(f"  • {mode}: {preview}")
+        else:
+            click.echo(f"  • {mode}: (не задано)")
+
+
+def highlight_text(text: str, query: str) -> str:
+    """Подсветка найденных терминов в тексте"""
+    # Разбиваем запрос на слова (минимум 3 символа)
+    keywords = [
+        word.strip().lower() for word in query.split() if len(word.strip()) >= 3
+    ]
+
+    if not keywords:
+        return text
+
+    # Подсвечиваем каждое ключевое слово
+    result = text
+    for keyword in keywords:
+        # Ищем слово с учетом регистра (case-insensitive)
+        pattern = re.compile(re.escape(keyword), re.IGNORECASE)
+        result = pattern.sub(
+            lambda m: click.style(m.group(0), fg="yellow", bold=True), result
+        )
+
+    return result
+
+
+TOKEN_PATTERN = re.compile(r"\w+", re.UNICODE)
+MIN_TOKEN_LENGTH = 3
+
+HYBRID_WEIGHTS = {
+    "messages": (0.65, 0.35),
+    "sessions": (0.6, 0.4),
+    "tasks": (0.6, 0.4),
+}
+
+RELEVANCE_THRESHOLDS = {
+    "messages": 0.32,
+    "sessions": 0.30,
+    "tasks": 0.28,
+}
+
+
+def _tokenize(text: str) -> list[str]:
+    """Улучшенная токенизация для русского языка с поддержкой морфологии"""
+    if not text:
+        return []
+
+    try:
+        # Используем улучшенную токенизацию
+        return enhanced_tokenize(text)
+    except Exception as e:
+        # Fallback к простой токенизации в случае ошибки
+        logger.warning(f"Ошибка улучшенной токенизации, используем fallback: {e}")
+        return [
+            token
+            for token in TOKEN_PATTERN.findall(text.lower())
+            if len(token) >= MIN_TOKEN_LENGTH
+        ]
+
+
+def _bm25_scores(
+    query_tokens: list[str], documents_tokens: list[list[str]]
+) -> list[float]:
+    """Вычисляет BM25 для корпуса документов"""
+    if not query_tokens or not documents_tokens:
+        return [0.0] * len(documents_tokens)
+
+    num_docs = len(documents_tokens)
+    doc_freq = Counter()
+    doc_lengths = []
+    for tokens in documents_tokens:
+        unique_tokens = set(tokens)
+        if unique_tokens:
+            doc_freq.update(unique_tokens)
+        doc_lengths.append(len(tokens))
+
+    avgdl = sum(doc_lengths) / num_docs if num_docs else 0
+    if avgdl == 0:
+        return [0.0] * len(documents_tokens)
+
+    idf = {}
+    for token, freq in doc_freq.items():
+        # Добавляем +1, чтобы избежать отрицательных значений при freq == num_docs
+        idf[token] = math.log(((num_docs - freq + 0.5) / (freq + 0.5)) + 1.0)
+
+    scores = []
+    for tokens, doc_len in zip(documents_tokens, doc_lengths):
+        if not tokens:
+            scores.append(0.0)
+            continue
+
+        term_freq = Counter(tokens)
+        score = 0.0
+        for token in query_tokens:
+            token_idf = idf.get(token)
+            tf = term_freq.get(token)
+            if not token_idf or not tf:
+                continue
+            # Параметры BM25 по умолчанию
+            k1 = 1.5
+            b = 0.75
+            denom = tf + k1 * (1 - b + b * (doc_len / avgdl))
+            score += token_idf * (tf * (k1 + 1) / denom)
+
+        scores.append(score)
+
+    return scores
+
+
+@cli.command()
+@click.argument("query")
+@click.option("--limit", "-l", default=10, help="Лимит результатов")
+@click.option(
+    "--collection",
+    "-c",
+    type=click.Choice(["messages", "sessions", "tasks"]),
+    default="messages",
+    help="Коллекция для поиска",
+)
+@click.option("--chat", help="Фильтр по чату (название чата)")
+@click.option(
+    "--highlight/--no-highlight", default=True, help="Подсветка найденных терминов"
+)
+@click.option(
+    "--embedding-model", 
+    default="hf.co/lmstudio-community/Magistral-Small-2509-GGUF:Q4_K_M", 
+    help="Модель для эмбеддингов"
+)
+def search(query, limit, collection, chat, highlight, embedding_model):
+    """🔍 Поиск по индексированным данным
+
+    Поиск по трём уровням:
+    - messages: Поиск по сообщениям
+    - sessions: Поиск по саммаризациям сессий
+    - tasks: Поиск по задачам (Action Items)
+    """
+
+    async def _search():
+        import chromadb
+
+        from ..core.ollama_client import OllamaEmbeddingClient
+
+        click.echo(f"🔍 Поиск в коллекции '{collection}': '{query}'")
+        if chat:
+            click.echo(f"📋 Фильтр по чату: '{chat}'")
+
+        try:
+            # Инициализируем клиентов
+            chroma_client = chromadb.PersistentClient(path="./chroma_db")
+            ollama_client = OllamaEmbeddingClient(model_name=embedding_model)
+
+            # Получаем коллекцию
+            collection_name = f"chat_{collection}"
+            try:
+                coll = chroma_client.get_collection(collection_name)
+            except:
+                click.echo(f"❌ Коллекция {collection_name} не найдена")
+                click.echo("💡 Запустите 'memory_mcp index' для создания индексов")
+                return
+
+            # Генерируем эмбеддинг
+            async with ollama_client:
+                query_embedding = await ollama_client._generate_single_embedding(query)
+
+                if not query_embedding:
+                    click.echo("❌ Не удалось сгенерировать эмбеддинг для запроса")
+                    return
+
+                # Гибридный поиск: векторный + BM25
+                where_filter = {"chat": chat} if chat else None
+                vector_limit = max(limit * 4, 20)
+                results = coll.query(
+                    query_embeddings=[query_embedding],
+                    n_results=vector_limit,
+                    where=where_filter,
+                )
+
+                documents = results.get("documents")
+                if not documents or not documents[0]:
+                    click.echo("❌ Результаты не найдены")
+                    return
+
+                raw_ids = results.get("ids") or [[]]
+                raw_ids = raw_ids[0] if raw_ids else []
+                metadatas = results.get("metadatas", [[]])[0]
+                distances = results.get("distances", [[]])[0]
+
+                def resolve_doc_id(raw_id, metadata, doc_text):
+                    if raw_id:
+                        return raw_id
+                    metadata = metadata or {}
+                    for key in ("msg_id", "session_id", "task_id", "id"):
+                        value = metadata.get(key)
+                        if value:
+                            return value
+                    # Фолбэк на основе текста — достаточно стабилен для локального поиска
+                    return f"doc-{abs(hash((doc_text or '')[:80]))}"
+
+                vector_scores: dict[str, float] = {}
+                vector_distances: dict[str, float] = {}
+                vector_candidates = []
+
+                for doc, metadata, distance, raw_id in zip(
+                    documents[0], metadatas, distances, raw_ids
+                ):
+                    if not doc:
+                        continue
+                    doc_id = resolve_doc_id(raw_id, metadata, doc)
+                    vector_candidates.append(
+                        {
+                            "id": doc_id,
+                            "doc": doc,
+                            "metadata": metadata or {},
+                            "distance": distance,
+                        }
+                    )
+                    vector_distances[doc_id] = distance
+
+                if not vector_candidates:
+                    click.echo("❌ Результаты не найдены")
+                    return
+
+                available_distances = [
+                    item["distance"]
+                    for item in vector_candidates
+                    if item.get("distance") is not None
+                ]
+                if available_distances:
+                    min_distance = min(available_distances)
+                    max_distance = max(available_distances)
+                    denominator = max(max_distance - min_distance, 1e-6)
+                    for item in vector_candidates:
+                        doc_id = item["id"]
+                        distance = item.get("distance")
+                        if distance is None:
+                            continue
+                        if max_distance == min_distance:
+                            vector_scores[doc_id] = 1.0
+                        else:
+                            score = (max_distance - distance) / denominator
+                            vector_scores[doc_id] = max(score, 0.0)
+
+                # Получаем корпус документов для лексического поиска
+                get_kwargs = {"include": ["documents", "metadatas"]}
+                if where_filter:
+                    get_kwargs["where"] = where_filter
+
+                corpus = coll.get(**get_kwargs)
+                corpus_docs = corpus.get("documents", [])
+                corpus_meta = corpus.get("metadatas", [])
+
+                doc_store: dict[str, dict[str, object]] = {}
+                lexical_entries: list[str] = []
+                lexical_tokens: list[list[str]] = []
+
+                for idx, (doc_text, metadata) in enumerate(
+                    zip(corpus_docs, corpus_meta)
+                ):
+                    # Генерируем ID на основе индекса и содержимого
+                    raw_id = f"doc_{idx}_{hash(doc_text or '')}"
+                    resolved_id = resolve_doc_id(raw_id, metadata, doc_text)
+                    doc_store[resolved_id] = {
+                        "doc": doc_text or "",
+                        "metadata": metadata or {},
+                    }
+                    lexical_entries.append(resolved_id)
+                    lexical_tokens.append(_tokenize(doc_text or ""))
+
+                query_tokens = _tokenize(query)
+                lexical_scores_list = _bm25_scores(query_tokens, lexical_tokens)
+                lexical_scores = dict(zip(lexical_entries, lexical_scores_list))
+                max_lexical_score = (
+                    max(lexical_scores.values()) if lexical_scores else 0.0
+                )
+                lexical_norm = {
+                    doc_id: (score / max_lexical_score)
+                    if max_lexical_score > 0
+                    else 0.0
+                    for doc_id, score in lexical_scores.items()
+                }
+
+                weight_vector, weight_lexical = HYBRID_WEIGHTS.get(
+                    collection, (0.6, 0.4)
+                )
+                if not query_tokens or max_lexical_score == 0:
+                    weight_vector, weight_lexical = 1.0, 0.0
+                weight_sum = weight_vector + weight_lexical
+                if weight_sum == 0:
+                    weight_vector, weight_lexical = 1.0, 0.0
+                else:
+                    weight_vector /= weight_sum
+                    weight_lexical /= weight_sum
+
+                candidate_ids = set(vector_scores.keys())
+                if lexical_scores:
+                    sorted_lexical = sorted(
+                        lexical_scores.items(), key=lambda item: item[1], reverse=True
+                    )
+                    top_lexical = [
+                        doc_id for doc_id, score in sorted_lexical if score > 0
+                    ][: max(limit * 3, 15)]
+                    candidate_ids.update(top_lexical)
+
+                final_candidates = []
+                for doc_id in candidate_ids:
+                    payload = doc_store.get(doc_id)
+                    if not payload:
+                        continue
+                    vector_component = vector_scores.get(doc_id, 0.0)
+                    lexical_component = lexical_norm.get(doc_id, 0.0)
+                    hybrid_score = (
+                        vector_component * weight_vector
+                        + lexical_component * weight_lexical
+                    )
+                    final_candidates.append(
+                        {
+                            "id": doc_id,
+                            "doc": payload["doc"],
+                            "metadata": payload["metadata"],
+                            "score": hybrid_score,
+                            "vector_component": vector_component,
+                            "lexical_component": lexical_component,
+                            "vector_distance": vector_distances.get(doc_id),
+                        }
+                    )
+
+                if not final_candidates:
+                    click.echo("❌ Результаты не найдены")
+                    return
+
+                final_candidates.sort(key=lambda item: item["score"], reverse=True)
+
+                threshold = RELEVANCE_THRESHOLDS.get(collection, 0.0)
+                filtered_candidates = [
+                    candidate
+                    for candidate in final_candidates
+                    if candidate["score"] >= threshold
+                ]
+                filtered_out = len(final_candidates) - len(filtered_candidates)
+
+                if not filtered_candidates:
+                    filtered_candidates = final_candidates[:limit]
+                    filtered_out = 0
+                else:
+                    filtered_candidates = filtered_candidates[:limit]
+
+                click.echo(f"✅ Найдено результатов: {len(filtered_candidates)}")
+                if filtered_out > 0:
+                    click.echo(f"   (отсечено по порогу релевантности: {filtered_out})")
+                click.echo()
+
+                for index, candidate in enumerate(filtered_candidates, 1):
+                    metadata = candidate.get("metadata") or {}
+                    chat_name = metadata.get(
+                        "chat", metadata.get("chat_name", "Unknown")
+                    )
+                    signal_parts = []
+                    if candidate.get("vector_component", 0) > 0:
+                        signal_parts.append("vec")
+                    if candidate.get("lexical_component", 0) > 0:
+                        signal_parts.append("lex")
+                    signals = "+".join(signal_parts) if signal_parts else "-"
+                    header = f"{index}. {chat_name} (score: {candidate['score'] * 100:.1f} | signals: {signals}"
+                    distance = candidate.get("vector_distance")
+                    if distance is not None:
+                        header += f" | distance: {distance:.1f}"
+                    header += ")"
+                    click.echo(header)
+
+                    doc_text = candidate.get("doc") or ""
+
+                    if collection == "messages":
+                        text = (
+                            doc_text[:200] + "..." if len(doc_text) > 200 else doc_text
+                        )
+                        if highlight:
+                            text = highlight_text(text, query)
+                        click.echo(f"   {text}")
+                    elif collection == "sessions":
+                        session_id = metadata.get("session_id", "N/A")
+                        time_range = metadata.get("time_span", "N/A")
+                        click.echo(f"   Session: {session_id}")
+                        click.echo(f"   Time: {time_range}")
+                        summary = (
+                            doc_text[:150] + "..." if len(doc_text) > 150 else doc_text
+                        )
+                        if highlight:
+                            summary = highlight_text(summary, query)
+                        click.echo(f"   Summary: {summary}")
+                    elif collection == "tasks":
+                        task_text = (
+                            doc_text[:200] + "..." if len(doc_text) > 200 else doc_text
+                        )
+                        if highlight:
+                            task_text = highlight_text(task_text, query)
+                        owner = metadata.get("owner", "N/A")
+                        due_date = metadata.get("due", "N/A")
+                        priority = metadata.get("priority", "N/A")
+                        click.echo(f"   Task: {task_text}")
+                        click.echo(
+                            f"   Owner: {owner} | Due: {due_date} | Priority: {priority}"
+                        )
+
+                    click.echo()
+
+        except Exception as e:
+            click.echo(f"❌ Ошибка при поиске: {e}")
+            import traceback
+
+            traceback.print_exc()
+
+    asyncio.run(_search())
+
+
+@cli.command()
+@click.option(
+    "--threshold", default=0.76, type=float, help="Порог схожести между чатами"
+)
+@click.option("--graphml", type=click.Path(), help="Путь для сохранения GraphML-файла")
+def insight_graph(threshold, graphml):
+    """🧠 Построение графа знаний
+
+    Создает граф связей на основе саммаризаций, выделяя ключевые инсайты
+    и связи между чатами.
+    """
+
+    async def _run():
+        click.echo("🧠 Построение графа инсайтов...")
+        click.echo(f"   Порог схожести: {threshold}")
+        click.echo()
+
+        analyzer = SummaryInsightAnalyzer(
+            summaries_dir=Path("artifacts/reports"),
+            similarity_threshold=threshold,
+        )
+
+        try:
+            # Строим граф
+            async with analyzer:
+                result = await analyzer.analyze()
+
+            # Выводим отчёт
+            click.echo("\n" + "=" * 80)
+            click.echo("✅ Граф инсайтов построен!")
+            click.echo("=" * 80)
+            click.echo()
+
+            graph_metrics = result.metrics.get("graph", {})
+            click.echo("📊 Метрики графа:")
+            click.echo(f"   - Узлов (чатов): {graph_metrics.get('nodes', 0)}")
+            click.echo(f"   - Рёбер (связей): {graph_metrics.get('edges', 0)}")
+            click.echo(f"   - Компонентов: {graph_metrics.get('components', 0)}")
+            click.echo(f"   - Плотность графа: {graph_metrics.get('density', 0.0):.3f}")
+            click.echo()
+
+            # Сохраняем отчёт
+            report_path = Path("insight_graph_report.md")
+            report_content = analyzer.generate_report(result)
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(report_content)
+            click.echo(f"📄 Отчёт сохранён: {report_path}")
+
+            # Сохраняем GraphML если указан путь
+            if graphml:
+                export_path = analyzer.export_graphml(result, Path(graphml))
+                if export_path:
+                    click.echo(f"📁 GraphML сохранён: {export_path}")
+
+        except Exception as e:
+            click.echo(f"❌ Ошибка при построении графа: {e}")
+            import traceback
+
+            traceback.print_exc()
+
+    asyncio.run(_run())
+
+
+@cli.command()
+def stats():
+    """📊 Статистика системы"""
+
+    async def _stats():
+        import chromadb
+
+        click.echo("📊 Статистика системы...")
+        click.echo()
+
+        # Проверяем ChromaDB коллекции
+        try:
+            chroma_client = chromadb.PersistentClient(path="./chroma_db")
+
+            # Статистика по коллекциям
+            total_records = 0
+            for coll_name in ["chat_sessions", "chat_messages", "chat_tasks"]:
+                try:
+                    coll = chroma_client.get_collection(coll_name)
+                    count = coll.count()
+                    total_records += count
+                    icon = "✅" if count > 0 else "⚠️ "
+                    click.echo(f"{icon} {coll_name}: {count} записей")
+                except:
+                    click.echo(f"❌ {coll_name}: не найдена")
+
+            click.echo()
+            click.echo(f"📦 Всего записей в индексах: {total_records}")
+
+        except Exception as e:
+            click.echo(f"❌ Ошибка при проверке ChromaDB: {e}")
+
+        click.echo()
+
+        # Статистика по файлам
+        chats_path = Path("chats")
+        if chats_path.exists():
+            json_files = list(chats_path.glob("**/*.json"))
+            click.echo(f"📁 JSON файлов: {len(json_files)}")
+
+            # Количество чатов
+            chat_dirs = [d for d in chats_path.iterdir() if d.is_dir()]
+            click.echo(f"💬 Чатов: {len(chat_dirs)}")
+        else:
+            click.echo("📁 JSON файлов: 0")
+
+        # Markdown файлы
+        summaries_path = Path("artifacts/reports")
+        if summaries_path.exists():
+            md_files = list(summaries_path.glob("**/*.md"))
+            session_files = list(summaries_path.glob("**/sessions/*.md"))
+            click.echo(f"📄 MD файлов: {len(md_files)}")
+            click.echo(f"📝 Саммаризаций сессий: {len(session_files)}")
+        else:
+            click.echo("📄 MD файлов: 0")
+
+    asyncio.run(_stats())
+
+
+@cli.command("indexing-progress")
+@click.option("--chat", help="Показать прогресс для конкретного чата")
+@click.option(
+    "--reset",
+    is_flag=True,
+    help="Сбросить прогресс индексации (для повторной полной индексации)",
+)
+def indexing_progress(chat, reset):
+    """🔄 Управление прогрессом инкрементальной индексации
+
+    Показывает информацию о последней индексации каждого чата
+    или сбрасывает прогресс для повторной индексации.
+    """
+
+    import chromadb
+
+    try:
+        chroma_client = chromadb.PersistentClient(path="./chroma_db")
+
+        try:
+            progress_collection = chroma_client.get_collection("indexing_progress")
+        except:
+            click.echo("⚠️  Коллекция indexing_progress не найдена")
+            click.echo("💡 Индексация ещё не запускалась или используется старая версия")
+            return
+
+        if reset:
+            if chat:
+                # Сбрасываем прогресс для конкретного чата
+                from ..utils.naming import slugify
+
+                progress_id = f"progress_{slugify(chat)}"
+                try:
+                    progress_collection.delete(ids=[progress_id])
+                    click.echo(f"✅ Прогресс индексации для чата '{chat}' сброшен")
+                    click.echo(
+                        "💡 При следующем запуске чат будет проиндексирован заново"
+                    )
+                except Exception as e:
+                    click.echo(f"❌ Ошибка при сбросе прогресса: {e}")
+            else:
+                # Сбрасываем весь прогресс
+                try:
+                    result = progress_collection.get()
+                    if result["ids"]:
+                        progress_collection.delete(ids=result["ids"])
+                        click.echo(
+                            f"✅ Прогресс индексации сброшен для {len(result['ids'])} чатов"
+                        )
+                        click.echo(
+                            "💡 При следующем запуске все чаты будут проиндексированы заново"
+                        )
+                    else:
+                        click.echo("⚠️  Нет записей о прогрессе индексации")
+                except Exception as e:
+                    click.echo(f"❌ Ошибка при сбросе прогресса: {e}")
+        else:
+            # Показываем прогресс
+            click.echo("🔄 Прогресс инкрементальной индексации:")
+            click.echo()
+
+            try:
+                if chat:
+                    # Показываем прогресс для конкретного чата
+                    from ..utils.naming import slugify
+
+                    progress_id = f"progress_{slugify(chat)}"
+                    result = progress_collection.get(
+                        ids=[progress_id], include=["metadatas"]
+                    )
+
+                    if result["ids"]:
+                        metadata = result["metadatas"][0]
+                        click.echo(f"📋 Чат: {metadata.get('chat_name', chat)}")
+                        click.echo(
+                            f"   Последнее сообщение: {metadata.get('last_indexed_date', 'N/A')}"
+                        )
+                        click.echo(
+                            f"   Последняя индексация: {metadata.get('last_indexing_time', 'N/A')}"
+                        )
+                        click.echo(
+                            f"   Всего сообщений: {metadata.get('total_messages', 0)}"
+                        )
+                        click.echo(
+                            f"   Всего сессий: {metadata.get('total_sessions', 0)}"
+                        )
+                    else:
+                        click.echo(f"⚠️  Нет записей о прогрессе для чата '{chat}'")
+                else:
+                    # Показываем прогресс для всех чатов
+                    result = progress_collection.get(include=["metadatas"])
+
+                    if result["ids"]:
+                        click.echo(f"Найдено записей: {len(result['ids'])}")
+                        click.echo()
+
+                        for i, metadata in enumerate(result["metadatas"], 1):
+                            chat_name = metadata.get("chat_name", "Unknown")
+                            last_date = metadata.get("last_indexed_date", "N/A")
+                            last_time = metadata.get("last_indexing_time", "N/A")
+                            total_msgs = metadata.get("total_messages", 0)
+                            total_sessions = metadata.get("total_sessions", 0)
+
+                            click.echo(f"{i}. {chat_name}")
+                            click.echo(f"   Последнее сообщение: {last_date}")
+                            click.echo(f"   Последняя индексация: {last_time}")
+                            click.echo(
+                                f"   Сообщений: {total_msgs}, Сессий: {total_sessions}"
+                            )
+                            click.echo()
+                    else:
+                        click.echo("⚠️  Нет записей о прогрессе индексации")
+                        click.echo("💡 Запустите индексацию командой: memory_mcp index")
+            except Exception as e:
+                click.echo(f"❌ Ошибка при получении прогресса: {e}")
+                import traceback
+
+                traceback.print_exc()
+
+    except Exception as e:
+        click.echo(f"❌ Ошибка при подключении к ChromaDB: {e}")
+
+
+@cli.command("update-summaries")
+@click.option("--chat", help="Обновить отчеты только для конкретного чата")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Принудительно пересоздать существующие артефакты",
+)
+def update_summaries(chat, force):
+    """📝 Обновление markdown-отчетов без полной индексации
+
+    Читает существующие JSON-саммаризации и пересоздает markdown-отчеты,
+    включая раздел "Актуально за 30 дней".
+    """
+    import json
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from ..analysis.markdown_renderer import MarkdownRenderer
+
+    async def _update_summaries():
+        click.echo("📝 Обновление markdown-отчетов...")
+        click.echo()
+
+        reports_dir = Path("artifacts/reports")
+
+        if not reports_dir.exists():
+            click.echo("❌ Директория artifacts/reports не найдена")
+            click.echo("💡 Запустите индексацию: memory_mcp index")
+            return
+
+        # Находим чаты для обработки
+        if chat:
+            chat_dirs = [reports_dir / chat] if (reports_dir / chat).exists() else []
+            if not chat_dirs:
+                click.echo(f"❌ Чат '{chat}' не найден в artifacts/reports/")
+                return
+        else:
+            chat_dirs = [
+                d
+                for d in reports_dir.iterdir()
+                if d.is_dir() and (d / "sessions").exists()
+            ]
+
+        if not chat_dirs:
+            click.echo("❌ Не найдено чатов с саммаризациями")
+            return
+
+        click.echo(f"📁 Найдено чатов: {len(chat_dirs)}")
+        click.echo()
+
+        # Создаем renderer
+        renderer = MarkdownRenderer(output_dir=reports_dir)
+
+        def parse_message_time(date_str: str) -> datetime:
+            try:
+                if not date_str:
+                    return datetime.now(ZoneInfo("UTC"))
+                if date_str.endswith("Z"):
+                    date_str = date_str[:-1] + "+00:00"
+                dt = datetime.fromisoformat(date_str)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+                else:
+                    dt = dt.astimezone(ZoneInfo("UTC"))
+                return dt
+            except Exception:
+                return datetime.now(ZoneInfo("UTC"))
+
+        def load_session_summaries(chat_dir: Path) -> list:
+            sessions = []
+            sessions_dir = chat_dir / "sessions"
+            if not sessions_dir.exists():
+                return sessions
+
+            json_files = list(sessions_dir.glob("*.json"))
+            for json_file in json_files:
+                try:
+                    with open(json_file, encoding="utf-8") as f:
+                        session = json.load(f)
+                        sessions.append(session)
+                except Exception as e:
+                    click.echo(f"⚠️  Ошибка чтения {json_file.name}: {e}")
+                    continue
+            return sessions
+
+        # Обрабатываем каждый чат
+        updated = 0
+
+        for chat_dir in chat_dirs:
+            chat_name = chat_dir.name.replace("_", " ").title()
+            click.echo(f"📋 Обработка чата: {chat_name}")
+
+            # Загружаем саммаризации
+            sessions = load_session_summaries(chat_dir)
+
+            if not sessions:
+                click.echo("   ⚠️  Нет саммаризаций для обновления")
+                continue
+
+            click.echo(f"   📊 Найдено саммаризаций: {len(sessions)}")
+
+            # Фильтруем сессии за последние 30 дней
+            now = datetime.now(ZoneInfo("UTC"))
+            thirty_days_ago = now - timedelta(days=30)
+
+            recent_sessions = []
+            for session in sessions:
+                end_time_str = session.get("meta", {}).get("end_time_utc", "")
+                if end_time_str:
+                    end_time = parse_message_time(end_time_str)
+                    if end_time >= thirty_days_ago:
+                        recent_sessions.append(session)
+
+            click.echo(f"   📅 Сессий за последние 30 дней: {len(recent_sessions)}")
+
+            # Сортируем по качеству
+            top_sessions = sorted(
+                recent_sessions,
+                key=lambda s: s.get("quality", {}).get("score", 0),
+                reverse=True,
+            )
+
+            # Генерируем отчеты
+            try:
+                renderer.render_chat_summary(
+                    chat_name, sessions, top_sessions=top_sessions, force=force
+                )
+                renderer.render_cumulative_context(chat_name, sessions, force=force)
+                renderer.render_chat_index(chat_name, sessions, force=force)
+                click.echo("   ✅ Обновлены все отчеты")
+                updated += 1
+            except Exception as e:
+                click.echo(f"   ❌ Ошибка при обновлении: {e}")
+
+        # Итоговая статистика
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("✅ Обновление завершено!")
+        click.echo("=" * 80)
+        click.echo(f"📊 Обновлено чатов: {updated}")
+        click.echo("📂 Обновленные файлы находятся в: ./artifacts/reports/")
+
+    asyncio.run(_update_summaries())
+
+
+@cli.command("rebuild-vector-db")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Принудительно удалить существующую базу данных без подтверждения",
+)
+@click.option(
+    "--keep-reports",
+    is_flag=True,
+    help="Сохранить markdown отчеты и JSON саммаризации (только пересоздать ChromaDB)",
+)
+@click.option(
+    "--backup",
+    is_flag=True,
+    help="Создать резервную копию существующей базы данных перед удалением",
+)
+@click.option(
+    "--no-progress",
+    is_flag=True,
+    help="Отключить прогресс-бар (полезно для автоматизации)",
+)
+def rebuild_vector_db(force, keep_reports, backup, no_progress):
+    """🔄 Пересоздание векторной базы данных ChromaDB
+
+    Удаляет существующую векторную базу данных и пересоздает её заново,
+    используя существующие артефакты (JSON саммаризации, markdown отчеты).
+
+    Полезно когда:
+    - База данных повреждена
+    - Нужно обновить схему коллекций
+    - Произошла ошибка при индексации
+
+    ВНИМАНИЕ: Эта команда удалит все данные из ChromaDB!
+    """
+
+    async def _rebuild():
+        import json
+        import shutil
+        from pathlib import Path
+
+        click.echo("=" * 80)
+        click.echo("🔄 Пересоздание векторной базы данных ChromaDB")
+        click.echo("=" * 80)
+        click.echo()
+
+        # Проверяем наличие артефактов
+        reports_dir = Path("artifacts/reports")
+        chroma_dir = Path("chroma_db")
+
+        if not reports_dir.exists():
+            click.echo("❌ Директория artifacts/reports не найдена")
+            click.echo("💡 Сначала запустите индексацию: memory_mcp index")
+            return
+
+        # Проверяем наличие JSON саммаризаций
+        json_files = list(reports_dir.glob("**/*.json"))
+        if not json_files:
+            click.echo("❌ Не найдено JSON файлов саммаризаций")
+            click.echo("💡 Сначала запустите индексацию: memory_mcp index")
+            return
+
+        click.echo(f"📁 Найдено JSON файлов саммаризаций: {len(json_files)}")
+
+        # Проверяем существующую базу данных
+        if chroma_dir.exists():
+            try:
+                import chromadb
+
+                chroma_client = chromadb.PersistentClient(path=str(chroma_dir))
+
+                # Получаем информацию о коллекциях
+                collections_info = []
+                for collection_name in [
+                    "chat_sessions",
+                    "chat_messages",
+                    "chat_tasks",
+                    "session_clusters",
+                    "indexing_progress",
+                ]:
+                    try:
+                        collection = chroma_client.get_collection(collection_name)
+                        count = collection.count()
+                        collections_info.append(
+                            f"   - {collection_name}: {count} записей"
+                        )
+                    except:
+                        collections_info.append(f"   - {collection_name}: не найдена")
+
+                click.echo("📊 Текущее состояние ChromaDB:")
+                for info in collections_info:
+                    click.echo(info)
+                click.echo()
+
+            except Exception as e:
+                click.echo(f"⚠️  Не удалось подключиться к ChromaDB: {e}")
+                click.echo("   База данных может быть повреждена")
+                click.echo()
+
+        # Подтверждение удаления
+        if not force:
+            click.echo("⚠️  ВНИМАНИЕ: Эта операция удалит все данные из ChromaDB!")
+            click.echo("   Существующие коллекции будут полностью пересозданы.")
+            click.echo()
+
+            if not click.confirm("Продолжить?"):
+                click.echo("❌ Операция отменена")
+                return
+
+        # Создаем резервную копию если запрошено
+        if backup and chroma_dir.exists():
+            backup_dir = Path(
+                f"chroma_db_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            )
+            click.echo(f"📦 Создание резервной копии: {backup_dir}")
+            try:
+                shutil.copytree(chroma_dir, backup_dir)
+                click.echo(f"✅ Резервная копия создана: {backup_dir}")
+            except Exception as e:
+                click.echo(f"❌ Ошибка создания резервной копии: {e}")
+                if not click.confirm("Продолжить без резервной копии?"):
+                    return
+            click.echo()
+
+        # Удаляем существующую базу данных
+        if chroma_dir.exists():
+            click.echo("🗑️  Удаление существующей ChromaDB...")
+            try:
+                shutil.rmtree(chroma_dir)
+                click.echo("✅ Существующая база данных удалена")
+            except Exception as e:
+                click.echo(f"❌ Ошибка удаления базы данных: {e}")
+                return
+            click.echo()
+
+        # Пересоздаем базу данных из существующих артефактов
+        click.echo("🔄 Пересоздание векторной базы из существующих артефактов...")
+        click.echo()
+
+        try:
+            # Инициализируем индексатор
+            from ..core.indexer import TwoLevelIndexer
+
+            click.echo("📦 Инициализация индексатора...")
+            indexer = TwoLevelIndexer()
+            click.echo("✅ Индексатор готов")
+            click.echo()
+
+            # Загружаем существующие саммаризации
+            click.echo("📚 Загрузка существующих саммаризаций...")
+
+            sessions_data = []
+            for json_file in json_files:
+                try:
+                    with open(json_file, encoding="utf-8") as f:
+                        session_data = json.load(f)
+                        sessions_data.append(session_data)
+                except Exception as e:
+                    click.echo(f"⚠️  Ошибка чтения {json_file.name}: {e}")
+                    continue
+
+            click.echo(f"✅ Загружено саммаризаций: {len(sessions_data)}")
+            click.echo()
+
+            if not sessions_data:
+                click.echo("❌ Нет валидных саммаризаций для пересоздания базы")
+                return
+
+            # Пересоздаем коллекции
+            click.echo("🔄 Пересоздание коллекций ChromaDB...")
+
+            # Группируем по чатам
+            chats_data = {}
+            for session in sessions_data:
+                chat_name = session.get("meta", {}).get("chat_name", "Unknown")
+                if chat_name not in chats_data:
+                    chats_data[chat_name] = []
+                chats_data[chat_name].append(session)
+
+            click.echo(f"📋 Найдено чатов: {len(chats_data)}")
+
+            # Индексируем каждую сессию с прогресс-баром
+            total_sessions = len(sessions_data)
+            indexed_sessions = 0
+            indexed_messages = 0
+            indexed_tasks = 0
+
+            # Импортируем tqdm для прогресс-бара
+            from tqdm import tqdm
+
+            # Определяем, показывать ли прогресс-бар
+            show_progress = not no_progress
+
+            if show_progress:
+                # Создаем прогресс-бар для всех сессий
+                with tqdm(
+                    total=total_sessions,
+                    desc="Пересоздание векторной базы",
+                    unit="сессия",
+                ) as pbar:
+                    for chat_name, chat_sessions in chats_data.items():
+                        # Обновляем описание прогресс-бара
+                        pbar.set_description(f"Обработка чата: {chat_name}")
+
+                        for session in chat_sessions:
+                            try:
+                                # L1: Индексация саммари сессии
+                                await indexer._index_session_l1(session)
+                                indexed_sessions += 1
+
+                                # L2: Индексация сообщений
+                                messages_count = await indexer._index_messages_l2(
+                                    session
+                                )
+                                indexed_messages += messages_count
+
+                                # L3: Индексация задач
+                                tasks_count = await indexer._index_tasks(session)
+                                indexed_tasks += tasks_count
+
+                            except Exception as e:
+                                click.echo(
+                                    f"⚠️  Ошибка индексации сессии {session.get('session_id', 'Unknown')}: {e}"
+                                )
+                                continue
+
+                            # Обновляем прогресс-бар с дополнительной информацией
+                            pbar.set_postfix(
+                                {
+                                    "сессий": indexed_sessions,
+                                    "сообщений": indexed_messages,
+                                    "задач": indexed_tasks,
+                                }
+                            )
+                            pbar.update(1)
+            else:
+                # Обработка без прогресс-бара
+                for chat_name, chat_sessions in chats_data.items():
+                    click.echo(
+                        f"📁 Обработка чата: {chat_name} ({len(chat_sessions)} сессий)"
+                    )
+
+                    for session in chat_sessions:
+                        try:
+                            # L1: Индексация саммари сессии
+                            await indexer._index_session_l1(session)
+                            indexed_sessions += 1
+
+                            # L2: Индексация сообщений
+                            messages_count = await indexer._index_messages_l2(session)
+                            indexed_messages += messages_count
+
+                            # L3: Индексация задач
+                            tasks_count = await indexer._index_tasks(session)
+                            indexed_tasks += tasks_count
+
+                        except Exception as e:
+                            click.echo(
+                                f"⚠️  Ошибка индексации сессии {session.get('session_id', 'Unknown')}: {e}"
+                            )
+                            continue
+
+                    click.echo(f"   ✅ Обработано сессий: {len(chat_sessions)}")
+
+            click.echo()
+            click.echo("=" * 80)
+            click.echo("✅ Векторная база данных успешно пересоздана!")
+            click.echo("=" * 80)
+            click.echo()
+            click.echo("📊 Статистика:")
+            click.echo(f"   - Пересоздано сессий (L1): {indexed_sessions}")
+            click.echo(f"   - Пересоздано сообщений (L2): {indexed_messages}")
+            click.echo(f"   - Пересоздано задач (L3): {indexed_tasks}")
+            click.echo()
+            click.echo("📂 Результаты:")
+            click.echo("   - Векторная база: ./chroma_db/")
+            click.echo("   - Коллекции: chat_sessions, chat_messages, chat_tasks")
+            if keep_reports:
+                click.echo("   - Markdown отчеты: сохранены в ./artifacts/reports/")
+            click.echo()
+            click.echo("💡 Теперь можно использовать поиск: memory_mcp search")
+
+        except Exception as e:
+            click.echo()
+            click.echo("=" * 80)
+            click.echo("❌ Ошибка при пересоздании векторной базы!")
+            click.echo("=" * 80)
+            click.echo(f"Ошибка: {e}")
+            click.echo()
+            import traceback
+
+            traceback.print_exc()
+
+    asyncio.run(_rebuild())
+
+
+@cli.command("extract-messages")
+@click.option("--dry-run", is_flag=True, help="Только анализ, без изменения файлов")
+@click.option("--no-date-filter", is_flag=True, help="Отключить фильтрацию по дате")
+@click.option("--chat", help="Фильтр по названию чата")
+@click.option("--input-dir", default="input", help="Директория с исходными данными")
+@click.option(
+    "--chats-dir", default="chats", help="Директория для сохранения сообщений"
+)
+def extract_messages(dry_run, no_date_filter, chat, input_dir, chats_dir):
+    """📥 Извлечение новых сообщений из input в chats
+
+    Извлекает новые сообщения из директории input и сохраняет их в chats,
+    с фильтрацией по дате и дедупликацией.
+    """
+
+    async def _extract_messages():
+        click.echo("📥 Извлечение новых сообщений...")
+        click.echo(f"   Входная директория: {input_dir}")
+        click.echo(f"   Выходная директория: {chats_dir}")
+        click.echo(
+            f"   Фильтр по дате: {'❌ Отключен' if no_date_filter else '✅ Включен'}"
+        )
+        click.echo(f"   Фильтр по чату: {chat or 'все чаты'}")
+        click.echo(f"   Режим: {'🔸 DRY RUN' if dry_run else '✅ Реальное выполнение'}")
+        click.echo()
+
+        # Создаем экстрактор
+        extractor = MessageExtractor(input_dir=input_dir, chats_dir=chats_dir)
+
+        # Выполняем извлечение
+        extractor.extract_all_messages(
+            dry_run=dry_run, filter_by_date=not no_date_filter, chat_filter=chat
+        )
+
+        # Выводим статистику
+        extractor.print_stats()
+
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("✅ Извлечение сообщений завершено!")
+        click.echo("=" * 80)
+
+    asyncio.run(_extract_messages())
+
+
+@cli.command("deduplicate")
+@click.option(
+    "--chats-dir", default="chats", help="Директория с сообщениями для дедупликации"
+)
+def deduplicate(chats_dir):
+    """🧹 Удаление дубликатов сообщений
+
+    Удаляет дубликаты сообщений по полю 'id' во всех чатах.
+    """
+
+    async def _deduplicate():
+        click.echo("🧹 Удаление дубликатов сообщений...")
+        click.echo(f"   Директория: {chats_dir}")
+        click.echo()
+
+        # Создаем дедупликатор
+        deduplicator = MessageDeduplicator(chats_dir=chats_dir)
+
+        # Выполняем дедупликацию
+        deduplicator.deduplicate_all_chats()
+
+        # Выводим статистику
+        deduplicator.print_stats()
+
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("✅ Дедупликация завершена!")
+        click.echo("=" * 80)
+
+    asyncio.run(_deduplicate())
+
+
+@cli.command("stop-indexing")
+def stop_indexing():
+    """🛑 Остановка всех процессов индексации
+
+    Останавливает все процессы индексации и Ollama сервер.
+    """
+
+    async def _stop_indexing():
+        click.echo("🛑 Остановка процессов индексации...")
+        click.echo()
+
+        # Останавливаем все процессы
+        ProcessManager.stop_all_indexing()
+
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("✅ Остановка процессов завершена!")
+        click.echo("=" * 80)
+
+    asyncio.run(_stop_indexing())
+
+
+@cli.command("review-summaries")
+@click.option("--dry-run", is_flag=True, help="Только анализ, без изменения файлов")
+@click.option("--chat", help="Обработать только конкретный чат")
+@click.option("--limit", type=int, help="Максимальное количество файлов для обработки")
+def review_summaries(dry_run, chat, limit):
+    """🔍 Автоматическое ревью и исправление саммаризаций с суффиксом -needs-review
+
+    Находит файлы *-needs-review.md, анализирует их через LLM и создает
+    исправленные версии без суффикса -needs-review.
+    """
+    import json
+
+    from ..core.ollama_client import OllamaEmbeddingClient
+
+    async def _review_summaries():
+        click.echo("🔍 Автоматическое ревью и исправление саммаризаций")
+        click.echo()
+
+        if dry_run:
+            click.echo("🔸 Режим DRY RUN - файлы не будут изменены")
+            click.echo()
+
+        reports_dir = Path("artifacts/reports")
+
+        if not reports_dir.exists():
+            click.echo("❌ Директория artifacts/reports не найдена")
+            return
+
+        # Находим файлы с -needs-review
+        needs_review_files = []
+        for md_file in reports_dir.rglob("*-needs-review.md"):
+            json_file = md_file.with_suffix(".json")
+
+            file_info = {
+                "md_file": md_file,
+                "json_file": json_file if json_file.exists() else None,
+                "session_id": md_file.stem.replace("-needs-review", ""),
+                "chat": md_file.parent.parent.name,
+            }
+
+            # Фильтруем по чату если указан
+            if chat and chat.lower() not in file_info["chat"].lower():
+                continue
+
+            needs_review_files.append(file_info)
+
+        # Ограничиваем количество если указан лимит
+        if limit:
+            needs_review_files = needs_review_files[:limit]
+
+        if not needs_review_files:
+            click.echo("✅ Не найдено файлов с суффиксом -needs-review")
+            return
+
+        click.echo(f"📁 Найдено файлов для обработки: {len(needs_review_files)}")
+        click.echo()
+
+        # Создаем LLM клиент
+        ollama_client = OllamaEmbeddingClient()
+
+        async def review_summary(md_content: str) -> dict:
+            prompt = f"""Ты - эксперт по анализу и улучшению саммаризаций чатов.
+
+Проанализируй следующую саммаризацию и улучши её, если нужно:
+
+{md_content}
+
+Твоя задача:
+1. Проверить структуру и полноту информации
+2. Исправить грамматические и стилистические ошибки
+3. Улучшить ясность и читаемость
+4. Убедиться, что все секции заполнены корректно
+5. Добавить отсутствующую важную информацию, если она очевидна из контекста
+
+ВАЖНО:
+- Сохрани оригинальную структуру markdown (заголовки, списки, и т.д.)
+- Не добавляй информацию, которой нет в оригинале
+- Сохрани все даты, имена и технические детали
+- Если саммаризация хорошая - верни её без изменений
+
+Верни ТОЛЬКО улучшенный markdown-текст БЕЗ дополнительных комментариев."""
+
+            try:
+                async with ollama_client:
+                    response = await ollama_client._raw_generate(prompt)
+
+                    if response and "response" in response:
+                        improved = response["response"].strip()
+
+                        # Анализируем изменения
+                        issues_found = []
+                        if (
+                            "_(Нет данных)_" in md_content
+                            or "_(отсутствуют)_" in md_content
+                        ):
+                            issues_found.append("Есть пустые секции")
+                        if len(md_content) < 200:
+                            issues_found.append("Слишком короткая саммаризация")
+                        if md_content.count("##") < 2:
+                            issues_found.append("Недостаточная структуризация")
+
+                        improvements = []
+                        if md_content != improved:
+                            improvements.append("Исправлены ошибки")
+                        if len(improved) > len(md_content) * 1.1:
+                            improvements.append("Расширен контент")
+                        if not improvements:
+                            improvements.append("Изменений не требуется")
+
+                        return {
+                            "improved_content": improved,
+                            "issues_found": issues_found,
+                            "improvements": improvements,
+                            "success": True,
+                        }
+                    else:
+                        return {
+                            "improved_content": md_content,
+                            "issues_found": [],
+                            "improvements": [],
+                            "success": False,
+                            "error": "Нет ответа от LLM",
+                        }
+
+            except Exception as e:
+                return {
+                    "improved_content": md_content,
+                    "issues_found": [],
+                    "improvements": [],
+                    "success": False,
+                    "error": str(e),
+                }
+
+        # Обрабатываем каждый файл
+
+        for file_info in needs_review_files:
+            md_file = file_info["md_file"]
+            json_file = file_info["json_file"]
+            session_id = file_info["session_id"]
+
+            click.echo(f"📄 Обработка: {md_file.name}")
+
+            # Читаем markdown
+            try:
+                with open(md_file, encoding="utf-8") as f:
+                    md_content = f.read()
+            except Exception as e:
+                click.echo(f"   ❌ Ошибка чтения MD: {e}")
+                continue
+
+            # Проводим ревью
+            click.echo("   🔍 Анализ через LLM...")
+            review_result = await review_summary(md_content)
+
+            if not review_result["success"]:
+                click.echo(
+                    f"   ❌ Ошибка анализа: {review_result.get('error', 'Unknown')}"
+                )
+                continue
+
+            # Выводим результаты анализа
+            if review_result["issues_found"]:
+                click.echo(
+                    f"   ⚠️  Найдено проблем: {', '.join(review_result['issues_found'])}"
+                )
+
+            if review_result["improvements"]:
+                click.echo(
+                    f"   ✨ Улучшения: {', '.join(review_result['improvements'])}"
+                )
+
+            if dry_run:
+                click.echo("   🔸 DRY RUN - файл не изменён")
+                continue
+
+            # Сохраняем улучшенную версию
+            new_md_file = md_file.parent / f"{session_id}.md"
+            new_json_file = md_file.parent / f"{session_id}.json"
+
+            try:
+                # Сохраняем улучшенный markdown
+                with open(new_md_file, "w", encoding="utf-8") as f:
+                    f.write(review_result["improved_content"])
+
+                # Обновляем JSON если нужно
+                if json_file:
+                    try:
+                        with open(json_file, encoding="utf-8") as f:
+                            session_data = json.load(f)
+
+                        session_data["session_id"] = session_id
+
+                        with open(new_json_file, "w", encoding="utf-8") as f:
+                            json.dump(session_data, f, ensure_ascii=False, indent=2)
+
+                        if new_json_file != json_file:
+                            json_file.unlink()
+                            click.echo(f"   🗑️  Удалён старый JSON: {json_file.name}")
+                    except Exception as e:
+                        click.echo(f"   ⚠️  Ошибка обновления JSON: {e}")
+
+                if new_md_file != md_file:
+                    md_file.unlink()
+                    click.echo(f"   🗑️  Удалён старый MD: {md_file.name}")
+
+                click.echo(f"   ✅ Сохранён исправленный файл: {new_md_file.name}")
+
+            except Exception as e:
+                click.echo(f"   ❌ Ошибка сохранения: {e}")
+
+            # Небольшая задержка между запросами
+            await asyncio.sleep(1)
+
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("✅ Обработка завершена!")
+        click.echo("=" * 80)
+
+    asyncio.run(_review_summaries())
+
+
+def main():
+    """Главная функция CLI"""
+    cli()
+
+
+if __name__ == "__main__":
+    main()

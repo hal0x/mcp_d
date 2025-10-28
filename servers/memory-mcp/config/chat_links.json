@@ -1,0 +1,21 @@
+{
+  "_comment": "Маппинг чатов на Telegram deeplink домены",
+  "chats": {
+    "_ Max.ton": {
+      "type": "private",
+      "domain": null,
+      "notes": "Приватный чат"
+    },
+    "_ RoOLZ Ru Channel": {
+      "type": "public",
+      "domain": "roolz_ru",
+      "notes": "Публичный канал"
+    },
+    "Pavel Durov": {
+      "type": "public",
+      "domain": "durov",
+      "notes": "Официальный канал Павла Дурова"
+    }
+  },
+  "default_type": "private"
+}

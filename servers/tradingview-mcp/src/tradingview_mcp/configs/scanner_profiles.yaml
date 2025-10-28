@@ -1,0 +1,96 @@
+profiles:
+  tight:
+    params:
+      ema_fast: 9
+      ema_slow: 21
+      adx_min: 22
+      vol_z_min: 1.9
+      rsi_oversold: 30
+      rsi_overbought: 70
+    risk:
+      atr_stop_mult: 0.8
+      leverage_bounds: [8, 15]
+      time_stop_bars: 3
+      max_risk_per_trade: 0.02
+    cache_ttl: 300  # 5 минут
+    description: "Агрессивная стратегия для быстрых движений"
+  
+  aggressive:
+    params:
+      ema_fast: 7
+      ema_slow: 15
+      adx_min: 25
+      vol_z_min: 2.2
+      rsi_oversold: 25
+      rsi_overbought: 75
+    risk:
+      atr_stop_mult: 0.7
+      leverage_bounds: [10, 20]
+      time_stop_bars: 2
+      max_risk_per_trade: 0.025
+    cache_ttl: 240  # 4 минуты
+    description: "Очень агрессивная стратегия с высоким левереджем"
+  
+  balanced:
+    params:
+      ema_fast: 9
+      ema_slow: 21
+      adx_min: 20
+      vol_z_min: 1.5
+      rsi_oversold: 35
+      rsi_overbought: 65
+    risk:
+      atr_stop_mult: 1.0
+      leverage_bounds: [5, 12]
+      time_stop_bars: 4
+      max_risk_per_trade: 0.015
+    cache_ttl: 600  # 10 минут
+    description: "Сбалансированная стратегия для стабильной торговли"
+  
+  conservative:
+    params:
+      ema_fast: 12
+      ema_slow: 26
+      adx_min: 18
+      vol_z_min: 1.2
+      rsi_oversold: 40
+      rsi_overbought: 60
+    risk:
+      atr_stop_mult: 1.2
+      leverage_bounds: [3, 8]
+      time_stop_bars: 6
+      max_risk_per_trade: 0.01
+    cache_ttl: 900  # 15 минут
+    description: "Консервативная стратегия с минимальными рисками"
+  
+  scalping:
+    params:
+      ema_fast: 5
+      ema_slow: 13
+      adx_min: 25
+      vol_z_min: 2.0
+      rsi_oversold: 25
+      rsi_overbought: 75
+    risk:
+      atr_stop_mult: 0.6
+      leverage_bounds: [10, 20]
+      time_stop_bars: 2
+      max_risk_per_trade: 0.025
+    cache_ttl: 180  # 3 минуты
+    description: "Скальпинговая стратегия для быстрых входов/выходов"
+  
+  swing:
+    params:
+      ema_fast: 21
+      ema_slow: 50
+      adx_min: 15
+      vol_z_min: 1.0
+      rsi_oversold: 45
+      rsi_overbought: 55
+    risk:
+      atr_stop_mult: 1.5
+      leverage_bounds: [2, 6]
+      time_stop_bars: 8
+      max_risk_per_trade: 0.008
+    cache_ttl: 1800  # 30 минут
+    description: "Свинговая стратегия для среднесрочных позиций"

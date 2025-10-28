@@ -1,0 +1,20 @@
+enabled: true
+interval_minutes: 15
+
+scanners:
+  - name: pro_momentum_scan
+    enabled: true
+    profile: balanced
+    
+  - name: pro_mean_revert_scan
+    enabled: true
+    profile: balanced
+
+# Другие сканеры можно добавить по необходимости
+# - name: pro_breakout_scan
+#   enabled: false
+#   profile: balanced
+# 
+# - name: pro_volume_profile_scan
+#   enabled: false
+#   profile: balanced
