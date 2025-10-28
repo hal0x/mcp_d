@@ -56,6 +56,8 @@ binance-mcp/
   - OrderService - торговые операции
   - PortfolioService - управление портфелем
   - RiskManagementService - управление рисками
+- **Интеграция с Supervisor MCP**: через `supervisor_reporting.py` отправляются facts/metrics (созданные/отменённые ордера, метрики портфеля).
+- **Retry/backoff**: `call_binance` использует экспоненциальный backoff и до `BINANCE_API_MAX_RETRIES` попыток.
 - **Паттерны**: Service Layer, Dependency Injection
 
 #### 5. Client (`src/client.py`)

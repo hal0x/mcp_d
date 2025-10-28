@@ -95,6 +95,12 @@
 
 ## 4. Пошаговые задачи (операционный план)
 
+**Текущий прогресс:** ~45-50% (28 октября 2025)
+
+- ✅ **Завершено:** Базовые MCP серверы (TradingView, Binance, Memory, Shell, Backtesting)
+- 🟡 **В процессе:** Supervisor MCP (~50%), Learning MCP (~35%), Policy MCP (~25%), Orchestrator MCP (~20%)
+- ❌ **Требуется:** Интеграция HALv1 ↔ Supervisor, завершение API, стабилизация EventBus
+
 ### Sprint A (Недели 1–2): Supervisor v1 (ingest + query)
 1. Создать схемы БД: `metrics(time,name,tags,value)`, `facts(time,kind,actor,correlation_id,jsonb)`.
 2. Реализовать `/ingest/metric`, `/ingest/event` (батчи, ретраи, идемпотентность по `(ts,name,tags)`/`correlation_id`).
