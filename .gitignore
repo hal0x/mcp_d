@@ -55,8 +55,21 @@ halv1/
 mcp-web-ui/
 # Все servers/ теперь в основном репозитории
 
+# Планы реализации
+impl_plan/
+
+# Инфраструктура
+infra/
+
 # Данные и артефакты memory-mcp
 servers/memory-mcp/input/
 servers/memory-mcp/chats/
 servers/memory-mcp/artifacts/
 servers/memory-mcp/chroma_db/
+
+# Backup конфигурационные файлы
+config/*-backup.json
+
+# Документация и TODO
+MCP_SERVERS_COMPLIANCE_CHECKLIST.md
+QUICK_TODO.md
