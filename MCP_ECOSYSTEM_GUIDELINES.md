@@ -942,7 +942,7 @@ services:
       - "8083:8083"
     command: ["npx", "@brightdata/mcp"]
     environment:
-      - API_TOKEN=c2ea95d7c82bb1b550475e8c922904cd66c1fa4414b9b69361d34f9810198e8c
+      - API_TOKEN=${BRIGHTDATA_API_TOKEN}
     restart: unless-stopped
 
   postgres:
@@ -950,7 +950,7 @@ services:
     environment:
       - POSTGRES_DB=tradingview_scanners
       - POSTGRES_USER=tradingview
-      - POSTGRES_PASSWORD=tradingview
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/postgres/initdb.d:/docker-entrypoint-initdb.d:ro
@@ -971,7 +971,7 @@ volumes:
       "command": "npx",
       "args": ["@brightdata/mcp"],
       "env": {
-        "API_TOKEN": "c2ea95d7c82bb1b550475e8c922904cd66c1fa4414b9b69361d34f9810198e8c"
+        "API_TOKEN": "${BRIGHTDATA_API_TOKEN}"
       }
     },
     "tradingview-mcp": {

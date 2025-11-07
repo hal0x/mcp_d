@@ -1,7 +1,7 @@
 telegram:
   bot_token: "${TELEGRAM_BOT_TOKEN}"
-  summary_chat_id: 134432210
-  goal_chat_id: 134432210
+  summary_chat_id: "${TELEGRAM_SUMMARY_CHAT_ID}"
+  goal_chat_id: "${TELEGRAM_GOAL_CHAT_ID}"
 llm:
   provider: "ollama"  # options: lmstudio | ollama
   model: "gemma3n:e4b-it-q8_0"  # Основная модель с высокой точностью
@@ -106,7 +106,7 @@ internet:
     args:
       - "@brightdata/mcp"
     env:
-      API_TOKEN: "c2ea95d7c82bb1b550475e8c922904cd66c1fa4414b9b69361d34f9810198e8c"
+      API_TOKEN: "${BRIGHTDATA_API_TOKEN}"
     engine: "google"
 context:
   max_messages: 100

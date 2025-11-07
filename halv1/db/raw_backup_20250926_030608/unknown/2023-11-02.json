@@ -1,1 +1,0 @@
-{"id": 194654, "text": "def isEmpty: Boolean = Generic[LotOrder].to(this).toList[Option[PgOrder]].flatten.isEmpty", "date": "2023-11-02T07:56:24+00:00", "chat": "unknown"}

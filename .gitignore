@@ -65,6 +65,28 @@ servers/memory-mcp/input/
 servers/memory-mcp/chats/
 servers/memory-mcp/artifacts/
 servers/memory-mcp/chroma_db/
+servers/memory-mcp/wheels/
+
+# Бэкапы и данные halv1
+halv1/db/*
+
+# Состояние приложения и чувствительные данные
+halv1/bot_state.json
+halv1/allowed_chats.txt
+halv1/downloaded_chats.txt
+*.session
+*.session-journal
+
+# Бинарные файлы и wheels
+*.whl
+
+# Coverage файлы
+.coverage
+coverage.xml
+*.coverage
+
+# История анализа качества
+servers/memory-mcp/config/quality_analysis_history/
 
 # Backup конфигурационные файлы
 config/*-backup.json

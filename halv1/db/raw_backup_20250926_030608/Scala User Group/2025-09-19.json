@@ -1,9 +1,0 @@
-{"id": 382811, "text": "", "date": "2025-09-19T14:23:08+00:00", "chat": "Scala User Group"}
-{"id": 382810, "text": "", "date": "2025-09-19T14:23:08+00:00", "chat": "Scala User Group"}
-{"id": 382809, "text": "", "date": "2025-09-19T14:23:08+00:00", "chat": "Scala User Group"}
-{"id": 382808, "text": "", "date": "2025-09-19T14:23:08+00:00", "chat": "Scala User Group"}
-{"id": 382807, "text": "", "date": "2025-09-19T14:23:08+00:00", "chat": "Scala User Group"}
-{"id": 382806, "text": "", "date": "2025-09-19T14:23:08+00:00", "chat": "Scala User Group"}
-{"id": 382805, "text": "", "date": "2025-09-19T14:23:08+00:00", "chat": "Scala User Group"}
-{"id": 382804, "text": "", "date": "2025-09-19T14:23:08+00:00", "chat": "Scala User Group"}
-{"id": 382803, "text": "Мы сделали интеграцию **scalamock classic** и **ZIO Test**: проверили её на своей кодовой базе (написали 400+ тестов) и законтрибьютили в open source. Теперь она официально доступна в scalamock 7.5.0! 🎉\n\nЗачем мы это сделали, какие проблемы решили и как именно работает новая интеграция — смотрите на карточках.\n\n**Ссылки:**\n🔵[Релиз](https://github.com/scalamock/scalamock/releases/tag/v7.5.0)\n🔵[Документация](https://scalamock.org/classic/zio-test/)\n🔵Реализация проверки эффектов: [CheckEffectInvocationMacros](https://github.com/scalamock/scalamock/blob/7ac04aca475783ebdcb082dfd9af68c9db1d4d4b/zio/shared/src/main/scala-3/org/scalamock/clazz/ziotest/macros/CheckEffectInvocationMacros.scala)\n\n💬 __@scala_verticals__\n📹__ __[__@Yandex_Verticals__](https://www.youtube.com/@Yandex_Verticals)", "date": "2025-09-19T14:23:08+00:00", "chat": "Scala User Group"}

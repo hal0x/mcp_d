@@ -1,1 +1,0 @@
-{"id": 228046, "text": "val offsetsSorted = chunk.flatten.sortBy(_.offset)\nval offsets =\n  offsetsSorted\n    .sliding(2, 1)\n    .collectFirst { case Chunk(first, second, _*) if first.offset + 1 < second.offset => }", "date": "2024-05-03T11:02:38+00:00", "chat": "unknown"}

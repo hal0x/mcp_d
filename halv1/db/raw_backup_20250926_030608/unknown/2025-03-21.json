@@ -1,2 +1,0 @@
-{"id": 278721, "text": "115+100", "date": "2025-03-21T16:04:41+00:00", "chat": "unknown"}
-{"id": 278672, "text": "при этом такой тест падает, что оч странно \n```\ntest(\"PublicationLock should correctly extract expire and hash\") {\n  val lock = PublicationLock(expire, hash)\n  lock.expire shouldBe expire\n  lock.hash shouldBe hash\n}```", "date": "2025-03-21T08:00:21+00:00", "chat": "unknown"}

@@ -1,1 +1,0 @@
-{"id": 192436, "text": "Кстати, в этой версии можно использовать [ZLayer.derive](https://zio.dev/reference/contextual/automatic-zlayer-derivation/) для автовывода лейеров, например, так: https://a.yandex-team.ru/review/4683828/files/1", "date": "2023-10-17T07:03:07+00:00", "chat": "unknown"}
