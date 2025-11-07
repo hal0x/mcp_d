@@ -80,5 +80,5 @@ python -m pytest tests/integration/test_docker_integration.py::TestDockerIntegra
 ## 🔗 Связанные файлы
 
 - [Основной README тестов](../README.md)
-- [Документация проекта](../../docs/README.md)
+- [Индекс документации](../../docs/INDEX.md)
 - [Скрипт-обертка](../../run_integration_tests.py)

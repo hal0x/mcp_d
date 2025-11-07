@@ -25,7 +25,7 @@ from agent.modules.context_aware_base import ContextAwareEventsModule, ContextAw
 from bot.telegram_bot import TelegramBot
 from events.models import Event, MessageReceived, ReplyReady
 from executor import CodeGenerator, create_executor
-from finance.finrl_agent import AnalysisResult, FinRLAgent
+# finance module removed - not used
 from index.cluster_manager import ClusterManager
 from index.insight_store import InsightStore
 from index.raw_storage import RawStorage, _sanitize_component
@@ -665,13 +665,13 @@ async def main() -> None:
             logger.exception("Failed to remove chat from theme")
             return False
 
-    async def run_finance_analysis(tickers: List[str]) -> AnalysisResult:
-        # Финансовый анализ отключен
-        return AnalysisResult(
-            report_markdown="Финансовый анализ отключен для фокуса на загрузке Telegram чатов",
-            recommendations=[],
-            risk_score=0.0
-        )
+    # Финансовый анализ отключен (модуль finance удален)
+    async def run_finance_analysis(tickers: List[str]):
+        return {
+            "report_markdown": "Финансовый анализ отключен для фокуса на загрузке Telegram чатов",
+            "recommendations": [],
+            "risk_score": 0.0
+        }
 
     logger.info("✅ [HELPERS] Вспомогательные функции настроены")
 

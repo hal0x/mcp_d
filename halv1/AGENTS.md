@@ -45,8 +45,14 @@ halv1/
 ├── docs/                 # Документация
 │   ├── INDEX.md          # Главный указатель
 │   ├── ARCHITECTURE.md   # Архитектура системы
-│   ├── TESTING.md        # Тестирование
-│   └── IMPROVEMENT_PLAN.md # План улучшений
+│   ├── IMPROVEMENT_PLAN.md # План улучшений
+│   ├── UX_DESIGN.md      # UX дизайн
+│   ├── memory/           # Документация по памяти
+│   │   ├── MCP_INTEGRATION.md
+│   │   ├── MEMORY_MIGRATION_PLAN.md
+│   │   └── MEMORY2_Typed_Graph_Memory.md
+│   └── done/             # Завершенные документы
+│       └── INTERACTIVE_TRADING_ALERTS.md
 └── tests/                # Тесты
     ├── test_planner/     # Тесты планировщика
     ├── test_core/        # Тесты ядра
@@ -230,7 +236,7 @@ python main.py
 python quick_start.py
 
 # Тестирование бота
-python test_bot_quick.py
+python tests/integration/test_bot_quick.py
 ```
 
 ### Docker Compose развертывание

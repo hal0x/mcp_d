@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 # Добавляем путь к halv1 в sys.path
-halv1_path = Path(__file__).parent.parent / "halv1"
+halv1_path = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(halv1_path))
 
 from bot.trading_alert_handler import TradingAlertHandler

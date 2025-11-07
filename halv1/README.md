@@ -86,8 +86,8 @@ python -m pytest tests/test_integration_full.py -v
 
 - [INDEX.md](docs/INDEX.md) — обзор, быстрый старт, оглавление
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — компоненты и потоки данных
-- [TESTING.md](docs/TESTING.md) — статусы тестов, диагностика
 - [IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md) — дорожная карта и сводка исправлений
+- [memory/MCP_INTEGRATION.md](docs/memory/MCP_INTEGRATION.md) — интеграция с Memory MCP
 
 ## 🔧 Конфигурация
 

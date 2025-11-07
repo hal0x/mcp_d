@@ -22,7 +22,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
-from finance.finrl_agent import AnalysisResult
+# finance module removed - not used
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Type stub for removed finance module
+    class AnalysisResult:
+        pass
 from retriever.retriever import Retriever
 from services.event_bus import AsyncEventBus
 

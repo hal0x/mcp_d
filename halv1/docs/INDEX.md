@@ -1,9 +1,25 @@
-## MCP Сервер интеграция
-- **MCPMemoryAdapter** - адаптер для интеграции MCP сервера с системой памяти
-- **Расширенный MCP сервер** - версия с дополнительными инструментами для замены модуля памяти
-- **Полная совместимость** с интерфейсом MemoryServiceAdapter
-- **Тесты интеграции** - проверка совместимости с существующими компонентами
-- Подробности в [MCP_INTEGRATION.md](MCP_INTEGRATION.md)
+## MCP Экосистема интеграция
+
+HALv1 является частью экосистемы MCP (Model Context Protocol) и интегрируется с различными MCP серверами:
+
+### Интегрированные MCP серверы
+- **Memory MCP** - система памяти и поиска (замена локального модуля памяти)
+- **TradingView MCP** - анализ криптовалютного рынка
+- **Binance MCP** - исполнение торговых операций
+- **Backtesting MCP** - тестирование торговых стратегий
+- **Shell MCP** - выполнение кода в изолированной среде
+- **Supervisor MCP** - мониторинг и управление MCP серверами
+- **Learning MCP** - система обучения и адаптации
+- **Policy MCP** - политики и профили безопасности
+- **Orchestrator MCP** - координация задач между MCP серверами
+
+### Архитектура интеграции
+- **MCPMemoryAdapter** - адаптер для интеграции Memory MCP с системой памяти HALv1
+- **MCP Integration Layer** - унифицированный слой для взаимодействия с MCP серверами
+- **Event Bus** - централизованная система событий для координации компонентов
+- **Supervisor MCP** - единый реестр и наблюдатель за всеми MCP серверами
+
+Подробности в [memory/MCP_INTEGRATION.md](memory/MCP_INTEGRATION.md) и [MCP_ECOSYSTEM_GUIDELINES.md](../../MCP_ECOSYSTEM_GUIDELINES.md)
 
 ## Единые шаблоны промптов
 - Все ключевые промпты централизованы в `llm/prompts.py`:
@@ -21,15 +37,25 @@
 - [security/policy_engine.py](../security/policy_engine.py) — правила безопасности
 
 ## Полный указатель документации
-- Индекс: [INDEX.md](INDEX.md)
-- Архитектура: [ARCHITECTURE.md](ARCHITECTURE.md)
-- Стратегия оптимизации и памяти: [OPTIMIZATION_AND_MEMORY_STRATEGY.md](OPTIMIZATION_AND_MEMORY_STRATEGY.md)
-- План улучшений (приоритеты): [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md)
-- Типизированная граф-память: [MEMORY2_Typed_Graph_Memory.md](MEMORY2_Typed_Graph_Memory.md)
-- Система метрик: [METRICS_IMPLEMENTATION.md](METRICS_IMPLEMENTATION.md)
-- MCP интеграция: [MCP_INTEGRATION.md](MCP_INTEGRATION.md)
-- Тестирование: [TESTING.md](TESTING.md)
-- Политика для агентов: [../AGENTS.md](../AGENTS.md)
+
+### Основные документы
+- **Индекс**: [INDEX.md](INDEX.md) - этот файл
+- **Архитектура**: [ARCHITECTURE.md](ARCHITECTURE.md) - архитектура системы и компонентов
+- **План улучшений**: [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) - приоритеты и roadmap развития
+- **Политика разработки**: [../AGENTS.md](../AGENTS.md) - стандарты и принципы разработки
+
+### Специализированные документы
+- **MCP интеграция**: [memory/MCP_INTEGRATION.md](memory/MCP_INTEGRATION.md) - интеграция с MCP серверами
+- **Типизированная граф-память**: [memory/MEMORY2_Typed_Graph_Memory.md](memory/MEMORY2_Typed_Graph_Memory.md) - архитектура памяти
+- **План миграции памяти**: [memory/MEMORY_MIGRATION_PLAN.md](memory/MEMORY_MIGRATION_PLAN.md) - план миграции с MemoryStore
+- **UX дизайн**: [UX_DESIGN.md](UX_DESIGN.md) - пользовательский опыт
+
+### Архивные документы
+- **Интерактивные торговые алерты**: [done/INTERACTIVE_TRADING_ALERTS.md](done/INTERACTIVE_TRADING_ALERTS.md) - завершенная функциональность
+
+### Внешние документы
+- **MCP Ecosystem Guidelines**: [../../MCP_ECOSYSTEM_GUIDELINES.md](../../MCP_ECOSYSTEM_GUIDELINES.md) - общие стандарты MCP экосистемы
+- **План развития HAL**: [../../impl_plan/hal_ai_agent_plan.md](../../impl_plan/hal_ai_agent_plan.md) - долгосрочный план развития агента
 
 ## Исполнение кода
 - По умолчанию используется Docker executor (`executor.provider: "docker"`).

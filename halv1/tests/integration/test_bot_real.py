@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Быстрый тест для проверки работы бота.
+Реальный тест для проверки работы бота с исправленным LLM.
 
-Этот скрипт можно запустить для быстрой проверки основных функций бота.
+Этот скрипт тестирует систему с правильной настройкой LLM клиента.
 """
 
 import asyncio
@@ -12,8 +12,8 @@ from pathlib import Path
 import sys
 import os
 
-# Добавляем корневую директорию в путь
-sys.path.insert(0, str(Path(__file__).parent))
+# Добавляем корневую директорию halv1 в путь
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from agent.core import AgentCore
 from events.models import MessageReceived, ReplyReady
@@ -32,8 +32,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class QuickBotTest:
-    """Быстрый тест бота."""
+class RealBotTest:
+    """Реальный тест бота с исправленным LLM."""
 
     def __init__(self):
         self.bus = AsyncEventBus()
@@ -43,15 +43,22 @@ class QuickBotTest:
 
     async def setup(self):
         """Настройка для тестирования."""
-        logger.info("🔧 Настраиваем тестовую среду...")
+        logger.info("🔧 Настраиваем реальную тестовую среду...")
         
-        # Настройка LLM клиента
-        llm_client = create_llm_client("ollama", {"model": "gemma3n:e4b-it-q8_0"}, {})
+        # Настройка LLM клиента с правильными параметрами
+        llm_config = {
+            "provider": "ollama",
+            "model": "gemma3n:e4b-it-q8_0",
+            "host": "localhost",
+            "port": 11434
+        }
+        
+        llm_client = create_llm_client("ollama", llm_config, {})
         
         # Настройка памяти агента
         self.agent_memory = MemoryServiceAdapter(
             path=":memory:",
-            embeddings_client=None,
+            embeddings_client=None,  # Отключаем embeddings для простоты
             short_term_limit=100,
             llm_client=llm_client,
         )
@@ -83,7 +90,7 @@ class QuickBotTest:
         
         self.bus.subscribe("reply_ready", collect_reply)
         
-        logger.info("✅ Тестовая среда настроена")
+        logger.info("✅ Реальная тестовая среда настроена")
 
     async def send_message(self, text: str, chat_id: int = 12345) -> list:
         """Отправляет сообщение и возвращает ответы."""
@@ -102,14 +109,13 @@ class QuickBotTest:
         logger.info(f"📥 Получено ответов: {len(self.replies)}")
         return self.replies.copy()
 
-    async def test_queries(self):
-        """Тестирует различные запросы."""
+    async def test_simple_queries(self):
+        """Тестирует простые запросы."""
         test_queries = [
             "Привет!",
             "Как дела?",
             "Что ты умеешь?",
-            "Расскажи о себе",
-            "Помоги мне с задачей"
+            "Расскажи о себе"
         ]
         
         for query in test_queries:
@@ -127,6 +133,39 @@ class QuickBotTest:
             # Небольшая пауза между запросами
             await asyncio.sleep(1)
 
+    async def test_memory_queries(self):
+        """Тестирует запросы с использованием памяти."""
+        logger.info(f"\n{'='*50}")
+        logger.info("🧪 Тестируем запросы с памятью")
+        
+        # Добавляем информацию в память
+        await self.agent_memory.remember("Меня зовут Тест-Бот")
+        await self.agent_memory.remember("Я умею отвечать на вопросы")
+        await self.agent_memory.remember("Сегодня хорошая погода")
+        
+        # Проверяем, что информация сохранилась
+        memory_content = self.agent_memory.recall()
+        logger.info(f"📚 Содержимое памяти: {memory_content}")
+        
+        # Тестируем запросы, которые должны использовать память
+        memory_queries = [
+            "Как меня зовут?",
+            "Что ты умеешь?",
+            "Какая сегодня погода?"
+        ]
+        
+        for query in memory_queries:
+            logger.info(f"\n📤 Тестируем запрос с памятью: '{query}'")
+            replies = await self.send_message(query)
+            
+            if replies:
+                for i, reply in enumerate(replies):
+                    logger.info(f"📝 Ответ {i+1}: {reply.reply}")
+            else:
+                logger.warning("⚠️ Ответ не получен")
+            
+            await asyncio.sleep(1)
+
     async def cleanup(self):
         """Очистка."""
         if self.agent_memory:
@@ -136,7 +175,7 @@ class QuickBotTest:
 
 async def main():
     """Главная функция."""
-    logger.info("🚀 Запуск быстрого теста бота")
+    logger.info("🚀 Запуск реального теста бота")
     
     # Проверяем, что мы в правильной директории
     if not Path("main.py").exists():
@@ -152,13 +191,14 @@ async def main():
     except Exception as e:
         logger.warning(f"⚠️ Не удалось проверить Ollama: {e}")
     
-    bot = QuickBotTest()
+    bot = RealBotTest()
     
     try:
         await bot.setup()
-        await bot.test_queries()
+        await bot.test_simple_queries()
+        await bot.test_memory_queries()
         
-        logger.info("\n🎉 Тест завершен успешно!")
+        logger.info("\n🎉 Реальный тест завершен успешно!")
         
     except Exception as e:
         logger.error(f"❌ Ошибка во время теста: {e}")

@@ -134,10 +134,10 @@ await broadcast_executor.broadcast_trade_signal(alert_payload)
 ```bash
 # Упрощенный тест без зависимостей
 cd halv1
-python test_interactive_alerts_simple.py
+python tests/integration/test_interactive_alerts_simple.py
 
 # Полный тест (требует python-telegram-bot)
-python test_interactive_alerts.py
+python tests/integration/test_interactive_alerts.py
 ```
 
 ### Результаты тестирования
