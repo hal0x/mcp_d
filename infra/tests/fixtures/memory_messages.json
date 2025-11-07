@@ -1,0 +1,23 @@
+[
+  {
+    "chat_id": "test_chat_001",
+    "message_id": "msg_001",
+    "text": "Bitcoin достиг новых высот сегодня",
+    "timestamp": "2025-10-22T10:00:00Z",
+    "user_id": "user_001"
+  },
+  {
+    "chat_id": "test_chat_001",
+    "message_id": "msg_002",
+    "text": "Ethereum показывает хорошую динамику",
+    "timestamp": "2025-10-22T10:05:00Z",
+    "user_id": "user_002"
+  },
+  {
+    "chat_id": "test_chat_002",
+    "message_id": "msg_003",
+    "text": "Анализ рынка криптовалют",
+    "timestamp": "2025-10-22T10:10:00Z",
+    "user_id": "user_001"
+  }
+]

@@ -1,0 +1,32 @@
+[
+  {
+    "symbol": "BTCUSDT",
+    "openTime": 1698000000000,
+    "open": "35000.00",
+    "high": "36000.00",
+    "low": "34000.00",
+    "close": "35500.00",
+    "volume": "100.5",
+    "closeTime": 1698003599999,
+    "quoteAssetVolume": "3550000.00",
+    "numberOfTrades": 1500,
+    "takerBuyBaseAssetVolume": "50.25",
+    "takerBuyQuoteAssetVolume": "1775000.00",
+    "ignore": "0"
+  },
+  {
+    "symbol": "ETHUSDT",
+    "openTime": 1698000000000,
+    "open": "2000.00",
+    "high": "2100.00",
+    "low": "1950.00",
+    "close": "2050.00",
+    "volume": "500.0",
+    "closeTime": 1698003599999,
+    "quoteAssetVolume": "1025000.00",
+    "numberOfTrades": 2000,
+    "takerBuyBaseAssetVolume": "250.0",
+    "takerBuyQuoteAssetVolume": "512500.00",
+    "ignore": "0"
+  }
+]

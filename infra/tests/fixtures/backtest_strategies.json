@@ -1,0 +1,34 @@
+[
+  {
+    "name": "simple_ma_crossover",
+    "description": "Simple Moving Average crossover strategy",
+    "parameters": {
+      "short_period": 10,
+      "long_period": 20,
+      "symbol": "BTCUSDT",
+      "interval": "1h"
+    }
+  },
+  {
+    "name": "rsi_strategy",
+    "description": "RSI-based trading strategy",
+    "parameters": {
+      "rsi_period": 14,
+      "oversold": 30,
+      "overbought": 70,
+      "symbol": "ETHUSDT",
+      "interval": "4h"
+    }
+  },
+  {
+    "name": "macd_strategy",
+    "description": "MACD signal strategy",
+    "parameters": {
+      "fast_period": 12,
+      "slow_period": 26,
+      "signal_period": 9,
+      "symbol": "BNBUSDT",
+      "interval": "1h"
+    }
+  }
+]

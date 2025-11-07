@@ -1,0 +1,19 @@
+[project]
+name = "__CLI__"
+version = "0.1.0"
+description = "__APP_NAME__ (MCP server)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp[fast]>=1.12.0",
+  "pydantic>=2.6.0",
+  "pydantic-settings>=2.4.0",
+]
+
+[project.scripts]
+__CLI__ = "__PKG__.server:main"
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+

@@ -1,0 +1,504 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tradingview_scanners
+      POSTGRES_USER: tradingview
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradingview}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/initdb.d:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tradingview}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Базовый образ для всех MCP сервисов
+  mcp-base:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.base
+    image: mcp-base:latest
+    profiles: ["build-only"]  # Этот сервис только для сборки базового образа
+
+  binance-mcp:
+    build:
+      context: ../servers/binance-mcp
+      dockerfile: Dockerfile  # Используем основной Dockerfile
+    image: binance-mcp:latest
+    restart: unless-stopped
+    working_dir: /app
+    env_file:
+      - ../servers/binance-mcp/.env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_ENABLED: "true"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: tradingview_scanners
+      POSTGRES_USER: tradingview
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradingview}
+      HOST: 0.0.0.0
+      PORT: 8000
+      BINANCE_MCP_HOST: 0.0.0.0
+      BINANCE_MCP_PORT: 8000
+      DEFAULT_TRANSPORT: stdio
+      LOG_LEVEL: INFO
+      # Risk Management настройки
+      RISK_PER_TRADE_PCT: "1.0"
+      TAKER_FEE_PCT: "0.04"
+      SLIPPAGE_PCT: "0.02"
+      DAILY_LOSS_CAP_PCT: "6.0"
+      MAX_CONSECUTIVE_LOSSES: "3"
+      TP_RR_MIN: "1.0"
+      TP_ATR_MULTIPLE: "1.5"
+      # Redis кэш
+      REDIS_CACHE_TTL: "30"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8000), 3).close()'"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  tradingview-mcp:
+    build:
+      context: ../servers/tradingview-mcp
+      dockerfile: Dockerfile  # Используем основной Dockerfile
+    image: tradingview-mcp:latest
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      PYTHONUNBUFFERED: "1"
+      HOST: 0.0.0.0
+      PORT: 8000
+      DEFAULT_TRANSPORT: streamable-http
+      TRADINGVIEW_MCP_DEFAULT_TRANSPORT: streamable-http
+      TRANSPORT: streamable-http
+      # FastMCP environment variables
+      MCP_SERVER_NAME: tradingview-mcp
+      LOG_LEVEL: ${TRADINGVIEW_LOG_LEVEL:-INFO}
+      TRADINGVIEW_REDIS_HOST: redis
+      TRADINGVIEW_REDIS_PORT: 6379
+      TRADINGVIEW_REDIS_DB: 0
+      TRADINGVIEW_POSTGRES_HOST: postgres
+      TRADINGVIEW_POSTGRES_PORT: 5432
+      TRADINGVIEW_POSTGRES_DATABASE: tradingview_scanners
+      TRADINGVIEW_POSTGRES_USER: tradingview
+      TRADINGVIEW_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tradingview}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      binance-mcp:
+        condition: service_healthy
+      # memory-mcp:
+      #   condition: service_healthy
+    ports:
+      - "8060:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8000), 3).close()'"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  shell-mcp:
+    build:
+      context: ../servers/shell-mcp
+      dockerfile: Dockerfile
+    image: shell-mcp:latest
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - ./scripts:/scripts
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      PYTHONUNBUFFERED: "1"
+      HOST: 0.0.0.0
+      PORT: 8070
+      DEFAULT_TRANSPORT: stdio
+      SHELL_MCP_SAVED_SCRIPTS_DIR: /scripts
+      SHELL_MCP_MAX_CONCURRENCY: ${SHELL_MCP_MAX_CONCURRENCY:-3}
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8070:8070"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'shell-mcp' > /dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  memory-mcp:
+    build:
+      context: servers/memory-mcp
+      dockerfile: Dockerfile.new  # Используем оптимизированный Dockerfile с базовым образом
+    image: memory-mcp:latest
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      PYTHONUNBUFFERED: "1"
+      TG_DUMP_HOST: 0.0.0.0
+      TG_DUMP_PORT: 8050
+      TG_DUMP_TRANSPORT: streamable-http
+      MEMORY_DB_PATH: /data/memory_graph.db
+    volumes:
+      - memory-data:/data
+      - memory-chroma:/app/chroma_db
+      - memory-chats:/app/chats
+    ports:
+      - "8050:8050"
+    depends_on:
+      redis:
+        condition: service_healthy
+    # healthcheck:
+    #   test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8050), 3).close()'"]
+    #   interval: 30s
+    #   timeout: 5s
+    #   retries: 5
+    #   start_period: 30s
+
+  memory-postgres:
+    profiles: ["memory-full"]
+    image: pgvector/pgvector:0.7.3-pg16
+    container_name: memory-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: memory
+      POSTGRES_PASSWORD: ${MEMORY_POSTGRES_PASSWORD:-memory}
+      POSTGRES_DB: memory
+    volumes:
+      - memory-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memory"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  memory-qdrant:
+    profiles: ["memory-full"]
+    image: qdrant/qdrant:v1.11.1
+    container_name: memory-qdrant
+    restart: unless-stopped
+    volumes:
+      - memory-qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  memory-redis:
+    profiles: ["memory-full"]
+    image: redis:7-alpine
+    container_name: memory-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    volumes:
+      - memory-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  memory-embeddings:
+    profiles: ["memory-full"]
+    image: ghcr.io/huggingface/text-embeddings-inference:latest
+    container_name: memory-embeddings
+    restart: unless-stopped
+    environment:
+      MODEL_ID: intfloat/e5-small-v2
+    ports:
+      - "8085:80"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  memory-core:
+    profiles: ["memory-full"]
+    build:
+      context: servers/memory-mcp
+      dockerfile: Dockerfile.new  # Используем оптимизированный Dockerfile с базовым образом
+    container_name: memory-core
+    restart: unless-stopped
+    environment:
+      DB_URL: postgresql://memory:memory@memory-postgres:5432/memory
+      QDRANT_URL: http://memory-qdrant:6333
+      REDIS_URL: redis://memory-redis:6379/0
+      EMBEDDINGS_URL: http://memory-embeddings:80
+      MEMORY_DB_PATH: /data/memory_graph.db
+    depends_on:
+      memory-postgres:
+        condition: service_healthy
+      memory-qdrant:
+        condition: service_healthy
+      memory-redis:
+        condition: service_healthy
+      memory-embeddings:
+        condition: service_healthy
+    volumes:
+      - memory-graph:/data
+      - servers/memory-mcp/src:/app/src
+
+  supervisor-mcp:
+    build:
+      context: servers/supervisor-mcp
+      dockerfile: Dockerfile.new  # Используем оптимизированный Dockerfile с базовым образом
+    image: supervisor-mcp:latest
+    restart: unless-stopped
+    environment:
+      PYTHONUNBUFFERED: "1"
+      HOST: 0.0.0.0
+      PORT: 8001
+      DEFAULT_TRANSPORT: stdio
+      SUPERVISOR_DB_URL: postgresql://supervisor:supervisor@postgres:5432/supervisor
+      SUPERVISOR_REDIS_URL: redis://redis:6379/1
+      SUPERVISOR_LOG_LEVEL: ${SUPERVISOR_LOG_LEVEL:-INFO}
+      BRIGHT_DATA_MCP_URL: http://bright-data-mcp:8083
+      BRIGHT_DATA_API_TOKEN: ${BRIGHT_DATA_API_TOKEN}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      bright-data-mcp:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8001), 3).close()'"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  bright-data-mcp:
+    image: node:18-alpine
+    container_name: mcp-bright-data-mcp-1
+    restart: unless-stopped
+    working_dir: /app
+    command: ["npx", "-y", "@brightdata/mcp"]
+    environment:
+      - API_TOKEN=${BRIGHT_DATA_API_TOKEN}
+      - PORT=8083
+      - NODE_ENV=production
+    ports:
+      - "8083:8083"
+    networks:
+      - default
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8083/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  learning-mcp:
+    build:
+      context: servers/learning-mcp
+      dockerfile: Dockerfile.new  # Используем оптимизированный Dockerfile с базовым образом
+    image: learning-mcp:latest
+    restart: unless-stopped
+    environment:
+      PYTHONUNBUFFERED: "1"
+      HOST: 0.0.0.0
+      PORT: 8003
+      DEFAULT_TRANSPORT: stdio
+      LEARNING_SUPERVISOR_URL: http://supervisor-mcp:8001
+      LEARNING_POLICY_URL: http://policy-mcp:8004
+      LEARNING_LOG_LEVEL: ${LEARNING_LOG_LEVEL:-INFO}
+    depends_on:
+      supervisor-mcp:
+        condition: service_healthy
+      policy-mcp:
+        condition: service_healthy
+    ports:
+      - "8003:8003"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8003), 3).close()'"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  policy-mcp:
+    build:
+      context: ../servers/policy-mcp
+      dockerfile: Dockerfile
+    image: policy-mcp:latest
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      PYTHONUNBUFFERED: "1"
+      HOST: 0.0.0.0
+      PORT: 8004
+      DEFAULT_TRANSPORT: stdio
+      POLICY_DB_URL: postgresql+asyncpg://policy:policy@postgres:5432/policy
+      POLICY_LOG_LEVEL: ${POLICY_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8004:8004"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8004), 3).close()'"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  backtesting-mcp:
+    build:
+      context: ../servers/backtesting-mcp
+      dockerfile: Dockerfile
+    image: backtesting-mcp:latest
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      PYTHONUNBUFFERED: "1"
+      HOST: 0.0.0.0
+      PORT: 8082
+      DEFAULT_TRANSPORT: stdio
+      BACKTEST_PREFERRED_SOURCE: ${BACKTEST_PREFERRED_SOURCE:-binance}
+      BACKTEST_BINANCE_URL: http://binance-mcp:8000
+      BACKTEST_TRADINGVIEW_URL: http://tradingview-mcp:8060
+      BACKTEST_OPTUNA_DB_HOST: ${BACKTEST_OPTUNA_DB_HOST:-postgres}
+      BACKTEST_OPTUNA_DB_PORT: ${BACKTEST_OPTUNA_DB_PORT:-5432}
+      BACKTEST_OPTUNA_DB_NAME: ${BACKTEST_OPTUNA_DB_NAME:-tradingview_scanners}
+      BACKTEST_OPTUNA_DB_USER: ${BACKTEST_OPTUNA_DB_USER:-tradingview}
+      BACKTEST_OPTUNA_DB_PASSWORD: ${BACKTEST_OPTUNA_DB_PASSWORD:-tradingview}
+      BACKTEST_OPTUNA_SAMPLER: ${BACKTEST_OPTUNA_SAMPLER:-TPE}
+      BACKTEST_OPTUNA_PRUNER: ${BACKTEST_OPTUNA_PRUNER:-median}
+      BACKTEST_OPTUNA_N_JOBS: ${BACKTEST_OPTUNA_N_JOBS:-1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      binance-mcp:
+        condition: service_healthy
+      tradingview-mcp:
+        condition: service_healthy
+    ports:
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'backtesting-mcp' > /dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  halv1:
+    profiles: ["halv1"]
+    build:
+      context: ./halv1
+      dockerfile: scripts/Dockerfile
+    image: halv1:latest
+    restart: unless-stopped
+    volumes:
+      - ./halv1:/app
+      - ./halv1/db:/app/db
+      - ./halv1/venv:/app/venv
+    environment:
+      PYTHONPATH: /app
+      INDEX_NOW: ${INDEX_NOW:-0}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_SUMMARY_CHAT_ID: ${TELEGRAM_SUMMARY_CHAT_ID}
+      TELEGRAM_GOAL_CHAT_ID: ${TELEGRAM_GOAL_CHAT_ID}
+      LLM_PROVIDER: ${LLM_PROVIDER:-lmstudio}
+      LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-20b}
+      LLM_HOST: ${LLM_HOST:-127.0.0.1}
+      LLM_PORT: ${LLM_PORT:-1234}
+      LLM_API_KEY: ${LLM_API_KEY}
+      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-text-embedding-qwen3-embedding-8b}
+      EMBEDDINGS_HOST: ${EMBEDDINGS_HOST:-127.0.0.1}
+      EMBEDDINGS_PORT: ${EMBEDDINGS_PORT:-1234}
+      EMBEDDINGS_API_KEY: ${EMBEDDINGS_API_KEY}
+      TELETHON_API_ID: ${TELETHON_API_ID}
+      TELETHON_API_HASH: ${TELETHON_API_HASH}
+      TELETHON_SESSION: ${TELETHON_SESSION:-user}
+      EXECUTOR_PROVIDER: ${EXECUTOR_PROVIDER:-docker}
+      INTERNET_USER_AGENT: ${INTERNET_USER_AGENT:-halv1-bot/1.0}
+      INTERNET_MAX_RETRIES: ${INTERNET_MAX_RETRIES:-3}
+      HAL_TRADING_STORAGE_DSN: ${HAL_TRADING_STORAGE_DSN:-postgresql://mcp:mcp@postgres:5432/mcp}
+      HAL_TRADING_API_URL: ${HAL_TRADING_API_URL:-http://halv1-dashboard:8001}
+      HAL_TRADING_BINANCE_URL: ${HAL_TRADING_BINANCE_URL:-http://binance-mcp:8000}
+    ports:
+      - "18000:8000"
+    security_opt:
+      - no-new-privileges
+    cap_drop:
+      - ALL
+    read_only: false
+    tmpfs:
+      - /tmp
+      - /var/tmp
+
+  halv1-dashboard:
+    profiles: ["halv1"]
+    build:
+      context: ./halv1
+      dockerfile: scripts/Dockerfile
+    image: halv1:latest
+    restart: unless-stopped
+    command: ["uvicorn", "halv1.web.dashboard.server:app", "--host", "0.0.0.0", "--port", "8001"]
+    volumes:
+      - ./halv1:/app
+    environment:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /app
+      HAL_TRADING_STORAGE_DSN: ${HAL_TRADING_STORAGE_DSN:-postgresql://mcp:mcp@postgres:5432/mcp}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_SUMMARY_CHAT_ID: ${TELEGRAM_SUMMARY_CHAT_ID}
+      TELEGRAM_GOAL_CHAT_ID: ${TELEGRAM_GOAL_CHAT_ID}
+      HAL_TRADING_BINANCE_URL: ${HAL_TRADING_BINANCE_URL:-http://binance-mcp:8000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+
+volumes:
+  redis-data:
+  postgres-data:
+  memory-data:
+  memory-chroma:
+  memory-chats:
+  memory-postgres-data:
+  memory-qdrant-data:
+  memory-redis-data:
+  memory-graph:

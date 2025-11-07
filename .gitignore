@@ -57,8 +57,11 @@ mcp-web-ui/
 # Планы реализации
 impl_plan/
 
-# Инфраструктура
-infra/
+# Инфраструктура - исключить только артефакты
+infra/wheels/
+infra/tests/integration/.pytest_cache/
+infra/tests/integration/results/*.json
+!infra/tests/integration/results/.gitkeep
 
 # Данные и артефакты memory-mcp
 servers/memory-mcp/input/

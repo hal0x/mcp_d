@@ -1,0 +1,34 @@
+version: '3.8'
+
+# Использует все сервисы из основного compose
+# Добавляет тестовый раннер
+services:
+  integration-tests:
+    build:
+      context: ./tests/integration
+      dockerfile: Dockerfile
+    depends_on:
+      binance-mcp:
+        condition: service_healthy
+      tradingview-mcp:
+        condition: service_healthy
+      memory-mcp:
+        condition: service_healthy
+      shell-mcp:
+        condition: service_healthy
+      backtesting-mcp:
+        condition: service_healthy
+    environment:
+      BINANCE_MCP_URL: http://binance-mcp:8000
+      TRADINGVIEW_MCP_URL: http://tradingview-mcp:8060
+      MEMORY_MCP_URL: http://memory-mcp:8050
+      SHELL_MCP_URL: http://shell-mcp:8070
+      BACKTESTING_MCP_URL: http://backtesting-mcp:8082
+      REDIS_URL: redis://redis:6379
+      POSTGRES_URL: postgresql://tradingview:tradingview@postgres:5432/tradingview_scanners
+    networks:
+      - default
+    volumes:
+      - ./tests/integration:/tests
+      - ./tests/fixtures:/fixtures:ro
+    command: ["pytest", "/tests", "-v", "--tb=short", "--junitxml=/tests/results/results.xml"]
