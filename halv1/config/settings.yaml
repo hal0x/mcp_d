@@ -1,0 +1,156 @@
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  summary_chat_id: 134432210
+  goal_chat_id: 134432210
+llm:
+  provider: "ollama"  # options: lmstudio | ollama
+  model: "gemma3n:e4b-it-q8_0"  # Основная модель с высокой точностью
+  host: "127.0.0.1"  # endpoint: http://127.0.0.1:11434/api/chat
+  port: 11434
+  api_key: "${LLM_API_KEY}"  # usually not required for LM Studio
+  temperature: 0.1
+  top_p: 0.8
+  seed: 42
+  json_mode: true
+  # Safer, stricter output contract and context controls
+  stop: ["```", "INCOMPLETE", "COMPLETE"]
+  # max_tokens: 512  # Убрано ограничение для лучшей генерации
+  # Максимальный контекст для gemma3n:e4b-it-q8_0
+  num_ctx: 32000  # 32k токенов - максимальное окно для gemma3n
+  num_keep: 256   # Уменьшено для экономии памяти
+  # Limit concurrent requests to reduce stream/channel errors
+  max_concurrency: 1
+  # Ollama-specific optimizations
+  keep_alive: "300s"   # Keep model warm for 5 minutes (в секундах)
+  num_batch: 512     # Standard batch size for stability
+embeddings:
+  model: "dengcao/Qwen3-Embedding-4B:Q5_K_M"  # Специализированная модель для эмбеддингов
+  host: "127.0.0.1"  # endpoint: http://127.0.0.1:11434/v1/embeddings
+  port: 11434
+  api_key: "${EMBEDDINGS_API_KEY}"
+  # Максимальный контекст для Qwen3-Embedding-4B
+  num_ctx: 32000  # 32k токенов - максимальное окно для эмбеддингов
+  # Оптимизированные настройки для больших контекстов
+  num_batch: 1024  # Увеличено для обработки больших чанков
+  keep_alive: "600s"  # 10 минут для стабильности
+telethon:
+  api_id: "${TELETHON_API_ID}"
+  api_hash: "${TELETHON_API_HASH}"
+  session: "user"
+summary:
+  user_name: "@hal0x"
+  timezone: "Asia/Bangkok"
+memory:
+  long_term_path: "db/memory/long_term.json"
+profile:
+  path: "~/.hal_assistant/profile.json"
+paths:
+  raw: "db/raw"
+  index: "db/index/index.json"
+  venv: "venv"
+  agent_memory: "db/agent_memory.json"
+scheduler:
+  summary_interval_seconds: 3600
+  cluster_summarise_interval_seconds: 3600
+  cluster_decay_interval_seconds: 3600
+  cluster_decay_half_life_seconds: 86400
+  cluster_recluster_interval_seconds: 3600
+  initial_backup_delay_seconds: 3600
+executor:
+  provider: "shell-mcp"  # options: docker | local | mcp | shell-mcp
+  artifact_ttl: 3600  # seconds to keep cached artifacts
+  # execution limits and defaults
+  max_wall_time_s: 300
+  max_mem_mb: 2048
+  cpu_quota: 1.0
+  network_mode: host
+  artifacts_path: "runs/mcp-artifacts"  # локальная директория для выгруженных файлов shell-mcp
+  cleanup_artifacts: false  # удалять ли артефакты после чтения (оставляем для отладки)
+  # Shell MCP server defaults rely on SHELL_MCP_* environment variables
+  # Docker-specific policies
+  docker:
+    image: "python:3.11-slim"
+    runtime: "docker"
+    # Security settings
+    cap_drop: "ALL"
+    seccomp_profile: "security/seccomp_profile.json"
+    apparmor_profile: "security/apparmor_profile"
+    # Resource limits
+    memory_limit: "128m"
+    cpu_limit: "0.5"
+    pids_limit: 32
+    # Network settings
+    dns: ["8.8.8.8", "1.1.1.1"]
+    # User settings
+    user: "65534:65534"  # nobody user
+    userns: "keep-id"
+  mcp:
+    transport: "stdio"  # stdio | sse
+    command: "deno"
+    args:
+      - "run"
+      - "-N"
+      - "-R=node_modules"
+      - "-W=node_modules"
+      - "--node-modules-dir=auto"
+      - "jsr:@pydantic/mcp-run-python"
+      - "stdio"
+    session_timeout: 120
+    call_timeout: 120
+    extra_arguments: {}
+internet:
+  user_agent: "halv1-bot/1.0"
+  max_retries: 3
+  mcp:
+    command: "npx"
+    args:
+      - "@brightdata/mcp"
+    env:
+      API_TOKEN: "c2ea95d7c82bb1b550475e8c922904cd66c1fa4414b9b69361d34f9810198e8c"
+    engine: "google"
+context:
+  max_messages: 100
+  per_chat_max: 40
+  recency_half_life_hours: 24
+  weights:
+    semantic: 0.6
+    recency: 0.25
+    authority: 0.15
+  max_chars: 24000  # Увеличено для использования больших чанков (32k токенов ≈ 24k символов)
+  summary_max_lines: 30
+  # Настройки для больших контекстов эмбеддингов
+  max_chunk_tokens: 4000  # Увеличено с 200 до 4000 для лучшего качества эмбеддингов
+  max_embedding_chars: 32000  # Максимальное количество символов для одного эмбеддинга
+dashboard:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8080
+supervisor:
+  enabled: true
+  url: "http://localhost:8001"
+  timeout: 5.0
+  batch_size: 10
+  send_metrics: true
+  send_facts: true
+  # Метрики для отправки
+  metrics:
+    - "execution_duration_ms"
+    - "execution_success_rate"
+    - "execution_error_count"
+    - "planning_duration_ms"
+    - "memory_usage_mb"
+    - "queue_depth"
+  # Факты для отправки
+  facts:
+    - "Fact:Plan"
+    - "Fact:Execution"
+    - "Fact:Decision"
+    - "Fact:Error"
+
+metrics:
+  enabled: true
+  noop: false   # true включит заглушки (без зависимостей)
+
+agent:
+  # Inject artificial replan error events ("boom") for debugging/testing only
+  debug_replan_boom: false

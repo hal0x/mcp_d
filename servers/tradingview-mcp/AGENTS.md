@@ -146,6 +146,90 @@ pro_scanners/
 - Асинхронная отправка с retry логикой
 - Callback система для обработки результатов
 
+## Контекст выполнения и потоки данных
+
+```
+MCP Tool Call
+    |
+    v
+TradingView MCP Server (FastMCP)
+    |
+    |---> Validation & routing (server.py)
+    |        |
+    |        v
+    |    CacheService (Redis -> in-memory fallback)
+    |        |
+    |        +--> Cache hit -> response
+    |        |
+    |        +--> Cache miss
+    |                |
+    |                v
+    |        RateLimiter (token bucket + jitter)
+    |                |
+    |                v
+    |        TradingView APIs (tradingview_ta, tradingview_screener)
+    |
+    +---> Pro Scanner Service
+             |
+             +--> Binance MCP (market + derivatives data)
+             +--> Redis (signal cache)
+             +--> PostgreSQL (signal storage)
+             +--> HALv1 alerts / Memory MCP bridge
+```
+
+## Инфраструктурные зависимости
+
+| Компонент | Назначение | Поведение при отказе |
+|-----------|------------|----------------------|
+| TradingView API (`tradingview_ta`, `tradingview_screener`) | Источник технических показателей и скринеров | Инструменты возвращают пустые результаты; фиксируется метрика `tradingview.error_rate`, включается кэширование пустых ответов на 60 секунд |
+| Redis (`TRADINGVIEW_MCP_REDIS_URL`) | L0-кэш для результатов сканеров, TTL 60/300 секунд | Автоматический fallback на in-memory кэш, Supervisor фиксирует `Fact:TradingViewDependencyState` со статусом `degraded` |
+| PostgreSQL (pro scanners) | Хранилище сигналов и метрик | Professional scanners продолжают работу только с in-memory буферами, без записи истории |
+| Binance MCP | Поставщик котировок и деривативов для pro scanners | Pro scanners возвращают пустые списки, факт деградации отправляется в supervisor |
+| Supervisor MCP (`TRADINGVIEW_MCP_SUPERVISOR_URL`) | Сбор метрик/фактов | Сервер продолжает работать локально, но телеметрия недоступна |
+
+## Кэширование и rate limiting
+
+- `core/services/cache_service.py` реализует кэш с двумя уровнями: Redis (основной) и in-memory fallback. TTL:
+  - Рыночные данные (top gainers, multi changes, Bollinger) — `TRADINGVIEW_MCP_CACHE_TTL_MARKET_SECONDS` (по умолчанию 60).
+  - Метаданные (профили сканеров, справочная информация) — `TRADINGVIEW_MCP_CACHE_TTL_METADATA_SECONDS` (по умолчанию 300).
+- Статистика кэша (hits/misses/errors) агрегируется и каждые 20 обращений отправляется в Supervisor метрикой `tradingview.cache_hit_ratio`.
+- `core/utils/rate_limiter.py` — токен-бакет с джиттером, значения управляются переменными:
+  - `TRADINGVIEW_MCP_TV_REQUESTS_PER_MIN` (штрафует общий поток запросов).
+  - `TRADINGVIEW_MCP_TV_BURST_LIMIT` (разрешенный всплеск).
+- При срабатывании ограничения отправляется метрика `tradingview.rate_limit_wait`, что помогает калибровать лимиты.
+
+## Наблюдаемость и телеметрия
+
+- Модуль `supervisor_reporting.py` отправляет:
+  - Метрики: `tradingview.screener_latency`, `tradingview.signals_per_minute`, `tradingview.error_rate`, `tradingview.cache_hit_ratio`, `tradingview.rate_limit_wait`.
+  - Факты: запуск/остановка сервера, состояние зависимостей, активные профили сканеров.
+- События запуска/остановки (`Fact:TradingViewServerStarted`, `Fact:TradingViewServerStopped`) используют снимок конфигурации (`_build_config_snapshot`).
+- Ошибки инструментов фиксируются декоратором `log_tool`, что позволяет отслеживать деградацию конкретных MCP tools.
+
+## Graceful Degradation
+
+| Сценарий | Поведение сервера |
+|----------|-------------------|
+| Redis недоступен | Переключение на in-memory кэш с теми же TTL, лог предупреждения + факт в Supervisor |
+| TradingView API rate limiting | Token bucket заставляет ждать, результаты кешируются, но инструмент не падает (возвращает частичный/пустой ответ) |
+| TradingView API недоступен | Результаты пустые, error-rate метрики фиксируют аномалию, клиенты могут повторить позже |
+| Binance MCP недоступен | Pro scanners возвращают пустой список, в Supervisor уходит `degraded` состояние адаптера |
+| PostgreSQL/Alerts недоступны | Сигналы удерживаются в памяти, алерты помечаются как «deferred» |
+
+## Конфигурация (ключевые переменные)
+
+| Переменная | Назначение | Значение по умолчанию |
+|------------|------------|------------------------|
+| `TRADINGVIEW_MCP_REDIS_URL` | Подключение к Redis | `redis://localhost:6379/0` |
+| `TRADINGVIEW_MCP_REDIS_ENABLED` | Включение Redis-кэша | `true` |
+| `TRADINGVIEW_MCP_CACHE_TTL_MARKET_SECONDS` | TTL рыночных данных | `60` |
+| `TRADINGVIEW_MCP_CACHE_TTL_METADATA_SECONDS` | TTL метаданных | `300` |
+| `TRADINGVIEW_MCP_TV_REQUESTS_PER_MIN` | Глобальный лимит запросов | `90` |
+| `TRADINGVIEW_MCP_TV_BURST_LIMIT` | Максимальный всплеск | `20` |
+| `TRADINGVIEW_MCP_SUPERVISOR_URL` | Endpoint supervisor-mcp | пусто |
+| `TRADINGVIEW_MCP_SUPERVISOR_METRICS_ENABLED` | Включение телеметрии | `false` |
+| `TRADINGVIEW_MCP_SUPERVISOR_TIMEOUT` | Таймаут запросов в Supervisor | `2.5` |
+
 ## Настройка инфраструктуры для профессиональных сканеров
 
 ### Обязательные требования:

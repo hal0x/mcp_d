@@ -1,0 +1,2 @@
+{"id": 187153, "text": "`fromEssentials = essentials.ptsOwners.map(_.recordCount).orElse(essentials.history.map(_.owners.size)),`", "date": "2023-09-08T14:03:29+00:00", "chat": "unknown"}
+{"id": 187151, "text": "кеш в предикторе для 202 чтобы ещё не ходить", "date": "2023-09-08T13:51:27+00:00", "chat": "unknown"}

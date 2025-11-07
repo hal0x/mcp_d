@@ -1,0 +1,64 @@
+{
+  "test_name": "prompt_quality",
+  "timestamp": "2025-09-14 19:31:52",
+  "results": {
+    "individual_results": {
+      "web_summary": {
+        "execution_time": 4.952775582998584,
+        "quality_score": 0.6666666666666666,
+        "response_length": 275,
+        "prompt_length": 277,
+        "success": true
+      },
+      "agent_summary": {
+        "execution_time": 8.168805583001813,
+        "quality_score": 1.0,
+        "response_length": 355,
+        "prompt_length": 397,
+        "success": true
+      },
+      "code_generation": {
+        "execution_time": 13.582680208004604,
+        "quality_score": 1.0,
+        "response_length": 619,
+        "prompt_length": 177,
+        "success": true
+      },
+      "math_calculation": {
+        "execution_time": 6.6292932919968734,
+        "quality_score": 1.0,
+        "response_length": 38,
+        "prompt_length": 93,
+        "success": true
+      },
+      "planner_system": {
+        "execution_time": 14.416747124996618,
+        "quality_score": 1.0,
+        "response_length": 485,
+        "prompt_length": 1237,
+        "success": true
+      },
+      "executor": {
+        "execution_time": 14.834792832996754,
+        "quality_score": 0.6666666666666666,
+        "response_length": 254,
+        "prompt_length": 990,
+        "success": true
+      },
+      "critic": {
+        "execution_time": 18.997872959000233,
+        "quality_score": 0.6666666666666666,
+        "response_length": 308,
+        "prompt_length": 995,
+        "success": true
+      }
+    },
+    "summary": {
+      "total_tests": 7,
+      "successful_tests": 7,
+      "avg_execution_time": 11.65470965471364,
+      "avg_quality": 0.8571428571428571
+    },
+    "success": true
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "test_name": "context_reuse",
+  "timestamp": "2025-09-14 19:30:30",
+  "results": {
+    "with_context": [
+      69.96749229200213,
+      79.29049604100146,
+      114.003008959,
+      118.89813479100121,
+      131.5165418339966
+    ],
+    "without_context": [],
+    "avg_with_context": 102.73513478340028,
+    "avg_without_context": 0,
+    "total_prompts": 5,
+    "success": true
+  }
+}

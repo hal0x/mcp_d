@@ -1,0 +1,85 @@
+{"id": 545437, "text": "Oku good too", "date": "2025-09-17T23:27:05+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545436, "text": "Odos is now charging front end fees\n\nI have been using Dzap.io and Bebop.xyz and happy with both of them", "date": "2025-09-17T22:40:30+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545430, "text": "Hmm wsteth unsure if we support on rfq. But I'll check for sure and revert.", "date": "2025-09-17T20:40:53+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545428, "text": "I told them irl and they blame defillama", "date": "2025-09-17T20:40:45+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545427, "text": "Yeah, I have seen ODOS aggregator sometimes failing also in Base & Optimism.", "date": "2025-09-17T20:40:07+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545426, "text": "Lol no that's not how it works", "date": "2025-09-17T20:39:22+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545425, "text": "this was for wsteth - usdc on arb", "date": "2025-09-17T20:39:22+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545424, "text": "its rlly shit", "date": "2025-09-17T20:39:09+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545423, "text": "odos agg", "date": "2025-09-17T20:39:06+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545422, "text": "I mean", "date": "2025-09-17T20:39:04+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545421, "text": "no not that token", "date": "2025-09-17T20:39:04+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545420, "text": "You can trade on rfq at fixed rate / fill if you trade highly active tokens. Feel free to dm. For long tail yeah tough", "date": "2025-09-17T20:39:03+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545419, "text": "Is ODOS token native to Arbitrum?", "date": "2025-09-17T20:38:37+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545418, "text": "DefiLlama should be already protected against any MEV boys because it is an aggregator", "date": "2025-09-17T20:37:46+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545417, "text": "interesting", "date": "2025-09-17T20:37:28+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545416, "text": "hmmm", "date": "2025-09-17T20:37:25+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545415, "text": "they really messed their quoting up", "date": "2025-09-17T20:35:13+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545414, "text": "also for example ODOS always fails", "date": "2025-09-17T20:35:09+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545413, "text": "using llamaswap", "date": "2025-09-17T20:31:30+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545412, "text": "rabby", "date": "2025-09-17T20:29:54+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545411, "text": "Try w/ another RPC. Unless there is a huge airdrop like Zro u should not have an issue.\n\nU can check latency here as well\n\nhttps://chainlist.org/chain/42161", "date": "2025-09-17T20:28:47+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545410, "text": "Which wallet are you using?", "date": "2025-09-17T20:27:21+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545409, "text": "where?", "date": "2025-09-17T20:26:06+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545408, "text": "And for the slippage, it depends on a pair but should be easily under 0.5%, maybe 0.2% max", "date": "2025-09-17T20:25:19+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545407, "text": "**Finally collected all of the Lobster dao TG stickers:**\n\nNFT pack: \n• t.me/addstickers/LobsterDAO_NFT_Lobster\n• t.me/addstickers/LobsterDAO_NFT_Langoustine\n• t.me/addstickers/LobsterDAO_NFT_Mud_Crab\n• t.me/addstickers/LobsterDAO_NFT_Shrimp\n\nAnimated: \n• t.me/addstickers/LobsNextGen\n• t.me/addstickers/welublobs\n\nCartoon style:\n\n• t.me/addstickers/LobsterDAOStickers\n• t.me/addstickers/lobsterdao (my own sticker pack)", "date": "2025-09-17T20:24:41+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545406, "text": "First make sure your wallet supports private RPC and if it doesn't you can switch to Arbitrum's sequencer direct RPC to avoid any potential MEV leakage", "date": "2025-09-17T20:24:32+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545405, "text": "It shoudn't. It should be easier than on Solana.", "date": "2025-09-17T20:24:02+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545404, "text": "how high slippage do I need?", "date": "2025-09-17T20:22:01+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545403, "text": "but is it impossible to trade on L2s like arbitrum in times of high vol?", "date": "2025-09-17T20:21:47+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545402, "text": "is it just me", "date": "2025-09-17T20:21:32+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545401, "text": "okay guys", "date": "2025-09-17T20:21:23+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545400, "text": "That time i got reincarnated as a lobster", "date": "2025-09-17T20:15:33+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545399, "text": "Fullmetal Alchemix: Lobsterhood", "date": "2025-09-17T20:13:21+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545394, "text": "The Heart Of Crustaceans", "date": "2025-09-17T19:39:38+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545393, "text": "I would watch a lobster anime tbh", "date": "2025-09-17T19:39:03+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545388, "text": "wen lobsterdao funded anime winning oscar", "date": "2025-09-17T19:33:55+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545386, "text": "Removed by accident. GG! @pplpleasr loves to post announcements in lobs without ever making a movie about us 😈", "date": "2025-09-17T19:29:49+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545376, "text": "Gm, just launched Fast Swaps on Stargate 🫡\n\nSub-second quotes, Single second execution\n\nhttps://x.com/stargatefinance/status/1968349298531455292", "date": "2025-09-17T16:34:28+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545375, "text": "Ok i’ll see when i get to laptop", "date": "2025-09-17T16:10:12+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545374, "text": "Instruction: https://t.me/lobsters_chat/501108\n\nYes it works via Collab Land: https://telegram.me/collablandbot?start=VFBDI1RFTCNDT01NIy0xMDAxNTc3NzExMjQx", "date": "2025-09-17T16:09:22+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545373, "text": "https://opensea.io/collection/lobsterdao", "date": "2025-09-17T16:09:17+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545372, "text": "how much the NFT costs and i verify through collab land ?", "date": "2025-09-17T16:08:57+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545371, "text": "Lobster Kingdom is real lobsterdao", "date": "2025-09-17T16:08:22+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545370, "text": "There are not many chats like this. Lobsterdao is the best DeFi chat. You can buy lobster NFT and join gated Kingdom chat btw.\n\nInstruction: https://t.me/lobsters_chat/501108", "date": "2025-09-17T16:07:09+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545368, "text": "groupchat", "date": "2025-09-17T16:06:25+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545367, "text": "like this", "date": "2025-09-17T16:06:20+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545366, "text": "Those are mostly channels bro, i mean chats", "date": "2025-09-17T16:06:17+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545365, "text": "Hey, you can join @ETHSecurity and other chats and channels from this folder: https://t.me/addlist/uesom31GM1I4Yjgy", "date": "2025-09-17T16:05:47+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545363, "text": "i got aave group if you want but i want to join more general EVM defi type of chatrooms", "date": "2025-09-17T16:04:17+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545362, "text": "I wish to get in too. Wish to meet more whitepaper paradigm talk defi nerds.", "date": "2025-09-17T16:02:46+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545361, "text": "if anyone knows, send here or in dms", "date": "2025-09-17T16:00:54+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545360, "text": "I want more then only this group to connect more", "date": "2025-09-17T15:59:31+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545359, "text": "chats where its basically eth defi discussion", "date": "2025-09-17T15:59:16+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545358, "text": "Anyone got defi chats similar to defifrance and this?", "date": "2025-09-17T15:59:07+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545357, "text": "congrats! & kept it under 45s 😅", "date": "2025-09-17T15:32:41+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545348, "text": "Nah, u r not the only one. Thanks @ignatxyz for that info. \n\nAt first I thought it was the other company Figure Robot IPOing too 🤖\n\nhttps://fixupx.com/figure_robot/status/1963266237426979300?s=46&t=0MaHaObl8S3BNaHtJTnMnw", "date": "2025-09-17T12:45:40+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545347, "text": "https://x.com/0xlouist/status/1968292157434806651?s=46", "date": "2025-09-17T12:34:45+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545341, "text": "> ProvLabs is run by the previous foundation head but is independent of Provenance and Figure\n\nyeah we believe you mr tradfi.\n\nyou're also on the board of directors of his company, but you're, of course, __completely independent__", "date": "2025-09-17T09:08:19+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545339, "text": "It was on the radar who was following the RWA space, cause all the KOLs and Media were posting about incredible success of RWAs onchain showing aggregate data from rwa(.)xyz. But if you look into 30bn RWA market, 12bn of it is Figure, and if you exclude them , as the chain is not public, tokens are not enforceable, then the picture would be much different", "date": "2025-09-17T08:59:09+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545338, "text": "half of the things doing tokens these days none of us building protocols are aware of", "date": "2025-09-17T08:56:22+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545337, "text": "nah", "date": "2025-09-17T08:56:01+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545336, "text": "Am I permitted to admit I had never heard of Figure prior to their IPO. Does it just mean I'm not paying attention?", "date": "2025-09-17T08:54:14+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545335, "text": "HL just announced it's going to be permissionless becoming a spot quote asset", "date": "2025-09-17T08:19:51+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545334, "text": "it needs to b a quote asset", "date": "2025-09-17T07:48:34+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545332, "text": "with Circle onboarding to Hyperliquid natively, couldn't a next step be EURC?", "date": "2025-09-17T07:40:24+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545331, "text": "Bullish was supposed to do it", "date": "2025-09-17T07:26:03+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545330, "text": "good one, waiting for that too", "date": "2025-09-17T07:25:50+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545329, "text": "We need EUR perps", "date": "2025-09-17T07:24:16+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545328, "text": "\"blabla someone else posted this\"", "date": "2025-09-17T07:24:13+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545327, "text": "https://x.com/mcagney/status/1967271438660125057", "date": "2025-09-17T07:24:06+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545326, "text": "Look for zchf should be easy to find", "date": "2025-09-17T07:23:35+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545325, "text": "Bc okay the tech might be shitty or non-existent but the other allegations (esp asking vcs and projects behind closed doors) seems just as egregious", "date": "2025-09-17T07:23:23+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545324, "text": "Idgi is he not denying that ppl were talking shit about dfl or claiming that u have to pay for listings?", "date": "2025-09-17T07:22:47+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545323, "text": "i dont like fish\nis picanha ok?", "date": "2025-09-17T07:22:29+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545322, "text": "(related to the latest figure defillama beef)", "date": "2025-09-17T07:21:46+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545321, "text": "at least the vaneck guy is honest about pumping bags", "date": "2025-09-17T07:21:33+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545320, "text": "https://x.com/matthew_sigel/status/1967993826745913502?=1", "date": "2025-09-17T07:21:25+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545319, "text": "Was recently discussed in kingdom, buy nft 😜", "date": "2025-09-17T07:21:19+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545318, "text": "(probably farming engagement while understanding 2 wikipedia pages)", "date": "2025-09-17T07:19:18+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545317, "text": "Galaxy analyst goes absolutely mental spraying bullshit for days", "date": "2025-09-17T07:19:08+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545316, "text": "You wanted institutions, but seems that some of them are retarded... have to still look through the ones who have brains", "date": "2025-09-17T07:18:57+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545315, "text": "https://x.com/VivekVentures/status/1968137022645661728?=4", "date": "2025-09-17T07:18:39+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545313, "text": "Samsung device users urged to update software due to critical security flaw | The Straits Times\nhttps://www.straitstimes.com/tech/tech-news/samsung-device-users-urged-to-update-software-due-to-critical-security-flaw", "date": "2025-09-17T01:36:58+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545311, "text": "devices that need to be updated include Samsung’s flagship devices such as the Galaxy S25 and the Galaxy Z Fold7, as well as the Galaxy A56 5G.", "date": "2025-09-17T01:26:04+00:00", "chat": "LobsterDAO 🦞"}
+{"id": 545310, "text": "vulnerability – CVE-2025-21043 – could be exploited by an attacker to remotely gain access to devices and install malicious code without the users knowing it. If left unfixed, cyber criminals could steal confidential data and drain bank accounts.", "date": "2025-09-17T01:25:54+00:00", "chat": "LobsterDAO 🦞"}

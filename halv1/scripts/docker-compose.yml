@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  halv1:
+    build: .
+    container_name: halv1-agent
+    volumes:
+      - .:/app
+      - ./db:/app/db
+      - ./venv:/app/venv
+    environment:
+      - PYTHONPATH=/app
+      - INDEX_NOW=${INDEX_NOW:-0}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_SUMMARY_CHAT_ID=${TELEGRAM_SUMMARY_CHAT_ID}
+      - TELEGRAM_GOAL_CHAT_ID=${TELEGRAM_GOAL_CHAT_ID}
+      - LLM_PROVIDER=${LLM_PROVIDER:-lmstudio}
+      - LLM_MODEL=${LLM_MODEL:-openai/gpt-oss-20b}
+      - LLM_HOST=${LLM_HOST:-127.0.0.1}
+      - LLM_PORT=${LLM_PORT:-1234}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-text-embedding-qwen3-embedding-8b}
+      - EMBEDDINGS_HOST=${EMBEDDINGS_HOST:-127.0.0.1}
+      - EMBEDDINGS_PORT=${EMBEDDINGS_PORT:-1234}
+      - EMBEDDINGS_API_KEY=${EMBEDDINGS_API_KEY}
+      - TELETHON_API_ID=${TELETHON_API_ID}
+      - TELETHON_API_HASH=${TELETHON_API_HASH}
+      - TELETHON_SESSION=${TELETHON_SESSION:-user}
+      - EXECUTOR_PROVIDER=${EXECUTOR_PROVIDER:-docker}
+      - INTERNET_USER_AGENT=${INTERNET_USER_AGENT:-halv1-bot/1.0}
+      - INTERNET_MAX_RETRIES=${INTERNET_MAX_RETRIES:-3}
+    ports:
+      - "8000:8000"
+    networks:
+      - halv1-network
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges
+    cap_drop:
+      - ALL
+    read_only: false
+    tmpfs:
+      - /tmp
+      - /var/tmp
+
+  # Дополнительно: вы можете настроить LM Studio или Ollama в контейнере
+  # для локального использования LLM моделей.
+
+networks:
+  halv1-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

@@ -1,0 +1,53 @@
+# Политики для разных типов инструментов
+code:
+  max_wall_time_s: 10
+  max_mem_mb: 256
+  cpu_quota: 1.0
+  network_mode: none
+  userns: keep-id
+  cap_drop: ALL
+  seccomp_profile: security/seccomp_profile.json
+  apparmor_profile: security/apparmor_profile
+
+shell:
+  max_wall_time_s: 20
+  max_mem_mb: 512
+  cpu_quota: 1.0
+  network_mode: host
+  userns: keep-id
+  cap_drop: ALL
+  seccomp_profile: security/seccomp_profile.json
+  apparmor_profile: security/apparmor_profile
+
+http:
+  max_wall_time_s: 15
+  network_mode: host
+  seccomp_profile: security/seccomp_profile.json
+  apparmor_profile: security/apparmor_profile
+
+# Политики для Docker executor
+docker:
+  # Основные настройки
+  image: "python:3.11-slim"
+  runtime: "docker"
+  
+  # Безопасность
+  cap_drop: "ALL"
+  seccomp_profile: "security/seccomp_profile.json"
+  apparmor_profile: "security/apparmor_profile"
+  user: "65534:65534"  # nobody user
+  userns: "keep-id"
+  
+  # Ограничения ресурсов
+  memory_limit: "128m"
+  cpu_limit: "0.5"
+  pids_limit: 32
+  max_wall_time_s: 30
+  
+  # Сеть
+  network_mode: "host"
+  dns: ["8.8.8.8", "1.1.1.1"]
+  
+  # Дополнительные настройки
+  read_only: false  # Временно отключено для тестирования
+  security_opt: ["no-new-privileges"]

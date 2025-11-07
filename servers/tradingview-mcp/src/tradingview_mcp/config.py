@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +20,17 @@ class Settings(BaseSettings):
         default="streamable-http", description="Default transport protocol"
     )
     debug: bool = Field(default=False, description="Enable debug mode")
+    redis_enabled: bool = Field(default=True, description="Enable Redis caching layer")
+    redis_url: Optional[str] = Field(default="redis://localhost:6379/0", description="Redis connection URL")
+    redis_socket_timeout: float = Field(default=0.5, ge=0.0, le=5.0, description="Redis socket timeout in seconds")
+    cache_ttl_market_seconds: int = Field(default=60, ge=1, le=900, description="TTL for market data cache")
+    cache_ttl_metadata_seconds: int = Field(default=300, ge=30, le=3600, description="TTL for metadata cache")
+    tv_requests_per_min: int = Field(default=90, ge=1, le=600, description="TradingView requests per minute")
+    tv_burst_limit: int = Field(default=20, ge=1, le=200, description="Maximum burst size for TradingView requests")
+    supervisor_metrics_enabled: bool = Field(default=False, description="Enable Supervisor MCP telemetry")
+    supervisor_url: Optional[str] = Field(default=None, description="Supervisor MCP ingestion endpoint")
+    supervisor_timeout: Optional[float] = Field(default=2.5, ge=0.1, le=10.0, description="Supervisor request timeout in seconds")
+    supervisor_actor: Optional[str] = Field(default="tradingview-mcp", description="Actor name for Supervisor facts")
 
     model_config = SettingsConfigDict(
         env_prefix="TRADINGVIEW_MCP_",
@@ -62,6 +73,8 @@ def _ensure_env_aliases() -> None:
         "TRADINGVIEW_MCP_PORT": ["PORT"],
         "TRADINGVIEW_MCP_LOG_LEVEL": ["LOG_LEVEL"],
         "TRADINGVIEW_MCP_DEFAULT_TRANSPORT": ["DEFAULT_TRANSPORT"],
+        "TRADINGVIEW_MCP_REDIS_URL": ["REDIS_URL", "CACHE_URL"],
+        "TRADINGVIEW_MCP_SUPERVISOR_URL": ["SUPERVISOR_URL"],
     }
 
     for target, candidates in alias_map.items():

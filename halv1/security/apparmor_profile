@@ -1,0 +1,7 @@
+#include <tunables/global>
+
+profile hal-minimal flags=(attach_disconnected,mediate_deleted) {
+  capability,
+  network,
+  file,
+}

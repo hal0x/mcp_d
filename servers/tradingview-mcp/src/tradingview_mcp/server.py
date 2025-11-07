@@ -20,13 +20,38 @@ from typing_extensions import TypedDict
 from mcp.server.fastmcp import FastMCP
 
 from tradingview_mcp.config import Settings, get_settings
+from tradingview_mcp.core.services.cache_service import get_cache_service
+from tradingview_mcp.core.utils.rate_limiter import TokenBucketRateLimiter
 from tradingview_mcp.pro_scanners import ScannerProfiles, ScannerService
 from tradingview_mcp.pro_scanners.models import BacktestRequest
+from tradingview_mcp.supervisor_reporting import SupervisorReporter
 from tradingview_mcp.pro_scanners.backtesting.metrics import MetricsTracker
 from tradingview_mcp.scheduler import scheduler
 
+# Конфигурация и инфраструктурные синглтоны
+SETTINGS = get_settings()
+SupervisorReporter.configure(SETTINGS)
+RATE_LIMITER = TokenBucketRateLimiter(
+    requests_per_minute=SETTINGS.tv_requests_per_min,
+    burst=SETTINGS.tv_burst_limit,
+)
+CACHE_SERVICE = get_cache_service()
+SERVER_START_TS = time.monotonic()
+_CACHE_SAMPLE_INTERVAL = 20
+_cache_observations = 0
+
 # Глобальный кэш для результатов Professional Scanners
 SCANNER_RESULTS_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _maybe_report_cache_stats() -> None:
+    """Periodically report cache statistics to Supervisor MCP."""
+    global _cache_observations
+    _cache_observations += 1
+    if _cache_observations % _CACHE_SAMPLE_INTERVAL != 0:
+        return
+    stats = CACHE_SERVICE.stats()
+    SupervisorReporter.record_cache_stats(stats.hit_ratio)
 
 
 async def _save_scanner_result_redis(scanner_name: str, symbols: List[str], profile: str, result: Any) -> str:
@@ -164,8 +189,9 @@ def log_tool(func):
                 result = await func(*args, **kwargs)
                 logger.info("tool %s completed (%s)", tool_name, _summarize_result(result))
                 return result
-            except Exception:
+            except Exception as exc:
                 logger.exception("tool %s failed", tool_name)
+                SupervisorReporter.record_error(tool_name, str(exc))
                 raise
 
         return async_wrapper
@@ -177,8 +203,9 @@ def log_tool(func):
             result = func(*args, **kwargs)
             logger.info("tool %s completed (%s)", tool_name, _summarize_result(result))
             return result
-        except Exception:
+        except Exception as exc:
             logger.exception("tool %s failed", tool_name)
+            SupervisorReporter.record_error(tool_name, str(exc))
             raise
 
     return sync_wrapper
@@ -206,8 +233,11 @@ async def _ensure_scanner_service() -> ScannerService:
                 logger.exception("Failed to start ScannerService: %s", exc)
                 # Don't raise immediately - allow partial functionality
                 logger.warning("ScannerService started with limited functionality due to infrastructure issues")
+                SupervisorReporter.record_dependency_state("scanner_service", "degraded", str(exc))
             else:
                 _scanner_service_started = True
+                for dep, ready in _scanner_service.dependency_states().items():
+                    SupervisorReporter.record_dependency_state(dep, "ready" if ready else "degraded")
     return _scanner_service
 
 
@@ -226,6 +256,9 @@ def _scanner_lifespan(_: FastMCP):
     @asynccontextmanager
     async def _lifespan():
         # Startup
+        global SERVER_START_TS
+        SERVER_START_TS = time.monotonic()
+        SupervisorReporter.record_startup(_build_config_snapshot(SETTINGS))
         await _ensure_scanner_service()
         
         # Запускаем планировщик сканеров
@@ -234,6 +267,7 @@ def _scanner_lifespan(_: FastMCP):
             logger.info("Scanner scheduler started successfully")
         except Exception as exc:
             logger.error(f"Failed to start scheduler: {exc}")
+            SupervisorReporter.record_dependency_state("scheduler", "degraded", str(exc))
         
         try:
             yield
@@ -246,6 +280,8 @@ def _scanner_lifespan(_: FastMCP):
                 logger.info("Scanner scheduler stopped")
             except Exception as exc:
                 logger.error(f"Failed to stop scheduler: {exc}")
+            uptime = time.monotonic() - SERVER_START_TS
+            SupervisorReporter.record_shutdown(uptime)
 
     return _lifespan()
 
@@ -267,7 +303,15 @@ def _batched_analysis(symbols: List[str], screener: str, interval: str) -> Dict[
         attempts = 0
         while attempts < _TA_MAX_RETRIES:
             try:
+                limiter_result = RATE_LIMITER.acquire()
+                if limiter_result.waited_seconds > 0:
+                    SupervisorReporter.record_rate_limit("tradingview_ta_batch", limiter_result.waited_seconds)
+
+                started = time.perf_counter()
                 data = get_multiple_analysis(screener=screener, interval=interval, symbols=batch)
+                duration = time.perf_counter() - started
+                SupervisorReporter.record_screener_latency(duration, "tradingview_ta_batch", screener)
+
                 if data and isinstance(data, dict) and len(data) > 0:
                     for sym, analysis in data.items():
                         indicators = getattr(analysis, "indicators", None)
@@ -558,7 +602,13 @@ def _tf_to_tv_resolution(tf: Optional[str]) -> Optional[str]:
 
 def _fetch_bollinger_analysis(exchange: str, timeframe: str = "4h", limit: int = 50, bbw_filter: float = None) -> List[Row]:
     """Fetch analysis using tradingview_ta; fallback to tradingview_screener when rate limited."""
+    cache_key = f"bollinger:{exchange}:{timeframe}:{bbw_filter}:{limit}"
+    cached = CACHE_SERVICE.get(cache_key)
+    if cached:
+        _maybe_report_cache_stats()
+        return cached
 
+    started = time.perf_counter()
     symbols = load_symbols(exchange)
     if not symbols:
         raise RuntimeError(f"No symbols found for exchange: {exchange}")
@@ -573,6 +623,8 @@ def _fetch_bollinger_analysis(exchange: str, timeframe: str = "4h", limit: int =
         analysis_map = _fetch_via_screener(symbols, timeframe, exchange)
         if not analysis_map:
             logger.warning("No indicator data retrieved for %s on %s", exchange, timeframe)
+            CACHE_SERVICE.set(cache_key, [], SETTINGS.cache_ttl_market_seconds)
+            _maybe_report_cache_stats()
             return []
 
     rows: List[Row] = []
@@ -613,73 +665,79 @@ def _fetch_bollinger_analysis(exchange: str, timeframe: str = "4h", limit: int =
             continue
 
     rows.sort(key=lambda x: x["changePercent"], reverse=True)
-    return rows[:limit]
+    top = rows[:limit]
+    duration = time.perf_counter() - started
+    SupervisorReporter.record_screener_latency(duration, "bollinger_analysis", exchange)
+    CACHE_SERVICE.set(cache_key, top, SETTINGS.cache_ttl_market_seconds)
+    _maybe_report_cache_stats()
+    return top
 
 
 def _fetch_trending_analysis(exchange: str, timeframe: str = "5m", filter_type: str = "", rating_filter: int = None, limit: int = 50) -> List[Row]:
     """Fetch trending coins analysis similar to the original app's trending endpoint."""
     if not TRADINGVIEW_TA_AVAILABLE:
         raise RuntimeError("tradingview_ta is missing; run `uv sync`.")
-    
+    cache_key = f"trend:{exchange}:{timeframe}:{filter_type}:{rating_filter}:{limit}"
+    cached = CACHE_SERVICE.get(cache_key)
+    if cached:
+        _maybe_report_cache_stats()
+        return cached
+
+    started = time.perf_counter()
     symbols = load_symbols(exchange)
     if not symbols:
         raise RuntimeError(f"No symbols found for exchange: {exchange}")
-    
-    # Process symbols in batches due to TradingView API limits
-    batch_size = 200  # Considering API limitations
-    all_coins = []
-    
+
     screener = EXCHANGE_SCREENER.get(exchange, "crypto")
-    
-    # Process symbols in batches
-    for i in range(0, len(symbols), batch_size):
-        batch_symbols = symbols[i:i + batch_size]
-        
+    analysis_map = _batched_analysis(symbols, screener, timeframe)
+    if not analysis_map:
+        CACHE_SERVICE.set(cache_key, [], SETTINGS.cache_ttl_market_seconds)
+        _maybe_report_cache_stats()
+        return []
+
+    all_coins: List[Row] = []
+    for key, indicators in analysis_map.items():
         try:
-            analysis = get_multiple_analysis(screener=screener, interval=timeframe, symbols=batch_symbols)
-        except Exception as e:
-            continue  # If this batch fails, move to the next one
-            
-        # Process coins in this batch
-        for key, value in analysis.items():
-            try:
-                if value is None:
-                    continue
-                    
-                indicators = value.indicators
-                metrics = compute_metrics(indicators)
-                
-                if not metrics or metrics.get('bbw') is None:
-                    continue
-                
-                # Apply rating filter if specified
-                if filter_type == "rating" and rating_filter is not None:
-                    if metrics['rating'] != rating_filter:
-                        continue
-                
-                all_coins.append(Row(
+            metrics = compute_metrics(indicators)
+            if not metrics or metrics.get("bbw") is None:
+                continue
+            if filter_type == "rating" and rating_filter is not None and metrics.get("rating") != rating_filter:
+                continue
+            all_coins.append(
+                Row(
                     symbol=key,
-                    changePercent=metrics['change'],
+                    changePercent=metrics.get("change", 0.0),
                     indicators=IndicatorMap(
-                        open=metrics.get('open'),
-                        close=metrics.get('price'),
+                        open=metrics.get("open"),
+                        close=metrics.get("price"),
                         SMA20=indicators.get("SMA20"),
                         BB_upper=indicators.get("BB.upper"),
                         BB_lower=indicators.get("BB.lower"),
                         EMA50=indicators.get("EMA50"),
                         RSI=indicators.get("RSI"),
                         volume=indicators.get("volume"),
-                    )
-                ))
-                
-            except (TypeError, ZeroDivisionError, KeyError):
-                continue
-    
-    # Sort all coins by change percentage
+                    ),
+                )
+            )
+        except (TypeError, ZeroDivisionError, KeyError):
+            continue
+
     all_coins.sort(key=lambda x: x["changePercent"], reverse=True)
-    
-    return all_coins[:limit]
+    top = all_coins[:limit]
+    duration = time.perf_counter() - started
+    SupervisorReporter.record_screener_latency(duration, "trending_analysis", exchange)
+    CACHE_SERVICE.set(cache_key, top, SETTINGS.cache_ttl_market_seconds)
+    _maybe_report_cache_stats()
+    return top
+
+
 def _fetch_multi_changes(exchange: str, timeframes: List[str] | None, base_timeframe: str = "4h", limit: int | None = None, cookies: Any | None = None) -> List[MultiRow]:
+	cache_key = f"multi:{exchange}:{','.join(timeframes or [])}:{base_timeframe}:{limit}"
+	cached = CACHE_SERVICE.get(cache_key)
+	if cached:
+		_maybe_report_cache_stats()
+		return cached
+	started = time.perf_counter()
 	try:
 		from tradingview_screener import Query
 		from tradingview_screener.column import Column
@@ -714,8 +772,17 @@ def _fetch_multi_changes(exchange: str, timeframes: List[str] | None, base_timef
 	if limit:
 		q = q.limit(int(limit))
 
+	limiter_result = RATE_LIMITER.acquire(tokens=1.5)
+	if limiter_result.waited_seconds > 0:
+		SupervisorReporter.record_rate_limit("multi_changes", limiter_result.waited_seconds)
+
 	_total, df = q.get_scanner_data(cookies=cookies)
+	duration = time.perf_counter() - started
+	SupervisorReporter.record_screener_latency(duration, "multi_changes", exchange or "ALL")
+
 	if df is None or df.empty:
+		CACHE_SERVICE.set(cache_key, [], SETTINGS.cache_ttl_market_seconds)
+		_maybe_report_cache_stats()
 		return []
 
 	out: List[MultiRow] = []
@@ -735,6 +802,8 @@ def _fetch_multi_changes(exchange: str, timeframes: List[str] | None, base_timef
 			volume=r.get(f"volume|{base_suffix}"),
 		)
 		out.append(MultiRow(symbol=symbol, changes=changes, base_indicators=base_ind))
+	CACHE_SERVICE.set(cache_key, out, SETTINGS.cache_ttl_market_seconds)
+	_maybe_report_cache_stats()
 	return out
 
 
@@ -853,6 +922,7 @@ async def pro_momentum_scan(symbols: List[str], profile: str = "balanced") -> Li
         signals = await service.scan_momentum(symbols, profile)
         if not signals:
             logger.warning("Momentum scanner returned no signals for %s. Possible reasons: 1) No momentum detected, 2) Binance-mcp unavailable, 3) Market conditions don't match filters", symbols)
+        SupervisorReporter.record_signals("momentum", len(signals))
         
         result = [signal.model_dump(mode="json") for signal in signals]
         
@@ -887,6 +957,7 @@ async def pro_mean_revert_scan(symbols: List[str], profile: str = "balanced") ->
     try:
         service = await _ensure_scanner_service()
         signals = await service.scan_mean_revert(symbols, profile)
+        SupervisorReporter.record_signals("mean_revert", len(signals))
         
         result = [signal.model_dump(mode="json") for signal in signals]
         
@@ -914,6 +985,7 @@ async def pro_breakout_scan(symbols: List[str], profile: str = "balanced") -> Li
     try:
         service = await _ensure_scanner_service()
         signals = await service.scan_breakout(symbols, profile)
+        SupervisorReporter.record_signals("breakout", len(signals))
         
         result = [signal.model_dump(mode="json") for signal in signals]
         
@@ -941,6 +1013,7 @@ async def pro_volume_profile_scan(symbols: List[str], profile: str = "balanced")
     try:
         service = await _ensure_scanner_service()
         signals = await service.scan_volume_profile(symbols, profile)
+        SupervisorReporter.record_signals("volume_profile", len(signals))
         
         result = [signal.model_dump(mode="json") for signal in signals]
         

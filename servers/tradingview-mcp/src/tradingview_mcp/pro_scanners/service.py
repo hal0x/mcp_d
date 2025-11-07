@@ -131,6 +131,15 @@ class ScannerService:
             await self._safe_call("disconnect redis", self.redis.disconnect)
             self._redis_ready = False
 
+    def dependency_states(self) -> dict[str, bool]:
+        """Return readiness snapshot for external dependencies."""
+        return {
+            "redis": self._redis_ready,
+            "postgres": self._postgres_ready,
+            "binance_mcp": self._adapter_ready,
+            "alerts": self._alerts_ready,
+        }
+
     async def scan_momentum(self, symbols: Sequence[str], profile: str) -> list[ScannerSignal]:
         if not self._adapter_ready:
             logger.error(

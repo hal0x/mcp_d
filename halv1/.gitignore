@@ -1,0 +1,72 @@
+# Virtual environment
+venv/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Environment files
+.env
+.env.*
+*.env
+
+# Logs and databases
+*.log
+*.sqlite3
+*.db
+
+# Test databases and temporary files
+test_*.db
+test_*.sqlite3
+tests/tmp/
+
+# Temporary work directories and files
+tmp_*/
+tmp_docker_work/
+temp/
+temporary/
+*.tmp
+*.temp
+
+# IDE and editor temporary files
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Backup files
+*.bak
+*.backup
+*.orig
+
+# Runtime and process files
+*.pid
+*.sock
+
+# Telethon session files
+*.session*
+
+# Test and type checking caches
+.pytest_cache/
+.mypy_cache/
+.cache/
+
+# OS-specific files
+.DS_Store
+
+# Local database directories
+db/raw/*
+db/index/*
+db/artifacts/*
+!db/raw/.gitkeep
+!db/index/.gitkeep
+!db/artifacts/.gitkeep
+test_memory.db*
