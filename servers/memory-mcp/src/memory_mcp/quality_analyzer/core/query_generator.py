@@ -161,7 +161,11 @@ class QueryGenerator:
             if date_str:
                 try:
                     # Парсим дату (предполагаем ISO формат)
-                    date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                    from ...utils.datetime_utils import parse_datetime_utc
+
+                    date = parse_datetime_utc(date_str, return_none_on_error=True)
+                    if not date:
+                        continue
                     dates.append(date)
                 except Exception:
                     continue

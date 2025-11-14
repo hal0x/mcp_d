@@ -38,7 +38,7 @@ class TestChatSummarizer:
         assert summarizer.base_url is not None
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Требует запущенного Ollama")
+    @pytest.mark.skip(reason="Интеграционный тест: требует запущенного Ollama сервера")
     async def test_ollama_connection(self):
         """Тест подключения к Ollama"""
         summarizer = ChatSummarizer()
@@ -77,7 +77,7 @@ class TestChatSummarizer:
         assert len(text) > 0
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Требует запущенного Ollama и данных")
+    @pytest.mark.skip(reason="Интеграционный тест: требует запущенного Ollama и реальных данных чатов")
     async def test_process_chat_file(self, chats_dir, test_output_dir):
         """Тест обработки файла чата"""
         json_files = list(chats_dir.glob("**/*.json"))
@@ -105,7 +105,7 @@ class TestMarkdownIndexer:
         assert indexer.mcp is not None
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Требует ChromaDB и данных")
+    @pytest.mark.skip(reason="Интеграционный тест: требует ChromaDB и индексированных данных")
     async def test_index_markdown_files(self, tmp_path):
         """Тест индексации markdown файлов"""
         # Создаем тестовый MD файл
@@ -129,7 +129,7 @@ class TestSummarySearcher:
         assert searcher.mcp is not None
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Требует индексированных данных")
+    @pytest.mark.skip(reason="Интеграционный тест: требует индексированных данных в ChromaDB")
     async def test_search_summaries(self):
         """Тест поиска по саммаризациям"""
         searcher = SummarySearcher()
@@ -147,7 +147,7 @@ class TestIntegration:
     """Интеграционные тесты саммаризации"""
 
     @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Полный интеграционный тест, требует всех компонентов")
+    @pytest.mark.skip(reason="Полный интеграционный тест: требует Ollama, ChromaDB, реальных данных чатов и всех компонентов")
     async def test_full_summarization_flow(self, chats_dir, tmp_path):
         """Тест полного потока саммаризации"""
         json_files = list(chats_dir.glob("**/*.json"))

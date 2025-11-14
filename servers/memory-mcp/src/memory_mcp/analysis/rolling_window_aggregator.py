@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..core.ollama_client import OllamaEmbeddingClient
+from ..core.lmstudio_client import LMStudioEmbeddingClient
 
 logger = logging.getLogger(__name__)
 
@@ -105,13 +105,15 @@ class AggregationState:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AggregationState":
         """Десериализация состояния"""
+        from ..utils.datetime_utils import parse_datetime_utc
+
         state = cls(data["chat_name"])
         if data.get("last_aggregation_time"):
-            state.last_aggregation_time = datetime.fromisoformat(
-                data["last_aggregation_time"]
-            )
+            state.last_aggregation_time = parse_datetime_utc(
+                data["last_aggregation_time"], use_zoneinfo=True
+            ) or datetime.now(ZoneInfo("UTC"))
         state.window_boundaries = {
-            k: datetime.fromisoformat(v)
+            k: parse_datetime_utc(v, use_zoneinfo=True) or datetime.now(ZoneInfo("UTC"))
             for k, v in data.get("window_boundaries", {}).items()
         }
         state.aggregated_blocks = data.get("aggregated_blocks", [])
@@ -135,7 +137,7 @@ class RollingWindowAggregator:
         chats_dir: Path = Path("chats"),
         state_dir: Path = Path("aggregation_state"),
         strategy: List[TimeWindow] = None,
-        ollama_client: Optional[OllamaEmbeddingClient] = None,
+        embedding_client: Optional[LMStudioEmbeddingClient] = None,
         batch_size: int = 50,  # Сколько сообщений группировать для одной саммаризации
     ):
         self.chats_dir = chats_dir
@@ -143,7 +145,7 @@ class RollingWindowAggregator:
         self.state_dir.mkdir(exist_ok=True)
 
         self.strategy = strategy or CONSERVATIVE_STRATEGY
-        self.ollama_client = ollama_client or OllamaEmbeddingClient()
+        self.embedding_client = embedding_client or LMStudioEmbeddingClient()
         self.batch_size = batch_size
 
         logger.info(
@@ -151,38 +153,28 @@ class RollingWindowAggregator:
         )
 
     def _parse_date(self, date_str: str) -> Optional[datetime]:
-        """Парсит дату из строки"""
-        try:
-            if date_str.endswith("Z"):
-                date_str = date_str.replace("Z", "+00:00")
-            return datetime.fromisoformat(date_str)
-        except ValueError:
-            return None
+        """Парсит дату из строки (использует общую утилиту)."""
+        from ..utils.datetime_utils import parse_datetime_utc
+
+        return parse_datetime_utc(date_str, return_none_on_error=True, use_zoneinfo=True)
 
     def _load_state(self, chat_name: str) -> AggregationState:
         """Загружает состояние агрегации для чата"""
-        state_file = self.state_dir / f"{chat_name}.json"
+        from ..utils.state_manager import StateManager
 
-        if state_file.exists():
-            try:
-                with open(state_file, encoding="utf-8") as f:
-                    data = json.load(f)
-                return AggregationState.from_dict(data)
-            except Exception as e:
-                logger.warning(f"Не удалось загрузить состояние для {chat_name}: {e}")
-
-        return AggregationState(chat_name)
+        manager = StateManager(self.state_dir)
+        return manager.load_state(
+            chat_name,
+            AggregationState,
+            default_factory=lambda: AggregationState(chat_name),
+        )
 
     def _save_state(self, state: AggregationState):
         """Сохраняет состояние агрегации"""
-        state_file = self.state_dir / f"{state.chat_name}.json"
+        from ..utils.state_manager import StateManager
 
-        try:
-            with open(state_file, "w", encoding="utf-8") as f:
-                json.dump(state.to_dict(), f, ensure_ascii=False, indent=2)
-            logger.debug(f"Сохранено состояние для {state.chat_name}")
-        except Exception as e:
-            logger.error(f"Ошибка сохранения состояния для {state.chat_name}: {e}")
+        manager = StateManager(self.state_dir)
+        manager.save_state(state)
 
     def _load_messages(self, chat_file: Path) -> List[Dict[str, Any]]:
         """Загружает сообщения из файла чата"""
@@ -314,8 +306,8 @@ class RollingWindowAggregator:
 Саммаризация (2-3 предложения):"""
 
         try:
-            async with self.ollama_client:
-                summary = await self.ollama_client.generate_summary(
+            async with self.embedding_client:
+                summary = await self.embedding_client.generate_summary(
                     prompt=prompt,
                     temperature=0.3,
                     max_tokens=300,

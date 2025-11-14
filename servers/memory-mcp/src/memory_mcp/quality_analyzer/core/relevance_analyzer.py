@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from ...core.ollama_client import OllamaEmbeddingClient
+from ...core.lmstudio_client import LMStudioEmbeddingClient
 from .templates import DEFAULT_PROMPTS_DIR, PromptTemplateManager
 
 logger = logging.getLogger(__name__)
@@ -36,11 +36,9 @@ class RelevanceAnalyzer:
         self.max_response_tokens = max_response_tokens
         self.thinking_level = thinking_level
 
-        self.ollama_client = OllamaEmbeddingClient(
-            llm_model_name=model_name,
+        self.embedding_client = LMStudioEmbeddingClient(
+            model_name=model_name,
             base_url=base_url,
-            max_text_length=max_context_tokens * 4,
-            llm_thinking_level=thinking_level,
         )
 
         self.prompt_manager = PromptTemplateManager(prompts_dir or DEFAULT_PROMPTS_DIR)
@@ -62,8 +60,8 @@ class RelevanceAnalyzer:
         prompt = self._generate_adaptive_prompt(query_data, search_results)
 
         try:
-            async with self.ollama_client:
-                response = await self.ollama_client.generate_summary(
+            async with self.embedding_client:
+                response = await self.embedding_client.generate_summary(
                     prompt,
                     temperature=self.temperature,
                     max_tokens=self.max_response_tokens,

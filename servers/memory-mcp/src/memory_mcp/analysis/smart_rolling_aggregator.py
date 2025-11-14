@@ -13,11 +13,13 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..core.ollama_client import OllamaEmbeddingClient
+from ..utils.datetime_utils import format_datetime_display
+
+from ..core.lmstudio_client import LMStudioEmbeddingClient
 from .context_manager import ContextManager
 from .session_segmentation import SessionSegmenter
 from .session_summarizer import SessionSummarizer
@@ -135,12 +137,14 @@ class SmartAggregationState:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SmartAggregationState":
         """Десериализация"""
+        from ..utils.datetime_utils import parse_datetime_utc
+
         state = cls(data["chat_name"])
         state.chat_type = data.get("chat_type")
         if data.get("last_aggregation_time"):
-            state.last_aggregation_time = datetime.fromisoformat(
-                data["last_aggregation_time"]
-            )
+            state.last_aggregation_time = parse_datetime_utc(
+                data["last_aggregation_time"], use_zoneinfo=True
+            ) or datetime.now(ZoneInfo("UTC"))
         state.window_summaries = defaultdict(list, data.get("window_summaries", {}))
         state.now_summary_file = data.get("now_summary_file")
         state.context_cache = data.get("context_cache", {})
@@ -164,7 +168,7 @@ class SmartRollingAggregator:
         state_dir: Path = Path("artifacts/smart_aggregation_state"),
         summaries_dir: Path = Path("artifacts/reports"),
         now_summaries_dir: Path = Path("artifacts/now_summaries"),
-        ollama_client: Optional[OllamaEmbeddingClient] = None,
+        embedding_client: Optional[LMStudioEmbeddingClient] = None,
         use_smart_strategy: bool = True,
     ):
         self.chats_dir = chats_dir
@@ -176,7 +180,7 @@ class SmartRollingAggregator:
         self.state_dir.mkdir(exist_ok=True)
         self.now_summaries_dir.mkdir(exist_ok=True)
 
-        self.ollama_client = ollama_client or OllamaEmbeddingClient()
+        self.embedding_client = embedding_client or LMStudioEmbeddingClient()
         self.use_smart_strategy = use_smart_strategy
 
         # Компоненты для умной обработки
@@ -186,20 +190,17 @@ class SmartRollingAggregator:
         )
         self.context_manager = ContextManager(summaries_dir)
         self.session_summarizer = SessionSummarizer(
-            ollama_client=self.ollama_client,
+            embedding_client=self.embedding_client,
             summaries_dir=summaries_dir,
         )
 
         logger.info("Инициализирован SmartRollingAggregator")
 
     def _parse_date(self, date_str: str) -> Optional[datetime]:
-        """Парсит дату"""
-        try:
-            if date_str.endswith("Z"):
-                date_str = date_str.replace("Z", "+00:00")
-            return datetime.fromisoformat(date_str)
-        except ValueError:
-            return None
+        """Парсит дату (использует общую утилиту)."""
+        from ..utils.datetime_utils import parse_datetime_utc
+
+        return parse_datetime_utc(date_str, return_none_on_error=True, use_zoneinfo=True)
 
     def _detect_chat_type(self, messages: List[Dict[str, Any]]) -> str:
         """
@@ -233,28 +234,21 @@ class SmartRollingAggregator:
 
     def _load_state(self, chat_name: str) -> SmartAggregationState:
         """Загружает состояние"""
-        state_file = self.state_dir / f"{chat_name}.json"
+        from ..utils.state_manager import StateManager
 
-        if state_file.exists():
-            try:
-                with open(state_file, encoding="utf-8") as f:
-                    data = json.load(f)
-                return SmartAggregationState.from_dict(data)
-            except Exception as e:
-                logger.warning(f"Не удалось загрузить состояние для {chat_name}: {e}")
-
-        return SmartAggregationState(chat_name)
+        manager = StateManager(self.state_dir)
+        return manager.load_state(
+            chat_name,
+            SmartAggregationState,
+            default_factory=lambda: SmartAggregationState(chat_name),
+        )
 
     def _save_state(self, state: SmartAggregationState):
         """Сохраняет состояние"""
-        state_file = self.state_dir / f"{state.chat_name}.json"
+        from ..utils.state_manager import StateManager
 
-        try:
-            with open(state_file, "w", encoding="utf-8") as f:
-                json.dump(state.to_dict(), f, ensure_ascii=False, indent=2)
-            logger.debug(f"Сохранено состояние для {state.chat_name}")
-        except Exception as e:
-            logger.error(f"Ошибка сохранения состояния для {state.chat_name}: {e}")
+        manager = StateManager(self.state_dir)
+        manager.save_state(state)
 
     def _load_messages(self, chat_file: Path) -> List[Dict[str, Any]]:
         """Загружает сообщения из файла"""
@@ -698,8 +692,8 @@ class SmartRollingAggregator:
 Саммаризация (3-4 предложения):"""
 
         try:
-            async with self.ollama_client:
-                summary = await self.ollama_client.generate_summary(
+            async with self.embedding_client:
+                summary = await self.embedding_client.generate_summary(
                     prompt=prompt,
                     temperature=0.3,
                     max_tokens=400,
@@ -768,7 +762,7 @@ class SmartRollingAggregator:
 
             with open(now_file, "w", encoding="utf-8") as f:
                 f.write(f"# Актуальные сообщения: {chat_name}\n\n")
-                f.write(f"**Дата:** {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+                f.write(f"**Дата:** {format_datetime_display(datetime.now(timezone.utc), format_type='datetime')}\n")
                 f.write(f"**Тип чата:** {state.chat_type}\n")
                 f.write(f"**Сообщений:** {len(messages)}\n\n")
 
@@ -1098,7 +1092,7 @@ class SmartRollingAggregator:
             # Сохраняем обновленный контекст
             with open(context_file, "w", encoding="utf-8") as f:
                 f.write(f"# Контекст чата: {chat_name}\n\n")
-                f.write(f"**Обновлено:** {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+                f.write(f"**Обновлено:** {format_datetime_display(datetime.now(timezone.utc), format_type='datetime')}\n")
                 f.write(f"**Тип чата:** {chat_type}\n")
                 f.write(f"**Всего сессий:** {len(sessions)}\n\n")
                 f.write("## Образ чата\n\n")

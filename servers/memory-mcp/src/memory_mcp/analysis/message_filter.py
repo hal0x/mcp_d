@@ -5,8 +5,9 @@
 
 import logging
 import re
-from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
+
+from ..utils.deduplication import deduplicate_consecutive
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,12 @@ class MessageFilter:
             filtered.append(msg)
 
         # Дедупликация последовательных похожих сообщений
-        deduplicated = self._deduplicate_consecutive(filtered)
+        deduplicated = deduplicate_consecutive(
+            filtered,
+            threshold=self.similarity_threshold,
+            max_consecutive=self.max_consecutive_duplicates,
+            get_text_func=self._get_message_text,
+        )
         stats["duplicates"] = len(filtered) - len(deduplicated)
 
         logger.info(
@@ -205,115 +211,8 @@ class MessageFilter:
 
         return False
 
-    def _deduplicate_consecutive(
-        self, messages: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """
-        Дедупликация последовательных похожих сообщений
-
-        Args:
-            messages: Отфильтрованный список сообщений
-
-        Returns:
-            Список без последовательных дублей
-        """
-        if not messages:
-            return []
-
-        deduplicated = []
-        prev_text = None
-        consecutive_count = 0
-
-        for msg in messages:
-            text = self._normalize_text(self._get_message_text(msg))
-            original_text = self._get_message_text(msg)
-
-            # Если текст пустой, всегда добавляем (может быть медиа)
-            if not text:
-                deduplicated.append(msg)
-                prev_text = None
-                consecutive_count = 0
-                continue
-
-            # Проверяем похожесть с предыдущим
-            if prev_text and self._is_similar(text, prev_text):
-                consecutive_count += 1
-
-                # Пропускаем, если превышен лимит
-                if consecutive_count > self.max_consecutive_duplicates:
-                    # Добавляем аннотацию о пропущенных сообщениях
-                    if consecutive_count == self.max_consecutive_duplicates + 1:
-                        # Добавляем маркер только один раз
-                        last_msg = deduplicated[-1]
-                        if not last_msg.get("_duplicate_marker"):
-                            last_msg["_duplicate_count"] = 1
-                            last_msg["_duplicate_marker"] = True
-                            last_msg["_duplicate_variants"] = [original_text[:200]]
-                    else:
-                        # Увеличиваем счётчик и сохраняем вариацию
-                        last_msg = deduplicated[-1]
-                        last_msg["_duplicate_count"] = (
-                            last_msg.get("_duplicate_count", 1) + 1
-                        )
-                        # Сохраняем до 5 вариаций для анализа
-                        variants = last_msg.get("_duplicate_variants", [])
-                        if len(variants) < 5 and original_text[:200] not in variants:
-                            variants.append(original_text[:200])
-                            last_msg["_duplicate_variants"] = variants
-                    continue
-            else:
-                consecutive_count = 0
-
-            deduplicated.append(msg)
-            prev_text = text
-
-        return deduplicated
-
-    def _is_similar(self, text1: str, text2: str) -> bool:
-        """
-        Проверка схожести двух текстов
-
-        Args:
-            text1: Первый текст
-            text2: Второй текст
-
-        Returns:
-            True если тексты похожи
-        """
-        if not text1 or not text2:
-            return False
-
-        # Точное совпадение
-        if text1 == text2:
-            return True
-
-        # Проверка через SequenceMatcher
-        similarity = SequenceMatcher(None, text1, text2).ratio()
-        return similarity >= self.similarity_threshold
-
-    def _normalize_text(self, text: Optional[str]) -> str:
-        """
-        Нормализация текста для сравнения
-
-        Args:
-            text: Исходный текст
-
-        Returns:
-            Нормализованный текст
-        """
-        if not text:
-            return ""
-
-        # Убираем лишние пробелы
-        normalized = re.sub(r"\s+", " ", text.strip())
-
-        # Убираем эмодзи для более точного сравнения
-        normalized = re.sub(r"[\U00010000-\U0010ffff]", "", normalized)
-
-        # Приводим к нижнему регистру
-        normalized = normalized.lower()
-
-        return normalized
+    # Методы _deduplicate_consecutive, _is_similar и _normalize_text удалены,
+    # так как теперь используются функции из utils.deduplication
 
     def _get_message_text(self, msg: Dict[str, Any]) -> str:
         """

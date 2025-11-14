@@ -45,7 +45,7 @@ class ReportGenerator:
 
         self.quality_reports_dir.mkdir(parents=True, exist_ok=True)
 
-        from ...core.ollama_client import OllamaEmbeddingClient
+        from ...core.lmstudio_client import LMStudioEmbeddingClient
         from .templates import DEFAULT_PROMPTS_DIR, PromptTemplateManager
 
         self.report_template_manager = PromptTemplateManager(
@@ -56,16 +56,14 @@ class ReportGenerator:
 
         self.ollama_temperature = ollama_temperature
         self.ollama_max_tokens = ollama_max_tokens
-        self.ollama_client: Optional[OllamaEmbeddingClient] = None
+        self.embedding_client: Optional[LMStudioEmbeddingClient] = None
         self.ollama_thinking_level = ollama_thinking_level
 
         if ollama_model and ollama_base_url:
-            max_text_length = max(32768, ollama_max_tokens * 12)
-            self.ollama_client = OllamaEmbeddingClient(
-                llm_model_name=ollama_model,
+            # Используем LM Studio Server
+            self.embedding_client = LMStudioEmbeddingClient(
+                model_name=ollama_model,
                 base_url=ollama_base_url,
-                max_text_length=max_text_length,
-                llm_thinking_level=ollama_thinking_level,
             )
 
         logger.info(
@@ -183,8 +181,8 @@ class ReportGenerator:
     ) -> List[Dict[str, Any]]:
         """Получение рекомендаций через Ollama."""
 
-        if not self.ollama_client:
-            logger.debug("Генератор рекомендаций Ollama не настроен")
+        if not self.embedding_client:
+            logger.debug("Генератор рекомендаций LM Studio не настроен")
             return []
 
         payload = self._build_recommendation_payload(
@@ -213,14 +211,14 @@ class ReportGenerator:
             return []
 
         try:
-            async with self.ollama_client:
-                response = await self.ollama_client.generate_summary(
+            async with self.embedding_client:
+                response = await self.embedding_client.generate_summary(
                     prompt,
                     temperature=self.ollama_temperature,
                     max_tokens=self.ollama_max_tokens,
                 )
         except Exception as exc:  # pragma: no cover - внешнее API
-            logger.warning("Не удалось получить рекомендации от Ollama: %s", exc)
+            logger.warning("Не удалось получить рекомендации от LM Studio: %s", exc)
             return []
 
         return self._parse_llm_recommendations(response)

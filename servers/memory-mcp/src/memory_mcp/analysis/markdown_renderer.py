@@ -6,10 +6,11 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..utils.datetime_utils import format_datetime_display
 from ..utils.naming import slugify
 
 logger = logging.getLogger(__name__)
@@ -371,13 +372,10 @@ class MarkdownRenderer:
         return lines
 
     def _format_time(self, iso: Optional[str]) -> str:
-        if not iso:
-            return "—"
-        try:
-            dt = datetime.fromisoformat(iso)
-            return dt.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            return iso
+        """Форматирует ISO строку времени для отображения."""
+        from ..utils.datetime_utils import format_datetime_display
+
+        return format_datetime_display(iso, format_type="datetime", fallback=iso or "—")
 
     def _format_float(self, value: Optional[float]) -> str:
         if value is None:
@@ -423,7 +421,7 @@ class MarkdownRenderer:
         lines.append(f"# Сводка чата {chat}")
         lines.append("")
         lines.append(
-            f"Всего сессий: {len(sessions)} · Период: {time_range} · Обновлено: {datetime.now().strftime('%Y-%m-%d')}"
+            f"Всего сессий: {len(sessions)} · Период: {time_range} · Обновлено: {format_datetime_display(datetime.now(timezone.utc), format_type='date')}"
         )
         lines.append(
             f"Участники: {', '.join(sorted(participants)) if participants else '—'}"
@@ -628,7 +626,10 @@ class MarkdownRenderer:
         lines = []
         lines.append(f"# Накапливающийся контекст чата {chat}")
         lines.append("")
-        lines.append(f"**Обновлено:** {datetime.now().strftime('%Y-%m-%d %H:%M')} BKK")
+
+        lines.append(
+            f"**Обновлено:** {format_datetime_display(datetime.now(timezone.utc), format_type='%Y-%m-%d %H:%M', timezone_name='Asia/Bangkok')} BKK"
+        )
         lines.append(f"**Всего сессий:** {len(sessions)}")
         lines.append("")
 

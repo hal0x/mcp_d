@@ -101,47 +101,42 @@ def normalize_message(chat_name: str, raw: dict) -> dict | None:
 
 
 def load_chat_file(path: Path) -> dict[str, list[dict]]:
+    """Загружает файл чата (JSON или JSONL) с нормализацией сообщений (использует общую утилиту)."""
+    from ...utils.json_loader import load_json_or_jsonl
+
     try:
-        with open(path, encoding="utf-8") as fp:
-            payload = json.load(fp)
-        is_ndjson = False
-    except json.JSONDecodeError:
-        is_ndjson = True
+        file_messages, is_jsonl = load_json_or_jsonl(path)
     except Exception as exc:  # pragma: no cover - logging failure only
         logger.error("Не удалось загрузить файл чата %s: %s", path, exc)
         return {}
 
     messages: list[dict] = []
 
-    if not is_ndjson:
-        chat_name = payload.get("name") or path.parent.name or path.stem
-        for raw in payload.get("messages", []):
+    if is_jsonl:
+        chat_name = path.parent.name or path.stem
+        for raw in file_messages:
             normalized = normalize_message(chat_name, raw)
             if normalized:
                 messages.append(normalized)
     else:
-        chat_name = path.parent.name or path.stem
-        with open(path, encoding="utf-8") as fp:
-            for line_number, line in enumerate(fp, start=1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    raw = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    logger.error(
-                        "Некорректная JSON-строка в %s:%d — %s",
-                        path,
-                        line_number,
-                        exc,
-                    )
-                    continue
-
+        # Обычный JSON - может быть объект с полем "messages" или список
+        if isinstance(file_messages, list) and file_messages:
+            # Если это список, используем имя директории
+            chat_name = path.parent.name or path.stem
+            for raw in file_messages:
+                normalized = normalize_message(chat_name, raw)
+                if normalized:
+                    messages.append(normalized)
+        elif isinstance(file_messages, dict):
+            # Если это словарь, ищем поле "messages"
+            chat_name = file_messages.get("name") or path.parent.name or path.stem
+            for raw in file_messages.get("messages", []):
                 normalized = normalize_message(chat_name, raw)
                 if normalized:
                     messages.append(normalized)
 
     if not messages:
+        chat_name = path.parent.name or path.stem
         logger.warning(
             "В чате %s (%s) не найдено подходящих сообщений", chat_name, path
         )

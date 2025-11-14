@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
+from ..utils.datetime_utils import parse_datetime_utc
 from .graph_types import DocChunkNode, EdgeType, GraphEdge, GraphNode, NodeType
 from .typed_graph import TypedGraphMemory
 
@@ -175,7 +176,7 @@ class TradingMemory:
             results.append(
                 {
                     "signal_id": row[0],
-                    "timestamp": datetime.fromisoformat(row[1]),
+                    "timestamp": parse_datetime_utc(row[1], use_zoneinfo=False) if row[1] else datetime.now(timezone.utc),
                     "symbol": row[2],
                     "signal_type": row[3],
                     "direction": row[4],
@@ -209,7 +210,7 @@ class TradingMemory:
         result: dict[str, Any] = {
             "signal": {
                 "signal_id": row[0],
-                "timestamp": datetime.fromisoformat(row[1]),
+                "timestamp": parse_datetime_utc(row[1], use_zoneinfo=False) if row[1] else datetime.now(timezone.utc),
                 "symbol": row[2],
                 "signal_type": row[3],
                 "direction": row[4],
@@ -220,7 +221,7 @@ class TradingMemory:
         }
         if performance:
             closed_at = (
-                datetime.fromisoformat(performance[2]) if performance[2] else None
+                parse_datetime_utc(performance[2], return_none_on_error=True) if performance[2] else None
             )
             result["performance"] = {
                 "pnl": performance[0],
@@ -380,9 +381,7 @@ class TradingMemory:
         )
         if isinstance(raw_message_ts, str):
             with suppress(Exception):
-                message_timestamp = datetime.fromisoformat(
-                    raw_message_ts.replace("Z", "+00:00")
-                )
+                message_timestamp = parse_datetime_utc(raw_message_ts, use_zoneinfo=False)
         elif isinstance(raw_message_ts, datetime):
             message_timestamp = raw_message_ts.astimezone(timezone.utc)
 

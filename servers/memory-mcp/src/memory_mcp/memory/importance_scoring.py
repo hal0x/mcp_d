@@ -231,10 +231,9 @@ class EvictionScorer:
 
         try:
             # Парсим дату
-            if date_str.endswith("Z"):
-                date_str = date_str[:-1] + "+00:00"
+            from ..utils.datetime_utils import parse_datetime_utc
 
-            msg_time = datetime.fromisoformat(date_str)
+            msg_time = parse_datetime_utc(date_str, use_zoneinfo=True)
 
             # Убираем timezone для вычислений
             if msg_time.tzinfo is not None:

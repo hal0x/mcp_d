@@ -8,7 +8,7 @@
 
 | Слой | Назначение | Ключевые директории/файлы |
 |------|------------|---------------------------|
-| Внешние интерфейсы | CLI, сценарии автоматизации, MCP‑сервер | `src/memory_mcp/cli/`, `scripts/`, `scripts/mcp_server.py` |
+| Внешние интерфейсы | CLI, сценарии автоматизации, MCP‑сервер | `src/memory_mcp/cli/`, `scripts/`, `src/memory_mcp/mcp/server.py`, `run_server.py` |
 | Оркестрация и ядро | Управление индексированием, доступ к Ollama и хранилищам | `src/memory_mcp/core/indexer.py`, `src/memory_mcp/core/ollama_client.py` |
 | Аналитика и агрегация | Сегментация, саммаризация, контроль качества, кластеры, отчёты | `src/memory_mcp/analysis/` |
 | Поиск и память | Векторный/гибридный поиск, граф инсайтов и долговременная память | `src/memory_mcp/search/`, `src/memory_mcp/memory/` |
@@ -44,8 +44,8 @@
 
 - `src/memory_mcp/cli/main.py` — точка входа для команд `index`, `summarize`, `search`,
   `insight-graph` и комплексного пайплайна `full-process`.
-- `scripts/mcp_server.py` — сервер для MCP‑интеграций ассистентов, поверх общих
-  сервисов индексатора.
+- `src/memory_mcp/mcp/server.py` — MCP сервер для stdio режима (интеграции с MCP клиентами).
+- `run_server.py` — HTTP сервер для Docker/продакшена (FastAPI + FastApiMCP).
 - Директория `scripts/` содержит вспомогательные утилиты (например, проверку окружения).
 
 ### Ядро индексатора

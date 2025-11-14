@@ -10,7 +10,7 @@ from typing import Any, Iterable, Sequence
 import networkx as nx
 import yaml
 
-from ..core.ollama_client import OllamaEmbeddingClient
+from ..core.lmstudio_client import LMStudioEmbeddingClient
 
 try:
     import chromadb  # type: ignore
@@ -84,7 +84,7 @@ class SummaryInsightAnalyzer:
         summaries_dir: Path | str = Path("artifacts/reports"),
         chroma_path: Path | str = Path("./chroma_db"),
         *,
-        ollama_client: OllamaEmbeddingClient | None = None,
+        embedding_client: LMStudioEmbeddingClient | None = None,
         chroma_client: Any | None = None,
         similarity_threshold: float = 0.76,
         max_similar_results: int = 8,
@@ -93,8 +93,8 @@ class SummaryInsightAnalyzer:
         self.chroma_path = Path(chroma_path)
         self.similarity_threshold = similarity_threshold
         self.max_similar_results = max_similar_results
-        self.ollama_client = ollama_client or OllamaEmbeddingClient()
-        self._own_ollama_client = ollama_client is None
+        self.embedding_client = embedding_client or LMStudioEmbeddingClient()
+        self._own_embedding_client = embedding_client is None
         self.chroma_client = chroma_client or (
             chromadb.PersistentClient(path=str(self.chroma_path)) if chromadb else None
         )
@@ -108,13 +108,13 @@ class SummaryInsightAnalyzer:
                 self.summary_collection = None
 
     async def __aenter__(self) -> SummaryInsightAnalyzer:
-        if self._own_ollama_client:
-            await self.ollama_client.__aenter__()
+        if self._own_embedding_client:
+            await self.embedding_client.__aenter__()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        if self._own_ollama_client:
-            await self.ollama_client.__aexit__(exc_type, exc_val, exc_tb)
+        if self._own_embedding_client:
+            await self.embedding_client.__aexit__(exc_type, exc_val, exc_tb)
 
     def load_documents(self) -> list[SummaryDocument]:
         """Load all markdown summaries from the configured directory."""
@@ -254,7 +254,7 @@ class SummaryInsightAnalyzer:
     ) -> None:
         if self.summary_collection is None:
             return
-        embeddings = await self.ollama_client.generate_embeddings(
+        embeddings = await self.embedding_client.generate_embeddings(
             [doc.embedding_text for doc in documents]
         )
         for doc, embedding in zip(documents, embeddings):

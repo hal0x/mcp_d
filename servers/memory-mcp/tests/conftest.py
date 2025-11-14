@@ -7,6 +7,13 @@ from pathlib import Path
 
 import pytest
 
+# Импортируем фикстуры для нового MCP сервера
+from tests.fixtures.mcp_server import (  # noqa: F401
+    mcp_server,
+    mcp_server_adapter,
+    temp_db_path,
+)
+
 
 @pytest.fixture(scope="session")
 def event_loop():

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-from ..core.ollama_client import OllamaEmbeddingClient
+from ..core.lmstudio_client import LMStudioEmbeddingClient
 from ..utils.naming import slugify
 from .context_manager import ContextManager
 from .entity_extraction import EntityExtractor
@@ -124,7 +124,7 @@ class SessionSummarizer:
 
     def __init__(
         self,
-        ollama_client: Optional[OllamaEmbeddingClient] = None,
+        embedding_client: Optional[LMStudioEmbeddingClient] = None,
         summaries_dir: Path = Path("artifacts/reports"),
         instruction_manager: Optional[InstructionManager] = None,
         enable_quality_check: bool = True,
@@ -135,14 +135,14 @@ class SessionSummarizer:
         Инициализация саммаризатора
 
         Args:
-            ollama_client: Клиент Ollama (если None, создаётся новый)
+            embedding_client: Клиент для генерации эмбеддингов и текста (LM Studio, если None, создаётся новый)
             summaries_dir: Директория с саммаризациями для контекста
             instruction_manager: Менеджер специальных инструкций
             enable_quality_check: Включить проверку качества
             enable_iterative_refinement: Включить итеративное улучшение
             min_quality_score: Минимальный приемлемый балл качества
         """
-        self.ollama_client = ollama_client or OllamaEmbeddingClient()
+        self.embedding_client = embedding_client or LMStudioEmbeddingClient()
         self.entity_extractor = EntityExtractor()
         self.session_segmenter = SessionSegmenter()
         self.context_manager = ContextManager(summaries_dir)
@@ -217,8 +217,8 @@ class SessionSummarizer:
         )
 
         # Генерируем саммаризацию через LLM
-        async with self.ollama_client:
-            summary_text = await self.ollama_client.generate_summary(
+        async with self.embedding_client:
+            summary_text = await self.embedding_client.generate_summary(
                 prompt=prompt,
                 temperature=0.3,
                 max_tokens=8000,
@@ -481,10 +481,13 @@ class SessionSummarizer:
                 from zoneinfo import ZoneInfo
 
                 if date_str:
-                    if date_str.endswith("Z"):
-                        date_str = date_str[:-1] + "+00:00"
-                    dt = datetime.fromisoformat(date_str)
-                    time_str = dt.astimezone(ZoneInfo("Asia/Bangkok")).strftime("%H:%M")
+                    from ..utils.datetime_utils import parse_datetime_utc
+
+                    dt = parse_datetime_utc(date_str, use_zoneinfo=True)
+                    if dt:
+                        time_str = dt.astimezone(ZoneInfo("Asia/Bangkok")).strftime("%H:%M")
+                    else:
+                        time_str = "??:??"
                 else:
                     time_str = "??:??"
             except Exception:
@@ -1208,15 +1211,11 @@ class SessionSummarizer:
         return author.get("display") or author.get("username") or "автор"
 
     def _format_message_time(self, msg: Dict[str, Any]) -> str:
+        """Форматирует время сообщения для отображения."""
+        from ..utils.datetime_utils import format_datetime_display
+
         date = msg.get("date_utc") or msg.get("date")
-        if not date:
-            return "??:??"
-        try:
-            normalized = date.replace("Z", "+00:00")
-            dt = datetime.fromisoformat(normalized)
-            return dt.strftime("%H:%M")
-        except Exception:
-            return "??:??"
+        return format_datetime_display(date, format_type="time", fallback="??:??")
 
     def _truncate_text(self, text: str, max_len: int) -> str:
         if len(text) <= max_len:
@@ -2137,12 +2136,10 @@ class SessionSummarizer:
         msg_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         original_ts = msg.get("date_utc") or msg.get("date") or ""
-        if original_ts.endswith("Z"):
-            original_ts = original_ts[:-1] + "+00:00"
+        from ..utils.datetime_utils import parse_datetime_utc
+
         try:
-            dt_utc = datetime.fromisoformat(original_ts)
-            if dt_utc.tzinfo is None:
-                dt_utc = dt_utc.replace(tzinfo=ZoneInfo("UTC"))
+            dt_utc = parse_datetime_utc(original_ts, return_none_on_error=True, use_zoneinfo=True)
         except Exception:
             dt_utc = None
 
@@ -2180,10 +2177,14 @@ class SessionSummarizer:
         end = envelopes[-1].get("ts_bkk")
         if not start or not end:
             return ""
+        from ..utils.datetime_utils import parse_datetime_utc
+
         try:
-            start_dt = datetime.fromisoformat(start)
-            end_dt = datetime.fromisoformat(end)
-            return f"{start_dt.strftime('%Y-%m-%d %H:%M')} – {end_dt.strftime('%H:%M')} BKK"
+            start_dt = parse_datetime_utc(start, return_none_on_error=True, use_zoneinfo=True)
+            end_dt = parse_datetime_utc(end, return_none_on_error=True, use_zoneinfo=True)
+            if start_dt and end_dt:
+                return f"{start_dt.strftime('%Y-%m-%d %H:%M')} – {end_dt.strftime('%H:%M')} BKK"
+            return ""
         except Exception:
             return ""
 
@@ -2397,9 +2398,11 @@ class SessionSummarizer:
             return fallback_span
         start = segment[0].get("ts_bkk")
         end = segment[-1].get("ts_bkk")
+        from ..utils.datetime_utils import parse_datetime_utc
+
         try:
-            start_dt = datetime.fromisoformat(start) if start else None
-            end_dt = datetime.fromisoformat(end) if end else None
+            start_dt = parse_datetime_utc(start, return_none_on_error=True, use_zoneinfo=True) if start else None
+            end_dt = parse_datetime_utc(end, return_none_on_error=True, use_zoneinfo=True) if end else None
             if start_dt and end_dt:
                 if start_dt.date() == end_dt.date():
                     return f"{start_dt.strftime('%Y-%m-%d %H:%M')} – {end_dt.strftime('%H:%M')} BKK"
@@ -3054,7 +3057,7 @@ class SessionSummarizer:
 async def summarize_chat_sessions(
     messages: List[Dict[str, Any]],
     chat_name: str,
-    ollama_client: Optional[OllamaEmbeddingClient] = None,
+    embedding_client: Optional[LMStudioEmbeddingClient] = None,
     summaries_dir: Path = Path("artifacts/reports"),
     instruction_manager: Optional[InstructionManager] = None,
 ) -> List[Dict[str, Any]]:
@@ -3064,7 +3067,7 @@ async def summarize_chat_sessions(
     Args:
         messages: Список сообщений
         chat_name: Название чата
-        ollama_client: Клиент Ollama
+        embedding_client: Клиент для генерации эмбеддингов и текста (LM Studio)
         summaries_dir: Директория с саммаризациями для контекста
 
     Returns:
@@ -3076,7 +3079,7 @@ async def summarize_chat_sessions(
 
     # Саммаризируем каждую сессию
     summarizer = SessionSummarizer(
-        ollama_client,
+        embedding_client,
         summaries_dir,
         instruction_manager=instruction_manager,
     )

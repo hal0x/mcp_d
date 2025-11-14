@@ -11,7 +11,7 @@ PROJECT_DIR=$(pwd)
 VENV_PYTHON="$PROJECT_DIR/.venv/bin/python"
 
 # Проверяем, что мы в правильной директории
-if [ ! -f "scripts/mcp_server.py" ]; then
+if [ ! -f "src/memory_mcp/mcp/server.py" ]; then
     echo "❌ Скрипт должен быть запущен из корневой директории проекта"
     echo "💡 Перейдите в директорию проекта и запустите снова"
     exit 1
@@ -30,7 +30,7 @@ read -r -d '' MCP_CONFIG <<EOF || true
   "mcpServers": {
     "memory-mcp": {
       "command": "$VENV_PYTHON",
-      "args": ["scripts/mcp_server.py"],
+      "args": ["-m", "memory_mcp.mcp.server"],
       "cwd": "$PROJECT_DIR",
       "env": {
         "PYTHONPATH": "$PROJECT_DIR"
@@ -42,7 +42,7 @@ read -r -d '' MCP_CONFIG <<EOF || true
       "mcpServers": {
         "memory-mcp": {
           "command": "$VENV_PYTHON",
-          "args": ["scripts/mcp_server.py"],
+          "args": ["-m", "memory_mcp.mcp.server"],
           "cwd": "$PROJECT_DIR",
           "env": {
             "PYTHONPATH": "$PROJECT_DIR"

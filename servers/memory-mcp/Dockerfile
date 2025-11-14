@@ -1,17 +1,37 @@
 # syntax=docker/dockerfile:1.6
-# Обновленный Dockerfile для memory-mcp с использованием базового образа
+# Обновленный Dockerfile для memory-mcp по аналогии с binance-mcp
 FROM mcp-base:latest
 
 # Переключение на root для установки пакетов
 USER root
 
 # Копируем специфичные зависимости сервиса
-COPY pyproject.toml README.md ./
-COPY src ./src
-COPY scripts ./scripts
+COPY pyproject.toml uv.lock ./
 
-# Установка пакета
-RUN pip install --no-cache-dir -e .
+# Копируем директорию src для editable установки
+COPY src/ ./src/
+
+# Копируем предкомпилированные wheels (если есть) для оптимизации сборки
+# Это ускоряет установку тяжелых пакетов (numpy, scipy, hdbscan и др.)
+# Примечание: если директория wheels/ не существует, эта команда завершится с ошибкой.
+# В таком случае нужно либо создать пустую директорию wheels/, либо закомментировать эту строку.
+COPY wheels/ ./wheels/
+
+# Устанавливаем зависимости сервиса через uv (используем слой манифестов)
+# Используем локальные wheels если они доступны (--find-links)
+RUN if [ -d "./wheels" ] && [ "$(ls -A ./wheels 2>/dev/null)" ]; then \
+        echo "Используем локальные wheels для ускорения сборки"; \
+        uv sync --frozen --no-dev --find-links ./wheels; \
+    else \
+        echo "Локальные wheels не найдены, используем стандартную установку"; \
+        uv sync --frozen --no-dev; \
+    fi
+
+# Копируем остальной исходный код сервиса
+COPY . .
+
+# Устанавливаем PATH на виртуальное окружение uv
+ENV PATH="/app/.venv/bin:${PATH}"
 
 # Переключение обратно на непривилегированного пользователя
 USER mcp
@@ -19,5 +39,5 @@ USER mcp
 # Экспорт порта сервиса
 EXPOSE 8050
 
-# Команда запуска сервиса
-CMD ["python", "scripts/mcp_server.py", "--host", "0.0.0.0", "--port", "8050"]
+# Команда запуска сервиса (используем новый HTTP сервер)
+CMD ["python", "run_server.py"]

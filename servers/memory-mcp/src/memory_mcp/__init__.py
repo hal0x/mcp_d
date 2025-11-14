@@ -14,7 +14,7 @@ __email__ = "team@memory_mcp.dev"
 
 from .analysis.insight_graph import SummaryInsightAnalyzer
 from .core.indexer import TwoLevelIndexer
-from .core.ollama_client import OllamaEmbeddingClient
+from .core.lmstudio_client import LMStudioEmbeddingClient
 from .indexing import (
     Attachment,
     BaseIndexer,
@@ -24,7 +24,7 @@ from .indexing import (
 
 __all__ = [
     "TwoLevelIndexer",
-    "OllamaEmbeddingClient",
+    "LMStudioEmbeddingClient",
     "SummaryInsightAnalyzer",
     "BaseIndexer",
     "TelegramIndexer",

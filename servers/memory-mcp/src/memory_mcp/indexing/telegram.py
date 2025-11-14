@@ -8,24 +8,15 @@ from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional
 
 from ..quality_analyzer.utils.data_processor import load_chats_from_directory
+from ..utils.datetime_utils import parse_datetime_utc
 from .base import Attachment, BaseIndexer, IndexingStats, MemoryRecord
 
 logger = logging.getLogger(__name__)
 
 
 def _parse_datetime(value: str | None) -> datetime:
-    if not value:
-        return datetime.now(timezone.utc)
-    try:
-        if value.endswith("Z"):
-            value = value[:-1] + "+00:00"
-        dt = datetime.fromisoformat(value)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:  # pragma: no cover - fallback
-        logger.debug("Не удалось распарсить дату %s, используем текущее время", value)
-        return datetime.now(timezone.utc)
+    """Парсинг даты (использует общую утилиту)."""
+    return parse_datetime_utc(value, default=datetime.now(timezone.utc))
 
 
 class TelegramIndexer(BaseIndexer):

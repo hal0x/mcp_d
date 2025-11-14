@@ -122,14 +122,10 @@ class IncrementalContextManager:
         return earliest_time
 
     def _parse_message_time(self, message: Dict[str, Any]) -> datetime:
-        """Парсит время сообщения"""
-        try:
-            date_str = message.get("date_utc") or message.get("date", "")
-            if date_str.endswith("Z"):
-                date_str = date_str.replace("Z", "+00:00")
-            return datetime.fromisoformat(date_str)
-        except (ValueError, TypeError):
-            return datetime.now(ZoneInfo("UTC"))
+        """Парсит время сообщения (использует общую утилиту)."""
+        from ..utils.datetime_utils import parse_message_time
+
+        return parse_message_time(message, use_zoneinfo=True)
 
     def _load_previous_messages(
         self,
@@ -318,12 +314,11 @@ class IncrementalContextManager:
 
                 # Пробуем получить время окончания из разных полей
                 if session["end_time_utc"]:
-                    try:
-                        session_end_time = datetime.fromisoformat(
-                            session["end_time_utc"]
-                        )
-                    except (ValueError, TypeError):
-                        pass
+                    from ..utils.datetime_utils import parse_datetime_utc
+
+                    session_end_time = parse_datetime_utc(
+                        session["end_time_utc"], return_none_on_error=True, use_zoneinfo=True
+                    )
 
                 # Если end_time_utc пустое, пробуем парсить из time_span
                 if not session_end_time and metadata.get("time_span"):
@@ -334,8 +329,10 @@ class IncrementalContextManager:
                             end_part = time_span.split(" – ")[1].split(" BKK")[0]
                             # Предполагаем, что это время в том же дне
                             date_part = time_span.split(" – ")[0].split(" ")[0]
-                            session_end_time = datetime.fromisoformat(
-                                f"{date_part}T{end_part}:00+07:00"
+                            from ..utils.datetime_utils import parse_datetime_utc
+
+                            session_end_time = parse_datetime_utc(
+                                f"{date_part}T{end_part}:00+07:00", return_none_on_error=True, use_zoneinfo=True
                             )
                     except (ValueError, TypeError, IndexError):
                         pass
@@ -348,10 +345,11 @@ class IncrementalContextManager:
             def get_sort_key(session):
                 # Пробуем получить время для сортировки
                 if session.get("end_time_utc"):
-                    try:
-                        return datetime.fromisoformat(session["end_time_utc"])
-                    except:
-                        pass
+                    from ..utils.datetime_utils import parse_datetime_utc
+
+                    result = parse_datetime_utc(session["end_time_utc"], return_none_on_error=True, use_zoneinfo=True)
+                    if result:
+                        return result
                 # Если нет end_time_utc, используем session_id как fallback
                 return session.get("session_id", "")
 

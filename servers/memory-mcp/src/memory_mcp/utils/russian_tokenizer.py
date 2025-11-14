@@ -316,6 +316,25 @@ class RussianTokenizer:
 
         result = re.sub(r"₽[\d,]+(?:\.\d{2})?", replace_money_rub, result)
 
+        def normalize_amount_value(raw: str) -> str:
+            cleaned = raw.replace("\u00a0", "").replace(" ", "")
+            if "." not in cleaned and cleaned.count(",") == 1:
+                return cleaned.replace(",", ".")
+            return cleaned.replace(",", "")
+
+        currency_word_patterns = [
+            ("USD", r"(?P<amount>[\d\s,.]+)\s*(?:usd|доллар(?:ов)?|бакс(?:ов)?)"),
+            ("EUR", r"(?P<amount>[\d\s,.]+)\s*(?:eur|евро)"),
+            ("RUB", r"(?P<amount>[\d\s,.]+)\s*(?:руб(?:ля|лей)?|р(?:уб)?\.?|rub)"),
+        ]
+
+        for currency_code, pattern in currency_word_patterns:
+            def replace_currency(match, code=currency_code):
+                amount = normalize_amount_value(match.group("amount"))
+                return f"MONEY_{code} AMOUNT_{amount}"
+
+            result = re.sub(pattern, replace_currency, result, flags=re.IGNORECASE)
+
         # Обработка больших чисел с разделением на тип и значение
         # 1.5 млрд -> BILLION VALUE_1.5
         def replace_billion(match):

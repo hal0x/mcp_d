@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import chromadb
 
-from memory_mcp.core.ollama_client import OllamaEmbeddingClient
+from memory_mcp.core.lmstudio_client import LMStudioEmbeddingClient
 
 
 async def search(
@@ -38,7 +38,7 @@ async def search(
     try:
         # Инициализируем клиентов
         chroma_client = chromadb.PersistentClient(path="./chroma_db")
-        ollama_client = OllamaEmbeddingClient()
+        embedding_client = LMStudioEmbeddingClient()
 
         # Получаем коллекцию
         collection_name = f"chat_{collection}"
@@ -52,8 +52,8 @@ async def search(
             return
 
         # Генерируем эмбеддинг
-        async with ollama_client:
-            query_embedding = await ollama_client._generate_single_embedding(query)
+        async with embedding_client:
+            query_embedding = await embedding_client._generate_single_embedding(query)
 
             if not query_embedding:
                 print("❌ Не удалось сгенерировать эмбеддинг для запроса")

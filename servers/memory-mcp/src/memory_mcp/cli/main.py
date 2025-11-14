@@ -5,7 +5,6 @@ CLI интерфейс для Telegram Dump Manager
 """
 
 import asyncio
-import hashlib
 import json
 import logging
 import math
@@ -41,261 +40,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class MessageExtractor:
-    """Класс для извлечения новых сообщений с расширенной функциональностью."""
-
-    def __init__(self, input_dir: str = "input", chats_dir: str = "chats"):
-        self.input_dir = Path(input_dir)
-        self.chats_dir = Path(chats_dir)
-        current_year = datetime.now().year
-        self.cutoff_date = datetime(current_year, 1, 1, tzinfo=timezone.utc)
-        self.stats = {
-            "total_chats": 0,
-            "processed_chats": 0,
-            "skipped_chats": 0,
-            "total_messages_input": 0,
-            "total_messages_output": 0,
-            "messages_copied": 0,
-            "messages_filtered_by_date": 0,
-            "duplicates_skipped": 0,
-            "errors": 0,
-            "files_processed": 0,
-            "files_skipped": 0,
-        }
-        self.existing_messages_cache = {}
-
-    def parse_date(self, date_str: str) -> Optional[datetime]:
-        """Парсинг даты из различных форматов."""
-        if not date_str:
-            return None
-
-        try:
-            # Пробуем разные форматы
-            formats = [
-                "%Y-%m-%dT%H:%M:%S.%fZ",
-                "%Y-%m-%dT%H:%M:%SZ",
-                "%Y-%m-%dT%H:%M:%S.%f%z",
-                "%Y-%m-%dT%H:%M:%S%z",
-                "%Y-%m-%dT%H:%M:%S.%f",
-                "%Y-%m-%dT%H:%M:%S",
-                "%Y-%m-%d %H:%M:%S.%f",
-                "%Y-%m-%d %H:%M:%S",
-            ]
-
-            for fmt in formats:
-                try:
-                    dt = datetime.strptime(date_str, fmt)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    return dt
-                except ValueError:
-                    continue
-
-            # Если ничего не сработало, пробуем ISO формат
-            if date_str.endswith("Z"):
-                date_str = date_str[:-1] + "+00:00"
-            return datetime.fromisoformat(date_str)
-
-        except Exception:
-            return None
-
-    def get_message_hash(self, message: Dict) -> str:
-        """Получение хеша сообщения для дедупликации."""
-        content = ""
-        if isinstance(message, dict):
-            # Собираем ключевые поля для хеширования
-            fields = ["text", "caption", "file_name", "sticker_emoji"]
-            for field in fields:
-                if field in message and message[field]:
-                    content += str(message[field])
-
-        return hashlib.md5(content.encode("utf-8")).hexdigest()
-
-    def load_existing_messages(self, chat_dir: Path) -> Tuple[Set[str], Set[str]]:
-        """Загрузка существующих сообщений для дедупликации."""
-        existing_ids = set()
-        existing_hashes = set()
-
-        if chat_dir not in self.existing_messages_cache:
-            for json_file in chat_dir.glob("*.json"):
-                try:
-                    with open(json_file, encoding="utf-8") as f:
-                        for line in f:
-                            try:
-                                message = json.loads(line.strip())
-                                if isinstance(message, dict) and "id" in message:
-                                    existing_ids.add(str(message["id"]))
-                                    # Добавляем хеш для дополнительной дедупликации
-                                    msg_hash = self.get_message_hash(message)
-                                    existing_hashes.add(msg_hash)
-                            except json.JSONDecodeError:
-                                continue
-                except Exception:
-                    continue
-
-            self.existing_messages_cache[chat_dir] = (existing_ids, existing_hashes)
-
-        return self.existing_messages_cache[chat_dir]
-
-    def filter_messages(
-        self,
-        messages: List[Dict],
-        existing_ids: Set[str],
-        existing_hashes: Set[str],
-        filter_by_date: bool = True,
-    ) -> List[Dict]:
-        """Фильтрация сообщений по дате и дубликатам."""
-        filtered = []
-
-        for message in messages:
-            if not isinstance(message, dict):
-                continue
-
-            # Проверка дубликатов по ID
-            if "id" in message and str(message["id"]) in existing_ids:
-                self.stats["duplicates_skipped"] += 1
-                continue
-
-            # Проверка дубликатов по хешу
-            msg_hash = self.get_message_hash(message)
-            if msg_hash in existing_hashes:
-                self.stats["duplicates_skipped"] += 1
-                continue
-
-            # Фильтрация по дате
-            if filter_by_date and "date" in message:
-                msg_date = self.parse_date(message["date"])
-                if msg_date and msg_date < self.cutoff_date:
-                    self.stats["messages_filtered_by_date"] += 1
-                    continue
-
-            filtered.append(message)
-            self.stats["messages_copied"] += 1
-
-        return filtered
-
-    def extract_chat_messages(
-        self,
-        input_chat_dir: Path,
-        chats_chat_dir: Path,
-        dry_run: bool = False,
-        filter_by_date: bool = True,
-    ) -> Dict[str, int]:
-        """Извлечение сообщений для одного чата."""
-        chat_stats = {
-            "files_processed": 0,
-            "files_skipped": 0,
-            "messages_copied": 0,
-            "messages_filtered_by_date": 0,
-            "duplicates_skipped": 0,
-            "errors": 0,
-        }
-
-        if not input_chat_dir.exists():
-            return chat_stats
-
-        # Загружаем существующие сообщения для дедупликации
-        existing_ids, existing_hashes = self.load_existing_messages(chats_chat_dir)
-
-        # Обрабатываем все JSON файлы в директории чата
-        for json_file in input_chat_dir.glob("*.json"):
-            try:
-                with open(json_file, encoding="utf-8") as f:
-                    messages = []
-                    for line in f:
-                        try:
-                            message = json.loads(line.strip())
-                            messages.append(message)
-                        except json.JSONDecodeError:
-                            continue
-
-                # Фильтруем сообщения
-                filtered_messages = self.filter_messages(
-                    messages, existing_ids, existing_hashes, filter_by_date
-                )
-
-                if filtered_messages:
-                    if not dry_run:
-                        # Создаем директорию если не существует
-                        chats_chat_dir.mkdir(parents=True, exist_ok=True)
-
-                        # Записываем новые сообщения
-                        output_file = chats_chat_dir / json_file.name
-                        with open(output_file, "a", encoding="utf-8") as f:
-                            for message in filtered_messages:
-                                f.write(json.dumps(message, ensure_ascii=False) + "\n")
-
-                    chat_stats["files_processed"] += 1
-                    chat_stats["messages_copied"] += len(filtered_messages)
-                else:
-                    chat_stats["files_skipped"] += 1
-
-            except Exception as e:
-                logger.error(f"Ошибка обработки файла {json_file}: {e}")
-                chat_stats["errors"] += 1
-
-        return chat_stats
-
-    def extract_all_messages(
-        self,
-        dry_run: bool = False,
-        filter_by_date: bool = True,
-        chat_filter: Optional[str] = None,
-    ) -> Dict[str, int]:
-        """Извлечение сообщений для всех чатов."""
-        if not self.input_dir.exists():
-            logger.error(f"Директория {self.input_dir} не найдена")
-            return self.stats
-
-        # Получаем список всех чатов
-        chat_dirs = [d for d in self.input_dir.iterdir() if d.is_dir()]
-        self.stats["total_chats"] = len(chat_dirs)
-
-        for chat_dir in chat_dirs:
-            chat_name = chat_dir.name
-
-            # Фильтрация по названию чата
-            if chat_filter and chat_filter.lower() not in chat_name.lower():
-                self.stats["skipped_chats"] += 1
-                continue
-
-            chats_chat_dir = self.chats_dir / chat_name
-
-            logger.info(f"Обработка чата: {chat_name}")
-
-            # Извлекаем сообщения для чата
-            chat_stats = self.extract_chat_messages(
-                chat_dir, chats_chat_dir, dry_run, filter_by_date
-            )
-
-            # Обновляем общую статистику
-            for key, value in chat_stats.items():
-                self.stats[key] += value
-
-            self.stats["processed_chats"] += 1
-
-            logger.info(
-                f"Чата {chat_name}: {chat_stats['messages_copied']} сообщений скопировано"
-            )
-
-        return self.stats
-
-    def print_stats(self):
-        """Вывод статистики извлечения."""
-        print("\n" + "=" * 60)
-        print("📊 СТАТИСТИКА ИЗВЛЕЧЕНИЯ СООБЩЕНИЙ")
-        print("=" * 60)
-        print(f"📁 Всего чатов: {self.stats['total_chats']}")
-        print(f"✅ Обработано чатов: {self.stats['processed_chats']}")
-        print(f"⏭️  Пропущено чатов: {self.stats['skipped_chats']}")
-        print(f"📄 Обработано файлов: {self.stats['files_processed']}")
-        print(f"⏭️  Пропущено файлов: {self.stats['files_skipped']}")
-        print(f"📨 Всего сообщений на входе: {self.stats['total_messages_input']}")
-        print(f"📤 Сообщений скопировано: {self.stats['messages_copied']}")
-        print(f"📅 Отфильтровано по дате: {self.stats['messages_filtered_by_date']}")
-        print(f"🔄 Пропущено дубликатов: {self.stats['duplicates_skipped']}")
-        print(f"❌ Ошибок: {self.stats['errors']}")
-        print("=" * 60)
+# Импортируем MessageExtractor из общего модуля
+from ..utils.message_extractor import MessageExtractor
 
 
 class MessageDeduplicator:
@@ -343,20 +89,10 @@ class MessageDeduplicator:
         chat_stats["total_messages"] = len(all_messages)
 
         # Дедупликация по полю 'id'
-        seen_ids = set()
-        unique_messages = []
+        from ..utils.deduplication import deduplicate_by_id
 
-        for message in all_messages:
-            if "id" in message:
-                msg_id = str(message["id"])
-                if msg_id not in seen_ids:
-                    seen_ids.add(msg_id)
-                    unique_messages.append(message)
-                else:
-                    chat_stats["duplicates_removed"] += 1
-            else:
-                # Сообщения без ID добавляем как есть
-                unique_messages.append(message)
+        unique_messages = deduplicate_by_id(all_messages)
+        chat_stats["duplicates_removed"] = len(all_messages) - len(unique_messages)
 
         chat_stats["unique_messages"] = len(unique_messages)
 
@@ -668,23 +404,28 @@ def check(embedding_model):
     async def _check():
         import chromadb
 
-        from ..core.ollama_client import OllamaEmbeddingClient
+        from ..core.lmstudio_client import LMStudioEmbeddingClient
+        from ..config import get_settings
 
         click.echo("🔧 Проверка системы...")
 
-        # Проверяем Ollama
+        # Проверяем LM Studio Server
         try:
-            ollama_client = OllamaEmbeddingClient(model_name=embedding_model)
-            async with ollama_client:
-                available = await ollama_client.test_connection()
-                if not available or not available.get("ollama_available", False):
-                    click.echo("❌ Ollama недоступен")
-                    click.echo("Убедитесь, что Ollama запущен: ollama serve")
+            settings = get_settings()
+            lmstudio_client = LMStudioEmbeddingClient(
+                model_name=embedding_model or settings.lmstudio_model,
+                base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
+            )
+            async with lmstudio_client:
+                available = await lmstudio_client.test_connection()
+                if not available or not available.get("lmstudio_available", False):
+                    click.echo("❌ LM Studio Server недоступен")
+                    click.echo(f"Убедитесь, что LM Studio Server запущен на {settings.lmstudio_host}:{settings.lmstudio_port}")
                     return False
 
                 if not available.get("model_available", False):
                     click.echo("❌ Модель для эмбеддингов не найдена")
-                    click.echo(f"Установка: ollama pull {embedding_model}")
+                    click.echo(f"Убедитесь, что модель {embedding_model or settings.lmstudio_model} загружена в LM Studio Server")
                     return False
 
                 click.echo("✅ Ollama доступен")
@@ -904,10 +645,16 @@ def index(
 
         # Создаём индексатор с параметрами качества и кластеризации
         click.echo("📦 Инициализация индексатора...")
-        from ..core.ollama_client import OllamaEmbeddingClient
-        ollama_client = OllamaEmbeddingClient(model_name=embedding_model)
+        from ..core.lmstudio_client import LMStudioEmbeddingClient
+        from ..config import get_settings
+        
+        settings = get_settings()
+        embedding_client = LMStudioEmbeddingClient(
+            model_name=embedding_model or settings.lmstudio_model,
+            base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
+        )
         indexer = TwoLevelIndexer(
-            ollama_client=ollama_client,
+            embedding_client=embedding_client,
             enable_quality_check=not no_quality_check,
             enable_iterative_refinement=not no_improvement,
             min_quality_score=min_quality,
@@ -1247,7 +994,8 @@ def search(query, limit, collection, chat, highlight, embedding_model):
     async def _search():
         import chromadb
 
-        from ..core.ollama_client import OllamaEmbeddingClient
+        from ..core.lmstudio_client import LMStudioEmbeddingClient
+        from ..config import get_settings
 
         click.echo(f"🔍 Поиск в коллекции '{collection}': '{query}'")
         if chat:
@@ -1256,7 +1004,11 @@ def search(query, limit, collection, chat, highlight, embedding_model):
         try:
             # Инициализируем клиентов
             chroma_client = chromadb.PersistentClient(path="./chroma_db")
-            ollama_client = OllamaEmbeddingClient(model_name=embedding_model)
+            settings = get_settings()
+            embedding_client = LMStudioEmbeddingClient(
+                model_name=embedding_model or settings.lmstudio_model,
+                base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
+            )
 
             # Получаем коллекцию
             collection_name = f"chat_{collection}"
@@ -1268,8 +1020,8 @@ def search(query, limit, collection, chat, highlight, embedding_model):
                 return
 
             # Генерируем эмбеддинг
-            async with ollama_client:
-                query_embedding = await ollama_client._generate_single_embedding(query)
+            async with embedding_client:
+                query_embedding = await embedding_client._generate_single_embedding(query)
 
                 if not query_embedding:
                     click.echo("❌ Не удалось сгенерировать эмбеддинг для запроса")
@@ -1821,16 +1573,9 @@ def update_summaries(chat, force):
 
         def parse_message_time(date_str: str) -> datetime:
             try:
-                if not date_str:
-                    return datetime.now(ZoneInfo("UTC"))
-                if date_str.endswith("Z"):
-                    date_str = date_str[:-1] + "+00:00"
-                dt = datetime.fromisoformat(date_str)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=ZoneInfo("UTC"))
-                else:
-                    dt = dt.astimezone(ZoneInfo("UTC"))
-                return dt
+                from ..utils.datetime_utils import parse_datetime_utc
+
+                return parse_datetime_utc(date_str, default=datetime.now(ZoneInfo("UTC")), use_zoneinfo=True)
             except Exception:
                 return datetime.now(ZoneInfo("UTC"))
 
@@ -2317,7 +2062,8 @@ def review_summaries(dry_run, chat, limit):
     """
     import json
 
-    from ..core.ollama_client import OllamaEmbeddingClient
+    from ..core.lmstudio_client import LMStudioEmbeddingClient
+    from ..config import get_settings
 
     async def _review_summaries():
         click.echo("🔍 Автоматическое ревью и исправление саммаризаций")
@@ -2363,7 +2109,11 @@ def review_summaries(dry_run, chat, limit):
         click.echo()
 
         # Создаем LLM клиент
-        ollama_client = OllamaEmbeddingClient()
+        settings = get_settings()
+        embedding_client = LMStudioEmbeddingClient(
+            model_name=settings.lmstudio_model,
+            base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
+        )
 
         async def review_summary(md_content: str) -> dict:
             prompt = f"""Ты - эксперт по анализу и улучшению саммаризаций чатов.
@@ -2388,11 +2138,15 @@ def review_summaries(dry_run, chat, limit):
 Верни ТОЛЬКО улучшенный markdown-текст БЕЗ дополнительных комментариев."""
 
             try:
-                async with ollama_client:
-                    response = await ollama_client._raw_generate(prompt)
+                async with embedding_client:
+                    improved = await embedding_client.generate_summary(
+                        prompt,
+                        temperature=0.3,
+                        max_tokens=8000,
+                    )
+                    improved = improved.strip()
 
-                    if response and "response" in response:
-                        improved = response["response"].strip()
+                    if improved:
 
                         # Анализируем изменения
                         issues_found = []

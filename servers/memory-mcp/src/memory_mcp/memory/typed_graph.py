@@ -409,9 +409,9 @@ class TypedGraphMemory:
                         timestamp_dt = datetime.fromtimestamp(float(timestamp_raw), tz=timezone.utc)
                     else:
                         ts = str(timestamp_raw)
-                        if ts.endswith("Z"):
-                            ts = ts[:-1] + "+00:00"
-                        timestamp_dt = datetime.fromisoformat(ts)
+                        from ..utils.datetime_utils import parse_datetime_utc
+
+                        timestamp_dt = parse_datetime_utc(ts, return_none_on_error=True, use_zoneinfo=True)
                 except Exception:
                     timestamp_dt = None
 

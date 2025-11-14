@@ -16,7 +16,7 @@ from .core import (
     ReportGenerator,
 )
 from .quality_analyzer import QualityAnalyzer
-from .utils import log_error, safe_execute, swallow_errors
+from .utils import format_error_message, log_error, safe_execute, swallow_errors
 
 __all__ = [
     "QueryGenerator",
@@ -25,6 +25,7 @@ __all__ = [
     "ReportGenerator",
     "HistoryManager",
     "QualityAnalyzer",
+    "format_error_message",
     "log_error",
     "safe_execute",
     "swallow_errors",

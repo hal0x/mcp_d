@@ -109,7 +109,12 @@ class SessionClusterer:
                     f"Кластер {cluster_id} слишком большой ({len(cluster_sessions)}), "
                     f"требуется дополнительная кластеризация"
                 )
-                # TODO: рекурсивная кластеризация больших кластеров
+                # Рекурсивная кластеризация больших кластеров
+                sub_clusters = self._recursive_cluster_large_cluster(cluster_sessions, embeddings, sessions)
+                # Добавляем подкластеры в результат
+                for sub_cluster in sub_clusters:
+                    clusters.append(sub_cluster)
+                continue
 
             cluster_data = {
                 "cluster_id": f"cluster-{cluster_id}",
@@ -279,9 +284,11 @@ class SessionClusterer:
             date_str = s.get("start_time") or s.get("meta", {}).get("start_time_utc")
             if date_str:
                 try:
-                    dates.append(
-                        datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                    )
+                    from ..utils.datetime_utils import parse_datetime_utc
+
+                    result = parse_datetime_utc(date_str, return_none_on_error=True, use_zoneinfo=True)
+                    if result:
+                        dates.append(result)
                 except:
                     pass
 
@@ -426,23 +433,73 @@ class SessionClusterer:
             "session_count": session_count,
         }
 
+    def _recursive_cluster_large_cluster(
+        self,
+        cluster_sessions: List[Dict[str, Any]],
+        embeddings: Optional[List[List[float]]],
+        all_sessions: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Рекурсивная кластеризация большого кластера на подкластеры.
+
+        Args:
+            cluster_sessions: Сессии большого кластера
+            embeddings: Эмбеддинги всех сессий (опционально)
+            all_sessions: Все сессии (для получения эмбеддингов)
+
+        Returns:
+            Список подкластеров
+        """
+        if len(cluster_sessions) <= self.max_cluster_size:
+            # Кластер уже достаточно маленький
+            return []
+
+        logger.info(
+            f"Рекурсивная кластеризация кластера из {len(cluster_sessions)} сессий"
+        )
+
+        # Получаем эмбеддинги для сессий этого кластера
+        cluster_embeddings = None
+        if embeddings is not None:
+            # Находим индексы сессий в общем списке
+            session_ids = {s.get("session_id") for s in cluster_sessions}
+            cluster_embeddings = [
+                emb
+                for i, s in enumerate(all_sessions)
+                if s.get("session_id") in session_ids and i < len(embeddings)
+                for emb in [embeddings[i]]
+            ]
+
+        # Рекурсивно кластеризуем подкластер
+        sub_cluster_result = self.cluster_sessions(cluster_sessions, cluster_embeddings)
+        sub_clusters = sub_cluster_result.get("clusters", [])
+
+        logger.info(f"Большой кластер разбит на {len(sub_clusters)} подкластеров")
+        return sub_clusters
+
     def _generate_llm_summary(
         self, cluster: Dict[str, Any], llm_summarizer
     ) -> Dict[str, Any]:
         """
         Детальная сводка через LLM
 
+        NOTE: Для полноценной генерации через LLM рекомендуется использовать
+        класс ClusterSummarizer из cluster_summarizer.py, который предоставляет
+        более продвинутую функциональность.
+
         Args:
             cluster: Данные кластера
-            llm_summarizer: LLM для генерации
+            llm_summarizer: LLM для генерации (не используется, оставлен для совместимости)
 
         Returns:
-            Детальная сводка
+            Детальная сводка (пустая, так как функциональность реализована в ClusterSummarizer)
         """
-        # TODO: Реализовать генерацию через LLM
-        # Собрать ключевые моменты из всех сессий
-        # Отправить в LLM для генерации связной сводки
-
+        # Функциональность генерации через LLM реализована в ClusterSummarizer
+        # Используйте ClusterSummarizer.summarize_cluster() для полноценной генерации
+        logger.debug(
+            f"Метод _generate_llm_summary не реализован. "
+            f"Используйте ClusterSummarizer для генерации LLM сводок."
+        )
         return {
             "llm_title": None,
             "llm_description": None,

@@ -295,9 +295,9 @@ class GraphBuilder:
             timestamp_str = event.properties.get("timestamp")
             if timestamp_str:
                 try:
-                    timestamp = datetime.fromisoformat(
-                        timestamp_str.replace("Z", "+00:00")
-                    )
+                    from ..utils.datetime_utils import parse_datetime_utc
+
+                    timestamp = parse_datetime_utc(timestamp_str, use_zoneinfo=True)
                     events_with_time.append((event, timestamp))
                 except:
                     pass

@@ -154,7 +154,11 @@ class HistoryManager:
 
                     timestamp_str = analysis_data.get("timestamp", "")
                     if timestamp_str:
-                        timestamp = datetime.fromisoformat(timestamp_str)
+                        from ...utils.datetime_utils import parse_datetime_utc
+
+                        timestamp = parse_datetime_utc(timestamp_str, return_none_on_error=True)
+                        if not timestamp:
+                            continue
                         if timestamp >= cutoff_date:
                             filtered_files.append(file_path)
                 except Exception as e:
@@ -233,7 +237,11 @@ class HistoryManager:
 
                     timestamp_str = analysis_data.get("timestamp", "")
                     if timestamp_str:
-                        timestamp = datetime.fromisoformat(timestamp_str)
+                        from ...utils.datetime_utils import parse_datetime_utc
+
+                        timestamp = parse_datetime_utc(timestamp_str, return_none_on_error=True)
+                        if not timestamp:
+                            continue
                         if timestamp >= cutoff_date:
                             filtered_files.append(file_path)
                 except Exception as e:

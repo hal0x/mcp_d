@@ -15,14 +15,14 @@ logger = logging.getLogger(__name__)
 class ClusterSummarizer:
     """Генератор сводок для кластеров через LLM"""
 
-    def __init__(self, ollama_client):
+    def __init__(self, embedding_client):
         """
         Инициализация
 
         Args:
-            ollama_client: OllamaEmbeddingClient для взаимодействия с LLM
+            embedding_client: LMStudioEmbeddingClient для взаимодействия с LLM
         """
-        self.ollama_client = ollama_client
+        self.embedding_client = embedding_client
         logger.info("Инициализирован ClusterSummarizer")
 
     async def summarize_cluster(
@@ -182,8 +182,8 @@ class ClusterSummarizer:
 
         # Запрашиваем LLM
         try:
-            async with self.ollama_client:
-                response = await self.ollama_client.llm_generate(
+            async with self.embedding_client:
+                response = await self.embedding_client.generate_summary(
                     prompt, max_tokens=500, temperature=0.3
                 )
 
@@ -271,20 +271,20 @@ class ClusterSummarizer:
 
 
 async def summarize_all_clusters(
-    clusters: List[Dict[str, Any]], ollama_client, progress_callback=None
+    clusters: List[Dict[str, Any]], embedding_client, progress_callback=None
 ) -> List[Dict[str, Any]]:
     """
     Генерация сводок для всех кластеров
 
     Args:
         clusters: Список кластеров
-        ollama_client: OllamaEmbeddingClient
+        embedding_client: LMStudioEmbeddingClient
         progress_callback: Функция для отчёта о прогрессе
 
     Returns:
         Список кластеров с сводками
     """
-    summarizer = ClusterSummarizer(ollama_client)
+    summarizer = ClusterSummarizer(embedding_client)
 
     enriched_clusters = []
 

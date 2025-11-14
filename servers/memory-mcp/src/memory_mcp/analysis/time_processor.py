@@ -46,7 +46,7 @@ class TimeProcessor:
 
     def normalize_timestamp(self, date_str: str) -> Optional[datetime]:
         """
-        Нормализация временной метки в различных форматах
+        Нормализация временной метки в различных форматах (использует общую утилиту).
 
         Args:
             date_str: Строка с датой/временем
@@ -54,28 +54,9 @@ class TimeProcessor:
         Returns:
             Нормализованный datetime объект в UTC или None
         """
-        if not date_str:
-            return None
+        from ..utils.datetime_utils import parse_datetime_utc
 
-        try:
-            # Убираем 'Z' и добавляем '+00:00' если нужно
-            if date_str.endswith("Z"):
-                date_str = date_str[:-1] + "+00:00"
-
-            # Парсим ISO формат
-            dt = datetime.fromisoformat(date_str)
-
-            # Убеждаемся, что время в UTC
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=ZoneInfo("UTC"))
-            else:
-                dt = dt.astimezone(ZoneInfo("UTC"))
-
-            return dt
-
-        except Exception as e:
-            logger.debug(f"Ошибка парсинга времени '{date_str}': {e}")
-            return None
+        return parse_datetime_utc(date_str, return_none_on_error=True, use_zoneinfo=True)
 
     def detect_timezone(self, messages: List[Dict]) -> str:
         """

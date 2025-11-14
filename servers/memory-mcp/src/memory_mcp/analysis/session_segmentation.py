@@ -191,7 +191,7 @@ class SessionSegmenter:
 
     def _parse_message_time(self, msg: Dict[str, Any]) -> datetime:
         """
-        Парсинг времени сообщения
+        Парсинг времени сообщения (использует общую утилиту).
 
         Args:
             msg: Сообщение
@@ -199,31 +199,9 @@ class SessionSegmenter:
         Returns:
             datetime объект в UTC
         """
-        try:
-            date_str = msg.get("date_utc") or msg.get("date", "")
-            if not date_str:
-                logger.warning(f"Сообщение без даты: {msg.get('id', 'unknown')}")
-                return datetime.now(ZoneInfo("UTC"))
+        from ..utils.datetime_utils import parse_message_time
 
-            # Убираем 'Z' и добавляем '+00:00' если нужно
-            if date_str.endswith("Z"):
-                date_str = date_str[:-1] + "+00:00"
-
-            dt = datetime.fromisoformat(date_str)
-
-            # Убеждаемся, что время в UTC
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=ZoneInfo("UTC"))
-            else:
-                dt = dt.astimezone(ZoneInfo("UTC"))
-
-            return dt
-
-        except Exception as e:
-            logger.error(
-                f"Ошибка парсинга времени сообщения: {e}, дата: {msg.get('date', 'N/A')}"
-            )
-            return datetime.now(ZoneInfo("UTC"))
+        return parse_message_time(msg, use_zoneinfo=True)
 
     def _finalize_session(
         self, session: Dict[str, Any], session_index: int

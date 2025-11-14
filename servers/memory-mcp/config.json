@@ -2,10 +2,10 @@
   "mcpServers": {
     "memory-mcp": {
       "command": "python",
-      "args": ["scripts/mcp_server.py"],
-      "cwd": "/Users/hal/projects/mcp/memory-mcp",
+      "args": ["-m", "memory_mcp.mcp.server"],
+      "cwd": "/Users/hal/projects/mcp/servers/memory-mcp",
       "env": {
-        "PYTHONPATH": "/Users/hal/projects/mcp/memory-mcp"
+        "PYTHONPATH": "/Users/hal/projects/mcp/servers/memory-mcp"
       }
     }
   },
@@ -14,10 +14,10 @@
       "mcpServers": {
         "memory-mcp": {
           "command": "python",
-          "args": ["scripts/mcp_server.py"],
-          "cwd": "/Users/hal/projects/mcp/memory-mcp",
+          "args": ["-m", "memory_mcp.mcp.server"],
+          "cwd": "/Users/hal/projects/mcp/servers/memory-mcp",
           "env": {
-            "PYTHONPATH": "/Users/hal/projects/mcp/memory-mcp"
+            "PYTHONPATH": "/Users/hal/projects/mcp/servers/memory-mcp"
           }
         }
       }

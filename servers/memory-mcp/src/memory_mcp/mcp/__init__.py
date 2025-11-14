@@ -20,8 +20,7 @@ from .schema import (
     StoreTradingSignalResponse,
     TradingSignalRecord,
 )
-from .server import create_server, main
-from .tools import bind
+from .server import server, run_stdio_server, main
 
 __all__ = [
     "AttachmentPayload",
@@ -41,8 +40,8 @@ __all__ = [
     "GetSignalPerformanceResponse",
     "TradingSignalRecord",
     "SignalPerformance",
-    "bind",
     "MemoryServiceAdapter",
-    "create_server",
+    "server",
+    "run_stdio_server",
     "main",
 ]

@@ -13,6 +13,7 @@ from ..memory.ingest import MemoryIngestor
 from ..memory.trading_memory import TradingMemory
 from ..memory.typed_graph import TypedGraphMemory
 from ..memory.vector_store import build_vector_store_from_env
+from ..utils.datetime_utils import parse_datetime_utc
 from .schema import (
     AttachmentPayload,
     FetchRequest,
@@ -38,15 +39,8 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_timestamp(value: str | None) -> datetime:
-    if not value:
-        return datetime.now(timezone.utc)
-    try:
-        if value.endswith("Z"):
-            value = value[:-1] + "+00:00"
-        return datetime.fromisoformat(value)
-    except Exception:
-        logger.debug("Не удалось распарсить временную метку %s", value)
-        return datetime.now(timezone.utc)
+    """Парсинг временной метки (использует общую утилиту)."""
+    return parse_datetime_utc(value, default=datetime.now(timezone.utc))
 
 
 def _payload_to_record(payload: MemoryRecordPayload) -> MemoryRecord:

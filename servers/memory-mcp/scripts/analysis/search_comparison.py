@@ -45,11 +45,11 @@ def simple_table(data, headers):
 
 import chromadb
 
-from memory_mcp.core.ollama_client import OllamaEmbeddingClient
+from memory_mcp.core.lmstudio_client import LMStudioEmbeddingClient
 
 
 async def search_single(
-    query: str, collection_name: str, chroma_client, ollama_client, limit: int = 5
+    query: str, collection_name: str, chroma_client, embedding_client, limit: int = 5
 ) -> Dict[str, Any]:
     """
     Выполняет один поиск и возвращает результаты с метриками
@@ -64,7 +64,7 @@ async def search_single(
         }
 
     # Генерируем эмбеддинг
-    query_embedding = await ollama_client._generate_single_embedding(query)
+    query_embedding = await embedding_client._generate_single_embedding(query)
 
     if not query_embedding:
         return {
@@ -127,15 +127,15 @@ async def compare_queries(
 
     # Инициализируем клиентов
     chroma_client = chromadb.PersistentClient(path="./chroma_db")
-    ollama_client = OllamaEmbeddingClient()
+    embedding_client = LMStudioEmbeddingClient()
 
-    async with ollama_client:
+    async with embedding_client:
         # Выполняем все запросы
         all_results = []
         for i, query in enumerate(queries, 1):
             print(f"⏳ Обработка запроса {i}/{len(queries)}: '{query}'")
             result = await search_single(
-                query, f"chat_{collection}", chroma_client, ollama_client, limit
+                query, f"chat_{collection}", chroma_client, embedding_client, limit
             )
             all_results.append(result)
 

@@ -28,7 +28,7 @@ from ..analysis.smart_rolling_aggregator import SmartRollingAggregator
 from ..analysis.time_processor import TimeProcessor
 from ..utils.naming import slugify
 from ..utils.url_validator import validate_embedding_text
-from .ollama_client import OllamaEmbeddingClient
+from .lmstudio_client import LMStudioEmbeddingClient
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class TwoLevelIndexer:
         self,
         chroma_path: str = "./artifacts/chroma_db",
         artifacts_path: str = "./artifacts",
-        ollama_client: Optional[OllamaEmbeddingClient] = None,
+        embedding_client: Optional[LMStudioEmbeddingClient] = None,
         enable_quality_check: bool = True,
         enable_iterative_refinement: bool = True,
         min_quality_score: float = 80.0,
@@ -70,7 +70,7 @@ class TwoLevelIndexer:
         Args:
             chroma_path: Путь к ChromaDB
             artifacts_path: Каталог с артефактами (reports, контексты, коллекции)
-            ollama_client: Клиент Ollama
+            embedding_client: Клиент для генерации эмбеддингов (LM Studio)
             enable_quality_check: Включить проверку качества саммаризации
             enable_iterative_refinement: Включить автоматическое улучшение
             min_quality_score: Минимальный приемлемый балл качества
@@ -95,7 +95,7 @@ class TwoLevelIndexer:
         self.artifacts_path.mkdir(parents=True, exist_ok=True)
         self.reports_path = self.artifacts_path / "reports"
         self.reports_path.mkdir(parents=True, exist_ok=True)
-        self.ollama_client = ollama_client or OllamaEmbeddingClient()
+        self.embedding_client = embedding_client or LMStudioEmbeddingClient()
 
         # Флаги и параметры кластеризации
         self.enable_clustering = enable_clustering
@@ -132,7 +132,7 @@ class TwoLevelIndexer:
         # Создаём менеджер инструкций и SessionSummarizer с системой оценки качества
         self.instruction_manager = InstructionManager()
         self.session_summarizer = SessionSummarizer(
-            self.ollama_client,
+            self.embedding_client,
             self.reports_path,
             instruction_manager=self.instruction_manager,
             enable_quality_check=enable_quality_check,
@@ -174,7 +174,7 @@ class TwoLevelIndexer:
                 use_hdbscan=False,  # Используем threshold-based для детерминизма
             )
             self.cluster_summarizer = ClusterSummarizer(
-                ollama_client=self.ollama_client
+                ollama_client=self.embedding_client
             )
 
         # Инициализируем умный агрегатор
@@ -490,10 +490,9 @@ class TwoLevelIndexer:
             if result["ids"] and result["metadatas"]:
                 last_date_str = result["metadatas"][0].get("last_indexed_date")
                 if last_date_str:
-                    # Парсим дату
-                    if last_date_str.endswith("Z"):
-                        last_date_str = last_date_str[:-1] + "+00:00"
-                    return datetime.fromisoformat(last_date_str)
+                    from ..utils.datetime_utils import parse_datetime_utc
+
+                    return parse_datetime_utc(last_date_str, use_zoneinfo=True)
         except Exception as e:
             logger.debug(f"Не удалось получить прогресс для {chat_name}: {e}")
 
@@ -551,7 +550,7 @@ class TwoLevelIndexer:
 
     def _parse_session_start_time(self, session: Dict[str, Any]) -> datetime:
         """
-        Парсит время начала сессии для хронологической сортировки
+        Парсит время начала сессии для хронологической сортировки (использует общую утилиту).
 
         Args:
             session: Словарь с данными сессии
@@ -559,34 +558,30 @@ class TwoLevelIndexer:
         Returns:
             datetime: Время начала сессии или минимальная дата, если не удалось распарсить
         """
-        try:
-            # Пробуем разные поля для времени начала
-            start_time = session.get("start_time")
-            if start_time:
-                if isinstance(start_time, str):
-                    # Парсим строку даты
-                    if start_time.endswith("Z"):
-                        start_time = start_time.replace("Z", "+00:00")
-                    return datetime.fromisoformat(start_time)
-                elif isinstance(start_time, datetime):
-                    return start_time
+        from ..utils.datetime_utils import parse_datetime_utc
 
-            # Если нет start_time, берем время первого сообщения
-            messages = session.get("messages", [])
-            if messages:
-                first_message = messages[0]
-                msg_date = first_message.get("date_utc")
-                if msg_date:
-                    if msg_date.endswith("Z"):
-                        msg_date = msg_date.replace("Z", "+00:00")
-                    return datetime.fromisoformat(msg_date)
+        # Пробуем разные поля для времени начала
+        start_time = session.get("start_time")
+        if start_time:
+            if isinstance(start_time, str):
+                result = parse_datetime_utc(start_time, use_zoneinfo=True)
+                if result:
+                    return result
+            elif isinstance(start_time, datetime):
+                return start_time
 
-            # Если ничего не найдено, возвращаем минимальную дату
-            return datetime.min.replace(tzinfo=None)
+        # Если нет start_time, берем время первого сообщения
+        messages = session.get("messages", [])
+        if messages:
+            first_message = messages[0]
+            msg_date = first_message.get("date_utc")
+            if msg_date:
+                result = parse_datetime_utc(msg_date, use_zoneinfo=True)
+                if result:
+                    return result
 
-        except Exception as e:
-            logger.debug(f"Не удалось распарсить время сессии: {e}")
-            return datetime.min.replace(tzinfo=None)
+        # Если ничего не найдено, возвращаем минимальную дату
+        return datetime.min.replace(tzinfo=None)
 
     async def build_index(
         self,
@@ -943,7 +938,7 @@ class TwoLevelIndexer:
 
     async def _load_messages_from_chat(self, chat_dir: Path) -> List[Dict[str, Any]]:
         """
-        Загрузка сообщений из JSON файлов чата
+        Загрузка сообщений из JSON файлов чата (использует общую утилиту).
 
         Args:
             chat_dir: Директория чата
@@ -951,32 +946,15 @@ class TwoLevelIndexer:
         Returns:
             Список сообщений
         """
+        from ..utils.json_loader import load_json_or_jsonl
+
         messages = []
         json_files = list(chat_dir.glob("*.json"))
 
         for json_file in json_files:
             try:
-                import json
-
-                with open(json_file, encoding="utf-8") as f:
-                    # Попытка загрузить как JSON массив
-                    try:
-                        data = json.load(f)
-                        if isinstance(data, list):
-                            messages.extend(data)
-                        else:
-                            messages.append(data)
-                    except json.JSONDecodeError:
-                        # Пробуем как JSONL
-                        f.seek(0)
-                        for line in f:
-                            line = line.strip()
-                            if line:
-                                try:
-                                    msg = json.loads(line)
-                                    messages.append(msg)
-                                except json.JSONDecodeError:
-                                    continue
+                file_messages, _ = load_json_or_jsonl(json_file)
+                messages.extend(file_messages)
             except Exception as e:
                 logger.error(f"Ошибка при чтении файла {json_file}: {e}")
                 continue
@@ -1026,8 +1004,8 @@ class TwoLevelIndexer:
             )
 
         # Генерируем эмбеддинг
-        async with self.ollama_client:
-            embeddings = await self.ollama_client.generate_embeddings([embedding_text])
+        async with self.embedding_client:
+            embeddings = await self.embedding_client.generate_embeddings([embedding_text])
             embedding = embeddings[0]
 
         # Подготавливаем метаданные
@@ -1145,8 +1123,8 @@ class TwoLevelIndexer:
                     )
 
                 # Генерируем эмбеддинг
-                async with self.ollama_client:
-                    embeddings = await self.ollama_client.generate_embeddings(
+                async with self.embedding_client:
+                    embeddings = await self.embedding_client.generate_embeddings(
                         [embedding_text]
                     )
                     embedding = embeddings[0]
@@ -1283,8 +1261,8 @@ class TwoLevelIndexer:
                     continue
 
                 # Генерируем эмбеддинг
-                async with self.ollama_client:
-                    embeddings = await self.ollama_client.generate_embeddings(
+                async with self.embedding_client:
+                    embeddings = await self.embedding_client.generate_embeddings(
                         [task_text]
                     )
                     embedding = embeddings[0]
@@ -1325,27 +1303,10 @@ class TwoLevelIndexer:
         return indexed_count
 
     def _parse_message_time(self, msg: Dict[str, Any]) -> datetime:
-        """Парсинг времени сообщения"""
-        try:
-            date_str = msg.get("date_utc") or msg.get("date", "")
-            if not date_str:
-                return datetime.now(ZoneInfo("UTC"))
+        """Парсинг времени сообщения (использует общую утилиту)."""
+        from ..utils.datetime_utils import parse_message_time
 
-            if date_str.endswith("Z"):
-                date_str = date_str[:-1] + "+00:00"
-
-            dt = datetime.fromisoformat(date_str)
-
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=ZoneInfo("UTC"))
-            else:
-                dt = dt.astimezone(ZoneInfo("UTC"))
-
-            return dt
-
-        except Exception as e:
-            logger.error(f"Ошибка парсинга времени: {e}")
-            return datetime.now(ZoneInfo("UTC"))
+        return parse_message_time(msg, use_zoneinfo=True)
 
     async def _cluster_chat_sessions(
         self, chat_name: str, summaries: List[Dict[str, Any]]
@@ -1764,9 +1725,9 @@ class TwoLevelIndexer:
                 continue
 
             try:
-                msg_date = datetime.fromisoformat(
-                    msg["date_utc"].replace("Z", "+00:00")
-                )
+                from ..utils.datetime_utils import parse_datetime_utc
+
+                msg_date = parse_datetime_utc(msg["date_utc"], use_zoneinfo=True)
                 age_days = (current_date - msg_date).days
 
                 if age_days <= 1:

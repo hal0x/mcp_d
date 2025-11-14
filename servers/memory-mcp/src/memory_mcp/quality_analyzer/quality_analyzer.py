@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import ValidationError
 
-from ..core.ollama_client import OllamaEmbeddingClient
+from ..core.lmstudio_client import LMStudioEmbeddingClient
 from ..search import HybridSearchManager
 from .core import (
     HistoryManager,
@@ -110,7 +110,9 @@ class QualityAnalyzer:
         )
 
         # Компоненты поиска и эмбеддингов
-        self._embedding_client = OllamaEmbeddingClient(base_url=ollama_base_url)
+        # Используем LM Studio Server для эмбеддингов
+        # base_url должен быть в формате http://host:port
+        self._embedding_client = LMStudioEmbeddingClient(base_url=ollama_base_url or "http://127.0.0.1:1234")
         self._chroma_client = None
         self._search_manager: Optional[HybridSearchManager] = None
 

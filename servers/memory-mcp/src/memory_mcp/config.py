@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 from functools import lru_cache
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,6 +28,15 @@ class Settings(BaseSettings):
         "stdio", description="Транспорт для запуска MCP сервера"
     )
     debug: bool = Field(False, description="Включение расширенного логгирования")
+    
+    # LM Studio настройки
+    lmstudio_host: str = Field(
+        "127.0.0.1", description="Хост LM Studio Server"
+    )
+    lmstudio_port: int = Field(1234, description="Порт LM Studio Server")
+    lmstudio_model: str = Field(
+        "text-embedding-qwen3-embedding-0.6b", description="Модель для эмбеддингов в LM Studio"
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="MEMORY_MCP_",
@@ -35,6 +46,146 @@ class Settings(BaseSettings):
     )
 
 
+class QualityAnalysisSettings(BaseSettings):
+    """Настройки модуля анализа качества, загружаемые из переменных окружения."""
+
+    # Ollama настройки
+    ollama_model: str = Field("gpt-oss-20b:latest", description="Модель Ollama")
+    ollama_base_url: str = Field("http://localhost:11434", description="URL Ollama сервера")
+    max_context_tokens: int = Field(8192, description="Максимальное количество токенов контекста")
+    temperature: float = Field(0.1, description="Температура для генерации")
+    max_response_tokens: int = Field(1000, description="Максимальное количество токенов ответа")
+    thinking_level: str | None = Field(None, description="Уровень мышления (thinking)")
+
+    # Настройки генерации запросов
+    max_queries_per_chat: int = Field(20, description="Максимальное количество запросов на чат")
+    batch_size: int | None = Field(None, description="Размер батча (None = автоматический)")
+
+    # Настройки анализа
+    search_collection: str = Field("chat_messages", description="Коллекция для поиска")
+    hybrid_alpha: float = Field(0.6, description="Коэффициент гибридного поиска")
+    results_per_query: int = Field(10, description="Количество результатов на запрос")
+    batch_max_size: int = Field(10, description="Максимальный размер батча")
+    system_prompt_reserve: float = Field(0.2, description="Резерв для системного промпта")
+    max_query_tokens: int = Field(6000, description="Максимальное количество токенов запроса")
+
+    # Пути (поддерживают относительные и абсолютные)
+    reports_dir: Path = Field(Path("artifacts/reports"), description="Директория для отчетов")
+    quality_reports_subdir: str = Field("quality_analysis", description="Поддиректория для отчетов качества")
+    history_dir: Path = Field(Path("quality_analysis_history"), description="Директория для истории")
+    chroma_path: Path = Field(Path("chroma_db"), description="Путь к ChromaDB")
+    chats_dir: Path = Field(Path("chats"), description="Директория с чатами")
+    custom_queries_path: Path | None = Field(None, description="Путь к файлу с кастомными запросами")
+
+    # Пороги (хранятся как JSON строка или dict)
+    thresholds: dict[str, Any] = Field(default_factory=dict, description="Пороги для оценки качества")
+
+    @field_validator("reports_dir", "history_dir", "chroma_path", "chats_dir", "custom_queries_path", mode="before")
+    @classmethod
+    def validate_paths(cls, v: Any) -> Any:
+        """Валидация путей - конвертация строк в Path."""
+        if isinstance(v, str):
+            return Path(v)
+        return v
+
+    @field_validator("thresholds", mode="before")
+    @classmethod
+    def validate_thresholds(cls, v: Any) -> dict[str, Any]:
+        """Валидация порогов - поддержка JSON строки."""
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return {}
+        if isinstance(v, dict):
+            return v
+        return {}
+
+    model_config = SettingsConfigDict(
+        env_prefix="QUALITY_ANALYSIS_",
+        env_file=".env",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    @classmethod
+    def load_from_json(cls, config_path: Path | None = None) -> "QualityAnalysisSettings":
+        """
+        Загружает настройки из JSON файла (для обратной совместимости).
+
+        Args:
+            config_path: Путь к JSON файлу. Если None, используется config/quality_analysis.json
+
+        Returns:
+            Экземпляр QualityAnalysisSettings
+        """
+        if config_path is None:
+            config_path = Path("config/quality_analysis.json")
+
+        if not config_path.exists():
+            return cls()
+
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                config_data = json.load(f)
+        except Exception:
+            return cls()
+
+        qa_section = config_data.get("quality_analysis", {})
+        ollama_section = qa_section.get("ollama", {})
+        query_section = qa_section.get("query_generation", {})
+        analysis_section = qa_section.get("analysis", {})
+        reporting_section = qa_section.get("reporting", {})
+
+        def _resolve_path(path_value: str | None) -> Path | None:
+            if not path_value:
+                return None
+            path_obj = Path(path_value)
+            if not path_obj.is_absolute():
+                candidate = (config_path.parent / path_obj).resolve()
+                if candidate.exists():
+                    return candidate
+                path_obj = (Path.cwd() / path_obj).resolve()
+            return path_obj
+
+        # Обработка путей
+        reports_dir_raw = reporting_section.get("reports_dir", "artifacts/reports")
+        reports_path_resolved = _resolve_path(reports_dir_raw) or Path(reports_dir_raw)
+
+        subdir_value = reporting_section.get("subdir")
+        quality_subdir = subdir_value if subdir_value is not None else "quality_analysis"
+
+        history_path = _resolve_path(reporting_section.get("history_dir", "quality_analysis_history")) or Path("quality_analysis_history")
+        chroma_path = _resolve_path(analysis_section.get("chroma_path")) or Path("chroma_db")
+        chats_dir = _resolve_path(analysis_section.get("chats_dir")) or Path("chats")
+        custom_queries_path = _resolve_path(query_section.get("custom_queries_file"))
+
+        # Создаем настройки из JSON
+        return cls(
+            ollama_model=ollama_section.get("model", "gpt-oss-20b:latest"),
+            ollama_base_url=ollama_section.get("base_url", "http://localhost:11434"),
+            max_context_tokens=ollama_section.get("max_context_tokens", 8192),
+            temperature=ollama_section.get("temperature", 0.1),
+            max_response_tokens=ollama_section.get("max_tokens", 1000),
+            thinking_level=ollama_section.get("thinking_level"),
+            max_queries_per_chat=query_section.get("max_queries_per_chat", 20),
+            batch_size=analysis_section.get("batch_size") if analysis_section.get("batch_size") and analysis_section.get("batch_size") > 0 else None,
+            search_collection=analysis_section.get("search_collection", "chat_messages"),
+            hybrid_alpha=analysis_section.get("hybrid_alpha", 0.6),
+            results_per_query=analysis_section.get("results_per_query", 10),
+            batch_max_size=analysis_section.get("batch_max_size", 10),
+            system_prompt_reserve=analysis_section.get("system_prompt_reserve", 0.2),
+            max_query_tokens=analysis_section.get("max_query_tokens", 6000),
+            reports_dir=reports_path_resolved,
+            quality_reports_subdir=quality_subdir,
+            history_dir=history_path,
+            chroma_path=chroma_path,
+            chats_dir=chats_dir,
+            custom_queries_path=custom_queries_path,
+            thresholds=qa_section.get("thresholds", {}),
+        )
+
+
 @lru_cache
 def get_settings() -> Settings:
     """Кэшированный доступ к настройкам."""
@@ -42,7 +193,44 @@ def get_settings() -> Settings:
     return Settings()
 
 
-__all__ = ["Settings", "get_settings"]
+@lru_cache
+def get_quality_analysis_settings(config_path: Path | None = None) -> QualityAnalysisSettings:
+    """
+    Кэшированный доступ к настройкам анализа качества.
+
+    Сначала пытается загрузить из переменных окружения (Pydantic Settings),
+    затем из JSON файла (для обратной совместимости).
+
+    Args:
+        config_path: Путь к JSON файлу конфигурации (опционально)
+
+    Returns:
+        Экземпляр QualityAnalysisSettings
+    """
+    # Пытаемся загрузить из env переменных
+    try:
+        settings = QualityAnalysisSettings()
+        # Если есть хотя бы одна не-дефолтная настройка из env, используем её
+        # Иначе загружаем из JSON
+        if config_path or Path("config/quality_analysis.json").exists():
+            json_settings = QualityAnalysisSettings.load_from_json(config_path)
+            # Объединяем: env переменные имеют приоритет
+            for field_name in QualityAnalysisSettings.model_fields:
+                env_value = getattr(settings, field_name)
+                json_value = getattr(json_settings, field_name)
+                # Если значение из env отличается от дефолтного, используем его
+                default_value = QualityAnalysisSettings.model_fields[field_name].default
+                if env_value != default_value:
+                    continue
+                # Иначе используем значение из JSON
+                setattr(settings, field_name, json_value)
+        return settings
+    except Exception:
+        # Fallback на JSON
+        return QualityAnalysisSettings.load_from_json(config_path)
+
+
+__all__ = ["Settings", "QualityAnalysisSettings", "get_settings", "get_quality_analysis_settings"]
 
 
 def _apply_env_aliases() -> None:
@@ -53,6 +241,9 @@ def _apply_env_aliases() -> None:
         "MEMORY_MCP_LOG_LEVEL": ["MEMORY_LOG_LEVEL", "TG_DUMP_LOG_LEVEL", "LOG_LEVEL"],
         "MEMORY_MCP_TRANSPORT": ["TG_DUMP_TRANSPORT", "TRANSPORT"],
         "MEMORY_MCP_DB_PATH": ["MEMORY_DB_PATH"],
+        "MEMORY_MCP_LMSTUDIO_HOST": ["LMSTUDIO_HOST"],
+        "MEMORY_MCP_LMSTUDIO_PORT": ["LMSTUDIO_PORT"],
+        "MEMORY_MCP_LMSTUDIO_MODEL": ["LMSTUDIO_MODEL"],
     }
 
     for target, candidates in alias_map.items():

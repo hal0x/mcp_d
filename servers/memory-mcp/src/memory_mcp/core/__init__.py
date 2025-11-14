@@ -1,9 +1,9 @@
 """Core functionality for Telegram Dump Manager v2.0"""
 
 from .indexer import TwoLevelIndexer
-from .ollama_client import OllamaEmbeddingClient
+from .lmstudio_client import LMStudioEmbeddingClient
 
 __all__ = [
     "TwoLevelIndexer",
-    "OllamaEmbeddingClient",
+    "LMStudioEmbeddingClient",
 ]

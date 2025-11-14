@@ -25,12 +25,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 # Импортируем только доступные модули
 try:
-    from memory_mcp.core.ollama_client import OllamaEmbeddingClient
+    from memory_mcp.core.lmstudio_client import LMStudioEmbeddingClient
 
-    OLLAMA_AVAILABLE = True
+    EMBEDDING_CLIENT_AVAILABLE = True
 except ImportError:
-    OLLAMA_AVAILABLE = False
-    print("⚠️ OllamaClient недоступен")
+    EMBEDDING_CLIENT_AVAILABLE = False
+    print("⚠️ LMStudioEmbeddingClient недоступен")
 
 try:
     from memory_mcp.analysis.instruction_manager import InstructionManager
@@ -56,322 +56,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class MessageExtractor:
-    """Класс для извлечения новых сообщений с расширенной функциональностью."""
-
-    def __init__(self, input_dir: str = "input", chats_dir: str = "chats"):
-        self.input_dir = Path(input_dir)
-        self.chats_dir = Path(chats_dir)
-
-        # Определяем начало текущего года для фильтрации
-        current_year = datetime.now().year
-        self.cutoff_date = datetime(current_year, 1, 1, tzinfo=timezone.utc)
-
-        # Статистика обработки
-        self.stats = {
-            "total_chats": 0,
-            "processed_chats": 0,
-            "skipped_chats": 0,
-            "total_messages_input": 0,
-            "total_messages_output": 0,
-            "messages_copied": 0,
-            "messages_filtered_by_date": 0,
-            "duplicates_skipped": 0,
-            "errors": 0,
-            "files_processed": 0,
-            "files_skipped": 0,
-        }
-
-        # Кэш для быстрой проверки существующих сообщений
-        self.existing_messages_cache = {}
-
-    def parse_date(self, date_str: str) -> Optional[datetime]:
-        """Парсит дату из строки в различных форматах."""
-        if not date_str:
-            return None
-
-        try:
-            # Заменяем Z на +00:00 для UTC
-            if date_str.endswith("Z"):
-                date_str = date_str.replace("Z", "+00:00")
-            return datetime.fromisoformat(date_str)
-        except ValueError:
-            # Пробуем другие форматы
-            try:
-                return datetime.fromisoformat(date_str.replace("Z", ""))
-            except ValueError:
-                logger.warning(f"Не удалось распарсить дату: {date_str}")
-                return None
-
-    def get_message_hash(self, message: Dict) -> str:
-        """Создает хэш сообщения для дополнительной проверки дубликатов."""
-        # Используем ID, дату и первые 100 символов текста
-        text_preview = str(message.get("text", ""))[:100]
-        hash_input = (
-            f"{message.get('id', '')}_{message.get('date_utc', '')}_{text_preview}"
-        )
-        return hashlib.md5(hash_input.encode("utf-8")).hexdigest()
-
-    def load_existing_messages(self, chat_dir: Path) -> Tuple[Set[str], Set[str]]:
-        """Загружает существующие ID и хэши сообщений из рабочей директории."""
-        existing_ids = set()
-        existing_hashes = set()
-
-        if chat_dir.name in self.existing_messages_cache:
-            return self.existing_messages_cache[chat_dir.name]
-
-        # Ищем JSON файлы в чате
-        json_files = []
-        for pattern in ["unknown.json", "result.json", "messages.json"]:
-            json_file = chat_dir / pattern
-            if json_file.exists():
-                json_files.append(json_file)
-
-        for json_file in json_files:
-            try:
-                with open(json_file, encoding="utf-8") as f:
-                    for line_num, line in enumerate(f, 1):
-                        line = line.strip()
-                        if not line:
-                            continue
-
-                        try:
-                            message = json.loads(line)
-                            if "id" in message:
-                                existing_ids.add(str(message["id"]))
-                                existing_hashes.add(self.get_message_hash(message))
-                        except json.JSONDecodeError as e:
-                            logger.warning(f"Ошибка JSON в {json_file}:{line_num}: {e}")
-                            continue
-            except Exception as e:
-                logger.warning(f"Ошибка чтения файла {json_file}: {e}")
-
-        # Кэшируем результат
-        self.existing_messages_cache[chat_dir.name] = (existing_ids, existing_hashes)
-        return existing_ids, existing_hashes
-
-    def filter_messages(
-        self,
-        messages: List[Dict],
-        existing_ids: Set[str],
-        existing_hashes: Set[str],
-        filter_by_date: bool = True,
-    ) -> List[Dict]:
-        """Фильтрует сообщения по дате и дубликатам."""
-        filtered_messages = []
-
-        for message in messages:
-            # Проверяем наличие обязательных полей
-            if "id" not in message:
-                logger.warning("Сообщение без ID пропущено")
-                continue
-
-            message_id = str(message["id"])
-            message_hash = self.get_message_hash(message)
-
-            # Проверяем на дубликаты по ID
-            if message_id in existing_ids:
-                self.stats["duplicates_skipped"] += 1
-                continue
-
-            # Проверяем на дубликаты по хэшу (дополнительная защита)
-            if message_hash in existing_hashes:
-                self.stats["duplicates_skipped"] += 1
-                continue
-
-            # Проверяем дату если включена фильтрация
-            if filter_by_date and "date_utc" in message:
-                msg_date = self.parse_date(message["date_utc"])
-                if msg_date and msg_date < self.cutoff_date:
-                    self.stats["messages_filtered_by_date"] += 1
-                    continue
-
-            # Добавляем сообщение
-            filtered_messages.append(message)
-            existing_ids.add(message_id)
-            existing_hashes.add(message_hash)
-
-        return filtered_messages
-
-    def extract_chat_messages(
-        self,
-        input_chat_dir: Path,
-        chats_chat_dir: Path,
-        dry_run: bool = False,
-        filter_by_date: bool = True,
-    ) -> Dict[str, int]:
-        """Извлекает сообщения из одного чата."""
-        chat_stats = {
-            "messages_input": 0,
-            "messages_output": 0,
-            "messages_copied": 0,
-            "errors": 0,
-            "files_processed": 0,
-            "files_skipped": 0,
-        }
-
-        # Ищем JSON файлы в input чате
-        input_json_files = []
-        for pattern in ["unknown.json", "result.json", "messages.json", "*.json"]:
-            if pattern == "*.json":
-                input_json_files.extend(input_chat_dir.glob(pattern))
-            else:
-                json_file = input_chat_dir / pattern
-                if json_file.exists():
-                    input_json_files.append(json_file)
-
-        if not input_json_files:
-            logger.warning(f"Нет JSON файлов в чате: {input_chat_dir}")
-            chat_stats["files_skipped"] = 1
-            return chat_stats
-
-        # Загружаем существующие сообщения
-        existing_ids, existing_hashes = self.load_existing_messages(chats_chat_dir)
-
-        # Создаем директорию в chats если не существует
-        if not dry_run:
-            chats_chat_dir.mkdir(parents=True, exist_ok=True)
-
-        logger.info(f"Обрабатываем чат: {input_chat_dir.name}")
-        logger.info(f"Найдено {len(existing_ids)} существующих сообщений")
-        logger.info(f"Найдено {len(input_json_files)} файлов для обработки")
-
-        # Обрабатываем каждый JSON файл
-        for input_json_file in input_json_files:
-            try:
-                chat_stats["files_processed"] += 1
-
-                # Читаем сообщения из input
-                messages = []
-                with open(input_json_file, encoding="utf-8") as f:
-                    for line_num, line in enumerate(f, 1):
-                        line = line.strip()
-                        if not line:
-                            continue
-
-                        try:
-                            message = json.loads(line)
-                            messages.append(message)
-                            chat_stats["messages_input"] += 1
-                        except json.JSONDecodeError as e:
-                            logger.warning(
-                                f"Ошибка JSON в {input_json_file}:{line_num}: {e}"
-                            )
-                            chat_stats["errors"] += 1
-
-                # Фильтруем сообщения
-                filtered_messages = self.filter_messages(
-                    messages, existing_ids, existing_hashes, filter_by_date
-                )
-
-                if filtered_messages:
-                    # Определяем имя выходного файла
-                    output_file = chats_chat_dir / input_json_file.name
-
-                    if not dry_run:
-                        # Записываем новые сообщения
-                        with open(output_file, "a", encoding="utf-8") as f:
-                            for message in filtered_messages:
-                                json.dump(message, f, ensure_ascii=False)
-                                f.write("\n")
-
-                    chat_stats["messages_copied"] += len(filtered_messages)
-                    logger.info(
-                        f"Скопировано {len(filtered_messages)} новых сообщений в {output_file}"
-                    )
-                else:
-                    logger.info(f"Нет новых сообщений в файле {input_json_file.name}")
-
-            except Exception as e:
-                logger.error(f"Ошибка обработки файла {input_json_file}: {e}")
-                chat_stats["errors"] += 1
-
-        chat_stats["messages_output"] = chat_stats["messages_copied"]
-        return chat_stats
-
-    def extract_all_messages(
-        self,
-        dry_run: bool = False,
-        filter_by_date: bool = True,
-        chat_filter: Optional[str] = None,
-    ) -> Dict[str, int]:
-        """Извлекает новые сообщения из всех чатов."""
-        if not self.input_dir.exists():
-            logger.error(f"Директория {self.input_dir} не существует")
-            return self.stats
-
-        # Создаем директорию chats если не существует
-        if not dry_run:
-            self.chats_dir.mkdir(parents=True, exist_ok=True)
-
-        # Получаем список чатов для обработки
-        if chat_filter:
-            input_chat_dirs = (
-                [self.input_dir / chat_filter]
-                if (self.input_dir / chat_filter).exists()
-                else []
-            )
-        else:
-            input_chat_dirs = [d for d in self.input_dir.iterdir() if d.is_dir()]
-
-        self.stats["total_chats"] = len(input_chat_dirs)
-
-        logger.info(f"Найдено {len(input_chat_dirs)} чатов в input для обработки")
-        if filter_by_date:
-            logger.info(
-                f"Фильтр по дате: сообщения с {self.cutoff_date.strftime('%Y-%m-%d')} и новее"
-            )
-        else:
-            logger.info("Фильтрация по дате отключена")
-
-        if dry_run:
-            logger.info("РЕЖИМ ТЕСТИРОВАНИЯ - изменения не будут сохранены")
-
-        for input_chat_dir in input_chat_dirs:
-            try:
-                chats_chat_dir = self.chats_dir / input_chat_dir.name
-                chat_stats = self.extract_chat_messages(
-                    input_chat_dir, chats_chat_dir, dry_run, filter_by_date
-                )
-
-                # Обновляем общую статистику
-                self.stats["processed_chats"] += 1
-                self.stats["total_messages_input"] += chat_stats["messages_input"]
-                self.stats["total_messages_output"] += chat_stats["messages_output"]
-                self.stats["messages_copied"] += chat_stats["messages_copied"]
-                self.stats["errors"] += chat_stats["errors"]
-                self.stats["files_processed"] += chat_stats["files_processed"]
-                self.stats["files_skipped"] += chat_stats["files_skipped"]
-
-            except Exception as e:
-                logger.error(f"Ошибка обработки чата {input_chat_dir}: {e}")
-                self.stats["errors"] += 1
-                self.stats["skipped_chats"] += 1
-
-        return self.stats
-
-    def print_stats(self):
-        """Выводит подробную статистику обработки."""
-        print("\n" + "=" * 80)
-        print("СТАТИСТИКА ИЗВЛЕЧЕНИЯ НОВЫХ СООБЩЕНИЙ")
-        print("=" * 80)
-        print(
-            f"Обработано чатов: {self.stats['processed_chats']}/{self.stats['total_chats']}"
-        )
-        print(f"Пропущено чатов: {self.stats['skipped_chats']}")
-        print(f"Обработано файлов: {self.stats['files_processed']}")
-        print(f"Пропущено файлов: {self.stats['files_skipped']}")
-        print(f"Всего сообщений в input: {self.stats['total_messages_input']}")
-        print(f"Извлечено новых сообщений: {self.stats['messages_copied']}")
-        print(f"Отфильтровано по дате: {self.stats['messages_filtered_by_date']}")
-        print(f"Пропущено дубликатов: {self.stats['duplicates_skipped']}")
-        print(f"Ошибок: {self.stats['errors']}")
-
-        if self.stats["total_messages_input"] > 0:
-            copy_percent = (
-                self.stats["messages_copied"] / self.stats["total_messages_input"]
-            ) * 100
-            print(f"Процент извлеченных: {copy_percent:.2f}%")
+# Импортируем MessageExtractor из общего модуля
+from memory_mcp.utils.message_extractor import MessageExtractor
 
 
 class MessageDeduplicator:
@@ -654,10 +340,10 @@ class TelegramDumpManager:
         else:
             self.mcp = None
 
-        if OLLAMA_AVAILABLE:
-            self.ollama_client = OllamaEmbeddingClient()
+        if EMBEDDING_CLIENT_AVAILABLE:
+            self.embedding_client = LMStudioEmbeddingClient()
         else:
-            self.ollama_client = None
+            self.embedding_client = None
 
         if INSTRUCTION_MANAGER_AVAILABLE:
             self.instruction_manager = InstructionManager()
@@ -670,28 +356,28 @@ class TelegramDumpManager:
 
     async def __aenter__(self):
         """Асинхронный контекстный менеджер - вход"""
-        if self.ollama_client:
-            await self.ollama_client.__aenter__()
+        if self.embedding_client:
+            await self.embedding_client.__aenter__()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Асинхронный контекстный менеджер - выход"""
-        if self.ollama_client:
-            await self.ollama_client.__aexit__(exc_type, exc_val, exc_tb)
+        if self.embedding_client:
+            await self.embedding_client.__aexit__(exc_type, exc_val, exc_tb)
 
     async def check_system(self) -> bool:
         """Проверка системы"""
         print("🔧 Проверка системы...")
 
-        # Проверяем Ollama
-        if self.ollama_client:
-            if not await self.ollama_client.check_model_availability():
-                print("❌ Ollama недоступен или модель не найдена")
-                print("Убедитесь, что Ollama запущен и модель установлена")
+        # Проверяем LM Studio Server
+        if self.embedding_client:
+            if not await self.embedding_client.check_model_availability():
+                print("❌ LM Studio Server недоступен или модель не найдена")
+                print("Убедитесь, что LM Studio Server запущен и модель установлена")
                 return False
-            print("✅ Ollama доступен")
+            print("✅ LM Studio Server доступен")
         else:
-            print("⚠️ OllamaClient недоступен")
+            print("⚠️ LMStudioEmbeddingClient недоступен")
 
         # Проверяем ChromaDB
         if self.mcp:

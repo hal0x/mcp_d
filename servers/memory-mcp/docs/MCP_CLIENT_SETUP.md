@@ -27,27 +27,27 @@
 ```json
 {
   "mcpServers": {
-    "telegram-dump-local": {
-      "command": "/Users/hal/projects/tg_dump/.venv/bin/python",
-      "args": ["scripts/mcp_server.py"],
-      "cwd": "/Users/hal/projects/tg_dump"
+    "memory-mcp": {
+      "command": "/Users/hal/projects/mcp/servers/memory-mcp/.venv/bin/python",
+      "args": ["-m", "memory_mcp.mcp.server"],
+      "cwd": "/Users/hal/projects/mcp/servers/memory-mcp"
     }
   }
 }
 ```
 
-**Важно:** Замените `/Users/hal/projects/tg_dump` на ваш реальный путь к проекту!
+**Важно:** Замените `/Users/hal/projects/mcp/servers/memory-mcp` на ваш реальный путь к проекту!
 
 ### 🔄 Альтернативный вариант (с активацией venv)
 
 ```json
 {
   "mcpServers": {
-    "telegram-dump-local": {
+    "memory-mcp": {
       "command": "bash",
       "args": [
         "-c", 
-        "cd /Users/hal/projects/tg_dump && source .venv/bin/activate && python scripts/mcp_server.py"
+        "cd /Users/hal/projects/mcp/servers/memory-mcp && source .venv/bin/activate && python -m memory_mcp.mcp.server"
       ]
     }
   }
@@ -114,12 +114,12 @@
 ```json
 {
   "mcpServers": {
-    "telegram-dump-local": {
-      "command": "/Users/hal/projects/tg_dump/.venv/bin/python",
-      "args": ["scripts/mcp_server.py"],
-      "cwd": "/Users/hal/projects/tg_dump",
+    "memory-mcp": {
+      "command": "/Users/hal/projects/mcp/servers/memory-mcp/.venv/bin/python",
+      "args": ["-m", "memory_mcp.mcp.server"],
+      "cwd": "/Users/hal/projects/mcp/servers/memory-mcp",
       "env": {
-        "PYTHONPATH": "/Users/hal/projects/tg_dump"
+        "PYTHONPATH": "/Users/hal/projects/mcp/servers/memory-mcp"
       }
     }
   }
