@@ -278,6 +278,26 @@ class MemoryServiceAdapter:
             if new_item:
                 combined[record_id] = new_item
 
+        # Поиск в ChromaDB коллекциях (chat_messages, chat_sessions, chat_tasks)
+        chromadb_results = self._search_chromadb_collections(
+            request.query,
+            limit=request.top_k,
+            source=request.source,
+            tags=request.tags,
+            date_from=request.date_from,
+            date_to=request.date_to,
+        )
+        
+        for match in chromadb_results:
+            record_id = match.record_id
+            score = match.score * 0.7  # Вес для ChromaDB результатов
+            existing = combined.get(record_id)
+            if existing:
+                existing.score = max(existing.score, score)
+                continue
+            # Создаем новый элемент из ChromaDB результата
+            combined[record_id] = match
+
         total_combined = max(total_fts, len(combined))
         results = sorted(combined.values(), key=lambda item: item.score, reverse=True)
         return SearchResponse(
@@ -1702,6 +1722,130 @@ class MemoryServiceAdapter:
                 f" в {chats_path}" if chats else ""
             ),
         )
+
+    def _search_chromadb_collections(
+        self,
+        query: str,
+        limit: int = 10,
+        source: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+    ) -> List[SearchResultItem]:
+        """Поиск в ChromaDB коллекциях, созданных TwoLevelIndexer."""
+        if not self.embedding_service:
+            return []
+        
+        try:
+            import chromadb
+            from ..config import get_settings
+            
+            settings = get_settings()
+            chroma_path = settings.chroma_path
+            
+            # Разрешаем относительный путь
+            if not os.path.isabs(chroma_path):
+                current_dir = Path(__file__).parent
+                project_root = current_dir
+                while project_root.parent != project_root:
+                    if (project_root / "pyproject.toml").exists():
+                        break
+                    project_root = project_root.parent
+                if not (project_root / "pyproject.toml").exists():
+                    project_root = Path.cwd()
+                chroma_path = str(project_root / chroma_path)
+            
+            if not os.path.exists(chroma_path):
+                return []
+            
+            chroma_client = chromadb.PersistentClient(path=chroma_path)
+            
+            # Генерируем эмбеддинг запроса
+            query_vector = self.embedding_service.embed(query)
+            if not query_vector:
+                return []
+            
+            results: List[SearchResultItem] = []
+            
+            # Ищем в коллекциях: messages, sessions, tasks
+            for collection_name in ["chat_messages", "chat_sessions", "chat_tasks"]:
+                try:
+                    collection = chroma_client.get_collection(collection_name)
+                    
+                    # Формируем фильтр where
+                    where_filter = {}
+                    if source:
+                        # Если source указан, проверяем метаданные
+                        # Для чатов source может быть названием чата
+                        where_filter["chat"] = source
+                    
+                    # Выполняем поиск
+                    search_results = collection.query(
+                        query_embeddings=[query_vector],
+                        n_results=limit,
+                        where=where_filter if where_filter else None,
+                    )
+                    
+                    if not search_results.get("ids") or not search_results["ids"][0]:
+                        continue
+                    
+                    # Обрабатываем результаты
+                    for i, doc_id in enumerate(search_results["ids"][0]):
+                        distance = search_results["distances"][0][i] if search_results.get("distances") else 0.0
+                        document = search_results["documents"][0][i] if search_results.get("documents") else ""
+                        metadata = search_results["metadatas"][0][i] if search_results.get("metadatas") else {}
+                        
+                        # Конвертируем distance в similarity score
+                        similarity = 1.0 / (1.0 + distance)
+                        
+                        # Извлекаем информацию из метаданных
+                        chat_name = metadata.get("chat", "")
+                        date_utc = metadata.get("date_utc", "")
+                        timestamp = None
+                        if date_utc:
+                            try:
+                                timestamp = parse_datetime_utc(date_utc, use_zoneinfo=True)
+                            except Exception:
+                                pass
+                        
+                        # Формируем source для результата
+                        result_source = chat_name if chat_name else collection_name.replace("chat_", "")
+                        if source and source != chat_name:
+                            continue  # Пропускаем если фильтр по source не совпадает
+                        
+                        # Проверяем фильтры по дате
+                        if timestamp:
+                            if date_from and timestamp < date_from:
+                                continue
+                            if date_to and timestamp > date_to:
+                                continue
+                        
+                        # Создаем результат
+                        result = SearchResultItem(
+                            record_id=doc_id,
+                            score=similarity,
+                            content=document[:500] if document else "",  # Ограничиваем длину
+                            source=result_source,
+                            timestamp=timestamp,
+                            author=None,
+                            metadata={
+                                "collection": collection_name,
+                                "chat": chat_name,
+                                **metadata,
+                            },
+                            embedding=None,
+                        )
+                        results.append(result)
+                        
+                except Exception as e:
+                    logger.debug(f"Ошибка при поиске в коллекции {collection_name}: {e}")
+                    continue
+            
+            return results
+            
+        except Exception as e:
+            logger.debug(f"Ошибка при поиске в ChromaDB коллекциях: {e}", exc_info=True)
+            return []
 
     # Utils
     def _build_item_from_graph(
