@@ -730,8 +730,17 @@ class TypedGraphMemory:
             if date_to and timestamp_dt and timestamp_dt > date_to:
                 continue
 
+            # BM25 score нормализуем: отрицательные значения (лучше релевантность) -> выше score
+            # BM25 обычно возвращает отрицательные значения, где более отрицательные = лучше
             bm25_score = row["score"] if row["score"] is not None else 0.0
-            score = 1.0 / (1.0 + bm25_score)
+            # Нормализуем BM25: если отрицательный, инвертируем и нормализуем к [0, 1]
+            if bm25_score < 0:
+                # Отрицательные значения BM25 означают лучшую релевантность
+                # Преобразуем: -10 -> 0.9, -1 -> 0.5, 0 -> 0.0
+                score = 1.0 / (1.0 + abs(bm25_score) / 10.0)
+            else:
+                # Положительные значения (редко) обрабатываем как обычно
+                score = 1.0 / (1.0 + bm25_score)
 
             snippet = row["snippet"] or ""
             content = row["content"] or props.get("content") or attrs.get("content") or ""

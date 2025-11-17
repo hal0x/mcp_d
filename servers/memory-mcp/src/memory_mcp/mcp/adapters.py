@@ -174,8 +174,13 @@ class MemoryServiceAdapter:
         ):
             self.vector_store.ensure_collection(self.embedding_service.dimension)
         self.trading_memory = TradingMemory(self.graph)
-        self._fts_weight = 0.6
-        self._vector_weight = 0.8
+        # Веса для гибридного поиска (FTS + векторный)
+        # Нормализуем веса так, чтобы их сумма была 1.0
+        _fts_weight_raw = 0.6
+        _vector_weight_raw = 0.8
+        _total_weight = _fts_weight_raw + _vector_weight_raw
+        self._fts_weight = _fts_weight_raw / _total_weight
+        self._vector_weight = _vector_weight_raw / _total_weight
 
     def close(self) -> None:
         try:
@@ -325,7 +330,13 @@ class MemoryServiceAdapter:
                 if isinstance(chat_name, str):
                     payload_data["chat"] = chat_name
                 try:
+                    # Сохраняем эмбеддинг в Qdrant
                     self.vector_store.upsert(payload.record_id, vector, payload_data)
+                    # Сохраняем эмбеддинг в граф
+                    self.graph.update_node(
+                        payload.record_id,
+                        embedding=vector,
+                    )
                 except Exception:  # pragma: no cover
                     logger.debug(
                         "Vector upsert failed for %s", payload.record_id, exc_info=True
@@ -350,6 +361,26 @@ class MemoryServiceAdapter:
 
         combined: dict[str, SearchResultItem] = {}
         for row in rows:
+            # Получаем эмбеддинг из графа, если доступен
+            embedding = None
+            if row["node_id"] in self.graph.graph:
+                node_data = self.graph.graph.nodes[row["node_id"]]
+                embedding = node_data.get("embedding")
+                # Если эмбеддинг не в графе, пытаемся получить из БД
+                if embedding is None:
+                    try:
+                        cursor = self.graph.conn.cursor()
+                        cursor.execute(
+                            "SELECT embedding FROM nodes WHERE id = ?",
+                            (row["node_id"],),
+                        )
+                        db_row = cursor.fetchone()
+                        if db_row and db_row["embedding"]:
+                            import json
+                            embedding = json.loads(db_row["embedding"].decode())
+                    except Exception:
+                        pass
+            
             combined[row["node_id"]] = SearchResultItem(
                 record_id=row["node_id"],
                 score=row["score"] * self._fts_weight,
@@ -358,7 +389,7 @@ class MemoryServiceAdapter:
                 timestamp=row["timestamp"],
                 author=row.get("author"),
                 metadata=row.get("metadata", {}),
-                embedding=None,
+                embedding=embedding,
             )
 
         vector_results = []
@@ -424,11 +455,79 @@ class MemoryServiceAdapter:
     # Fetch
     def fetch(self, request: FetchRequest) -> FetchResponse:
         try:
-            if request.record_id not in self.graph.graph:
-                return FetchResponse(record=None)
-            data = self.graph.graph.nodes[request.record_id]
-            payload = _node_to_payload(self.graph, request.record_id, data)
-            return FetchResponse(record=payload)
+            # Сначала пытаемся найти в графе
+            if request.record_id in self.graph.graph:
+                data = self.graph.graph.nodes[request.record_id]
+                payload = _node_to_payload(self.graph, request.record_id, data)
+                return FetchResponse(record=payload)
+            
+            # Если не найдено в графе, ищем в ChromaDB коллекциях
+            try:
+                import chromadb
+                from ..config import get_settings
+                
+                settings = get_settings()
+                chroma_path = settings.chroma_path
+                
+                if not os.path.isabs(chroma_path):
+                    current_dir = Path(__file__).parent
+                    project_root = current_dir
+                    while project_root.parent != project_root:
+                        if (project_root / "pyproject.toml").exists():
+                            break
+                        project_root = project_root.parent
+                    if not (project_root / "pyproject.toml").exists():
+                        project_root = Path.cwd()
+                    chroma_path = str(project_root / chroma_path)
+                
+                if os.path.exists(chroma_path):
+                    chroma_client = chromadb.PersistentClient(path=chroma_path)
+                    
+                    # Ищем в коллекциях chat_messages, chat_sessions, chat_tasks
+                    for collection_name in ["chat_messages", "chat_sessions", "chat_tasks"]:
+                        try:
+                            collection = chroma_client.get_collection(collection_name)
+                            result = collection.get(ids=[request.record_id], include=["documents", "metadatas"])
+                            
+                            if result.get("ids") and len(result["ids"]) > 0:
+                                doc = result["documents"][0] if result.get("documents") else ""
+                                metadata = result["metadatas"][0] if result.get("metadatas") else {}
+                                
+                                # Преобразуем ChromaDB запись в MemoryRecordPayload
+                                chat_name = metadata.get("chat", collection_name.replace("chat_", ""))
+                                date_utc = metadata.get("date_utc", "")
+                                timestamp = None
+                                if date_utc:
+                                    try:
+                                        timestamp = parse_datetime_utc(date_utc, use_zoneinfo=True)
+                                    except Exception:
+                                        timestamp = datetime.now(timezone.utc)
+                                else:
+                                    timestamp = datetime.now(timezone.utc)
+                                
+                                payload = MemoryRecordPayload(
+                                    record_id=request.record_id,
+                                    source=chat_name,
+                                    content=doc,
+                                    timestamp=timestamp,
+                                    author=metadata.get("sender"),
+                                    tags=metadata.get("tags", []),
+                                    entities=[],
+                                    attachments=[],
+                                    metadata={
+                                        "collection": collection_name,
+                                        "chat": chat_name,
+                                        **metadata,
+                                    },
+                                )
+                                return FetchResponse(record=payload)
+                        except Exception as e:
+                            logger.debug(f"Failed to fetch from collection {collection_name}: {e}")
+                            continue
+            except Exception as e:
+                logger.debug(f"Failed to fetch from ChromaDB: {e}")
+            
+            return FetchResponse(record=None)
         except Exception as e:
             logger.error(f"Failed to fetch record {request.record_id}: {e}", exc_info=True)
             return FetchResponse(record=None)
@@ -517,7 +616,8 @@ class MemoryServiceAdapter:
         import uuid
         from datetime import datetime
 
-        record_id = f"scrape_{uuid.uuid4().hex[:12]}"
+        # Используем полный UUID (32 символа) для избежания коллизий
+        record_id = f"scrape_{uuid.uuid4().hex}"
         record = MemoryRecordPayload(
             record_id=record_id,
             source=request.source,
@@ -607,6 +707,40 @@ class MemoryServiceAdapter:
                 message=f"Record {request.record_id} not found",
             )
 
+        # Проверяем, есть ли изменения
+        props = dict(node.get("properties") or {})
+        has_changes = False
+        
+        if request.content is not None and request.content != (node.get("content") or ""):
+            has_changes = True
+        if request.source is not None and request.source != (node.get("source") or props.get("source")):
+            has_changes = True
+        if request.tags is not None:
+            old_tags = set(props.get("tags", []))
+            new_tags = set(request.tags)
+            if old_tags != new_tags:
+                has_changes = True
+        if request.entities is not None:
+            old_entities = set(props.get("entities", []))
+            new_entities = set(request.entities)
+            if old_entities != new_entities:
+                has_changes = True
+        if request.metadata:
+            # Проверяем, есть ли изменения в metadata
+            old_metadata = {k: v for k, v in props.items() 
+                          if k not in ["source", "content", "timestamp", "author", "tags", "entities", "created_at"]}
+            for key, value in request.metadata.items():
+                if old_metadata.get(key) != value:
+                    has_changes = True
+                    break
+        
+        if not has_changes:
+            return UpdateRecordResponse(
+                record_id=request.record_id,
+                updated=False,
+                message="No changes detected. Record was not updated.",
+            )
+
         new_embedding = None
         if request.content and self.embedding_service:
             new_embedding = self.embedding_service.embed(request.content)
@@ -690,39 +824,112 @@ class MemoryServiceAdapter:
         graph_stats = graph_stats_obj.model_dump()
 
         sources_count = {}
-        cursor = self.graph.conn.cursor()
-        cursor.execute(
-            """
-            SELECT properties FROM nodes
-            WHERE type = 'DocChunk'
-        """
-        )
-        for row in cursor.fetchall():
-            if row["properties"]:
-                props = json.loads(row["properties"])
-                source = props.get("source", "unknown")
-                sources_count[source] = sources_count.get(source, 0) + 1
-
         tags_count = {}
-        cursor.execute(
-            """
-            SELECT properties FROM nodes
-        """
-        )
-        for row in cursor.fetchall():
-            if row["properties"]:
-                props = json.loads(row["properties"])
-                tags = props.get("tags", [])
-                if isinstance(tags, list):
-                    for tag in tags:
-                        tags_count[tag] = tags_count.get(tag, 0) + 1
+        
+        # Проверяем наличие столбца properties в таблице nodes
+        cursor = self.graph.conn.cursor()
+        try:
+            cursor.execute("PRAGMA table_info(nodes)")
+            columns = {row[1] for row in cursor.fetchall()}
+            if "properties" not in columns:
+                logger.warning(
+                    "Столбец 'properties' не найден в таблице 'nodes'. "
+                    "Статистика по источникам и тегам будет пустой."
+                )
+        except Exception as e:
+            logger.warning(f"Не удалось проверить схему таблицы 'nodes': {e}")
 
+        # Подсчитываем источники из графа
+        try:
+            cursor.execute(
+                """
+                SELECT properties FROM nodes
+                WHERE type = 'DocChunk'
+            """
+            )
+            for row in cursor.fetchall():
+                if row["properties"]:
+                    props = json.loads(row["properties"])
+                    source = props.get("source", "unknown")
+                    sources_count[source] = sources_count.get(source, 0) + 1
+        except Exception as e:
+            logger.warning(f"Ошибка при подсчёте источников из графа: {e}")
+
+        # Подсчитываем теги из графа
+        try:
+            cursor.execute(
+                """
+                SELECT properties FROM nodes
+            """
+            )
+            for row in cursor.fetchall():
+                if row["properties"]:
+                    props = json.loads(row["properties"])
+                    tags = props.get("tags", [])
+                    if isinstance(tags, list):
+                        for tag in tags:
+                            tags_count[tag] = tags_count.get(tag, 0) + 1
+        except Exception as e:
+            logger.warning(f"Ошибка при подсчёте тегов из графа: {e}")
+
+        # Добавляем статистику из ChromaDB коллекций
+        try:
+            import chromadb
+            from ..config import get_settings
+            
+            settings = get_settings()
+            chroma_path = settings.chroma_path
+            
+            if not os.path.isabs(chroma_path):
+                current_dir = Path(__file__).parent
+                project_root = current_dir
+                while project_root.parent != project_root:
+                    if (project_root / "pyproject.toml").exists():
+                        break
+                    project_root = project_root.parent
+                if not (project_root / "pyproject.toml").exists():
+                    project_root = Path.cwd()
+                chroma_path = str(project_root / chroma_path)
+            
+            if os.path.exists(chroma_path):
+                chroma_client = chromadb.PersistentClient(path=chroma_path)
+                
+                for collection_name in ["chat_messages", "chat_sessions", "chat_tasks"]:
+                    try:
+                        collection = chroma_client.get_collection(collection_name)
+                        result = collection.get(include=["metadatas"])
+                        
+                        metadatas = result.get("metadatas", [])
+                        for metadata in metadatas:
+                            if not isinstance(metadata, dict):
+                                continue
+                            
+                            # Подсчитываем источники (чаты)
+                            chat = metadata.get("chat", collection_name.replace("chat_", ""))
+                            if chat:
+                                sources_count[chat] = sources_count.get(chat, 0) + 1
+                            
+                            # Подсчитываем теги
+                            tags = metadata.get("tags", [])
+                            if isinstance(tags, list):
+                                for tag in tags:
+                                    tags_count[tag] = tags_count.get(tag, 0) + 1
+                    except Exception as e:
+                        logger.debug(f"Ошибка при подсчёте статистики из коллекции {collection_name}: {e}")
+                        continue
+        except Exception as e:
+            logger.debug(f"Ошибка при подсчёте статистики из ChromaDB: {e}")
+
+        # Получаем размер БД
         db_size = None
-        db_path = self.graph.conn.execute("PRAGMA database_list").fetchone()
-        if db_path:
-            db_file = Path(db_path[2]) if len(db_path) > 2 else None
-            if db_file and db_file.exists():
-                db_size = db_file.stat().st_size
+        try:
+            db_path = self.graph.conn.execute("PRAGMA database_list").fetchone()
+            if db_path:
+                db_file = Path(db_path[2]) if len(db_path) > 2 else None
+                if db_file and db_file.exists():
+                    db_size = db_file.stat().st_size
+        except Exception as e:
+            logger.debug(f"Не удалось получить размер БД: {e}")
 
         return GetStatisticsResponse(
             graph_stats=graph_stats,
@@ -1211,9 +1418,18 @@ class MemoryServiceAdapter:
                 if not timestamp_str:
                     continue
                 
+                # Используем parse_datetime_utc для более гибкой обработки дат
                 try:
-                    timestamp = _parse_timestamp(timestamp_str)
-                except Exception:
+                    timestamp = parse_datetime_utc(timestamp_str, default=None)
+                    if timestamp is None:
+                        logger.debug(
+                            f"Не удалось распарсить timestamp '{timestamp_str}' для записи {row['id']}"
+                        )
+                        continue
+                except Exception as e:
+                    logger.debug(
+                        f"Ошибка при парсинге timestamp '{timestamp_str}' для записи {row['id']}: {e}"
+                    )
                     continue
                 
                 # Фильтруем по датам
@@ -1307,8 +1523,8 @@ class MemoryServiceAdapter:
         total_updated = 0
         total_failed = 0
 
-        try:
-            for update_item in request.updates:
+        for update_item in request.updates:
+            try:
                 update_req = UpdateRecordRequest(
                     record_id=update_item.record_id,
                     content=update_item.content,
@@ -1331,18 +1547,20 @@ class MemoryServiceAdapter:
                     total_updated += 1
                 else:
                     total_failed += 1
-        except Exception as e:
-            logger.error(f"Error in batch update: {e}")
-            for update_item in request.updates:
-                if not any(r.record_id == update_item.record_id for r in results):
-                    results.append(
-                        BatchUpdateResult(
-                            record_id=update_item.record_id,
-                            updated=False,
-                            message=f"Batch update failed: {str(e)}",
-                        )
+            except Exception as e:
+                # Обрабатываем ошибку для конкретного элемента, продолжаем с остальными
+                logger.warning(
+                    f"Ошибка при обновлении записи {update_item.record_id}: {e}",
+                    exc_info=True,
+                )
+                results.append(
+                    BatchUpdateResult(
+                        record_id=update_item.record_id,
+                        updated=False,
+                        message=f"Ошибка при обновлении: {str(e)}",
                     )
-                    total_failed += 1
+                )
+                total_failed += 1
 
         return BatchUpdateRecordsResponse(
             results=results,
@@ -1436,21 +1654,20 @@ class MemoryServiceAdapter:
             import csv
             import io
             output = io.StringIO()
-            if records:
-                writer = csv.DictWriter(
-                    output,
-                    fieldnames=["record_id", "source", "timestamp", "author", "content", "tags"],
-                )
-                writer.writeheader()
-                for record in records:
-                    writer.writerow({
-                        "record_id": record.record_id,
-                        "source": record.source,
-                        "timestamp": record.timestamp.isoformat() if record.timestamp else "",
-                        "author": record.author or "",
-                        "content": record.content[:500] if record.content else "",
-                        "tags": ",".join(record.tags),
-                    })
+            writer = csv.DictWriter(
+                output,
+                fieldnames=["record_id", "source", "timestamp", "author", "content", "tags"],
+            )
+            writer.writeheader()
+            for record in records:
+                writer.writerow({
+                    "record_id": record.record_id,
+                    "source": record.source,
+                    "timestamp": record.timestamp.isoformat() if record.timestamp else "",
+                    "author": record.author or "",
+                    "content": record.content[:500] if record.content else "",
+                    "tags": ",".join(record.tags),
+                })
             content = output.getvalue()
         elif request.format == "markdown":
             content = "# Экспорт записей\n\n"
@@ -1495,11 +1712,23 @@ class MemoryServiceAdapter:
                 import io
                 reader = csv.DictReader(io.StringIO(request.content))
                 for row in reader:
+                    # Проверяем наличие поля timestamp перед парсингом
+                    timestamp_value = row.get("timestamp")
+                    if timestamp_value and timestamp_value.strip():
+                        parsed_timestamp = _parse_timestamp(timestamp_value)
+                    else:
+                        # Если timestamp отсутствует, используем текущее время как метку создания
+                        parsed_timestamp = datetime.now(timezone.utc)
+                        logger.debug(
+                            f"Отсутствует timestamp в CSV строке для record_id={row.get('record_id', 'unknown')}. "
+                            f"Используется текущее время."
+                        )
+                    
                     record_data = {
                         "record_id": row.get("record_id", ""),
                         "source": request.source or row.get("source", "imported"),
                         "content": row.get("content", ""),
-                        "timestamp": _parse_timestamp(row.get("timestamp")),
+                        "timestamp": parsed_timestamp,
                         "author": row.get("author"),
                         "tags": row.get("tags", "").split(",") if row.get("tags") else [],
                         "entities": [],
@@ -2021,13 +2250,33 @@ class MemoryServiceAdapter:
         snippet_text = snippet or content[:200]
         source = data.get("source") or props.get("source") or "unknown"
         timestamp_raw = props.get("timestamp") or data.get("timestamp")
-        timestamp = (
-            _parse_timestamp(timestamp_raw)
-            if timestamp_raw
-            else datetime.now(timezone.utc)
-        )
+        if timestamp_raw:
+            timestamp = _parse_timestamp(timestamp_raw)
+        else:
+            logger.warning(
+                f"Отсутствует timestamp для записи {record_id}. "
+                f"Используется текущее время. Это может указывать на проблему в данных."
+            )
+            timestamp = datetime.now(timezone.utc)
         author = data.get("author") or props.get("author")
         metadata = dict(props) if props else {}
+        
+        # Получаем эмбеддинг из графа или БД
+        embedding = data.get("embedding")
+        if embedding is None:
+            try:
+                cursor = self.graph.conn.cursor()
+                cursor.execute(
+                    "SELECT embedding FROM nodes WHERE id = ?",
+                    (record_id,),
+                )
+                db_row = cursor.fetchone()
+                if db_row and db_row["embedding"]:
+                    import json
+                    embedding = json.loads(db_row["embedding"].decode())
+            except Exception:
+                pass
+        
         return SearchResultItem(
             record_id=record_id,
             score=score,
@@ -2036,5 +2285,5 @@ class MemoryServiceAdapter:
             timestamp=timestamp,
             author=author,
             metadata=metadata,
-            embedding=None,
+            embedding=embedding,
         )

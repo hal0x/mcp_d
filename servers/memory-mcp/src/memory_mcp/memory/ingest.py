@@ -29,10 +29,14 @@ class MemoryIngestor:
 
     def ingest(self, records: Iterable[MemoryRecord]) -> IngestResult:
         stats = IngestResult()
-        for record in records:
+        records_list = list(records)
+        added_nodes = []
+        
+        for record in records_list:
             doc_node = self._build_doc_node(record)
             if self.graph.add_node(doc_node):
                 stats.records_ingested += 1
+                added_nodes.append((doc_node, record))
             else:
                 logger.debug("Запись %s уже существует", record.record_id)
             for attachment in record.attachments:
@@ -47,6 +51,45 @@ class MemoryIngestor:
                         weight=0.3,
                     )
                     self.graph.add_edge(edge)
+        
+        # Создаем связи между записями из одного источника/чата
+        # Группируем по источнику и чату
+        from collections import defaultdict
+        by_source_chat = defaultdict(list)
+        for doc_node, record in added_nodes:
+            chat = record.metadata.get("chat") or record.source
+            key = (record.source, chat)
+            by_source_chat[key].append((doc_node, record))
+        
+        # Создаем связи между соседними записями в одной группе (по timestamp)
+        for (source, chat), nodes_records in by_source_chat.items():
+            if len(nodes_records) < 2:
+                continue
+            # Сортируем по timestamp
+            sorted_nodes = sorted(
+                nodes_records,
+                key=lambda x: x[1].timestamp,
+            )
+            # Создаем связи между соседними записями
+            for i in range(len(sorted_nodes) - 1):
+                prev_node, prev_record = sorted_nodes[i]
+                next_node, next_record = sorted_nodes[i + 1]
+                # Создаем связь только если записи близки по времени (в пределах 4 часов)
+                time_diff = (next_record.timestamp - prev_record.timestamp).total_seconds()
+                if time_diff <= 4 * 3600:  # 4 часа
+                    edge = GraphEdge(
+                        id=f"{prev_node.id}-next-{next_node.id}",
+                        source_id=prev_node.id,
+                        target_id=next_node.id,
+                        type=EdgeType.RELATES_TO,
+                        weight=0.5,  # Средний вес для временных связей
+                        properties={"time_diff_seconds": time_diff},
+                    )
+                    try:
+                        self.graph.add_edge(edge)
+                    except Exception as e:
+                        logger.debug(f"Failed to add edge between {prev_node.id} and {next_node.id}: {e}")
+        
         return stats
 
     def _build_doc_node(self, record: MemoryRecord) -> DocChunkNode:
