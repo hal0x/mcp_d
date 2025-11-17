@@ -51,8 +51,6 @@ class BackgroundIndexingService:
         self._chroma_client: Optional[chromadb.PersistentClient] = None
         self._progress_collection: Optional[chromadb.Collection] = None
         self._message_extractor: Optional[MessageExtractor] = None
-
-        # Callback для запуска индексации (будет установлен из MCP сервера)
         self._index_chat_callback: Optional[callable] = None
 
     def set_index_chat_callback(self, callback: callable):
@@ -67,7 +65,6 @@ class BackgroundIndexingService:
 
             self._chroma_client = chromadb.PersistentClient(path=str(self.chroma_path))
 
-            # Получаем или создаем коллекцию для прогресса
             try:
                 self._progress_collection = self._chroma_client.get_collection(
                     "indexing_progress"
@@ -118,7 +115,6 @@ class BackgroundIndexingService:
                 "updated_at": datetime.now(ZoneInfo("UTC")).isoformat(),
             }
 
-            # Используем пустой эмбеддинг (не нужен для метаданных)
             dummy_embedding = [0.0] * 1024
 
             self._progress_collection.upsert(
@@ -148,27 +144,24 @@ class BackgroundIndexingService:
             logger.debug(f"Директория input не найдена: {self.input_path}")
             return updated_chats
 
-        # Проходим по всем чатам в input
         for chat_dir in self.input_path.iterdir():
             if not chat_dir.is_dir():
                 continue
 
             chat_name = chat_dir.name
 
-            # Проверяем все JSON файлы в директории чата
             for json_file in chat_dir.glob("*.json"):
                 try:
                     file_mtime = datetime.fromtimestamp(
                         json_file.stat().st_mtime, tz=timezone.utc
                     )
 
-                    # Если файл был изменен после последней проверки
                     if last_check_time is None or file_mtime > last_check_time:
                         updated_chats.add(chat_name)
                         logger.debug(
                             f"Найден обновленный чат: {chat_name} (файл {json_file.name} изменен {file_mtime})"
                         )
-                        break  # Достаточно одного обновленного файла
+                        break
                 except Exception as e:
                     logger.warning(f"Ошибка при проверке файла {json_file}: {e}")
                     continue
@@ -190,7 +183,6 @@ class BackgroundIndexingService:
                 input_dir=str(self.input_path), chats_dir=str(self.chats_path)
             )
 
-        # Извлекаем сообщения (без фильтрации по дате, так как проверяем по времени файла)
         stats = self._message_extractor.extract_all_messages(
             dry_run=False, filter_by_date=False, chat_filter=chat_filter
         )
@@ -212,18 +204,14 @@ class BackgroundIndexingService:
             try:
                 logger.info(f"Запуск индексации для обновленного чата: {chat_name}")
 
-                # Используем callback для запуска индексации
-                # Создаем request объект
                 from ..mcp.schema import IndexChatRequest
 
                 request = IndexChatRequest(
                     chat=chat_name,
-                    force_full=False,  # Инкрементальная индексация
-                    recent_days=0,  # Индексируем все новые сообщения
-                    progress=False,
+                    force_full=False,
+                    recent_days=0,
                 )
 
-                # Запускаем индексацию через callback
                 response = await self._index_chat_callback(request)
                 
                 if response and hasattr(response, 'status'):
@@ -235,17 +223,13 @@ class BackgroundIndexingService:
                     f"Ошибка при запуске индексации для чата {chat_name}: {e}",
                     exc_info=True,
                 )
-                # Продолжаем обработку других чатов
 
     async def _check_and_process(self):
         """Основная логика проверки и обработки новых сообщений."""
         try:
             logger.debug("Начало проверки input директории")
 
-            # Получаем время последней проверки
             last_check_time = self._get_last_check_time()
-
-            # Находим обновленные чаты
             updated_chats = self._get_updated_chats(last_check_time)
 
             if not updated_chats:
@@ -253,20 +237,17 @@ class BackgroundIndexingService:
             else:
                 logger.info(f"Найдено обновленных чатов: {len(updated_chats)}: {list(updated_chats)}")
 
-                # Извлекаем новые сообщения для всех обновленных чатов
                 stats = await self._extract_new_messages()
                 logger.info(
                     f"Извлечено сообщений: {stats.get('messages_copied', 0)}, "
                     f"дубликатов пропущено: {stats.get('duplicates_skipped', 0)}"
                 )
 
-                # Запускаем индексацию для обновленных чатов только если были извлечены новые сообщения
                 if stats.get('messages_copied', 0) > 0:
                     await self._index_updated_chats(updated_chats)
                 else:
                     logger.debug("Нет новых сообщений для индексации")
 
-            # Сохраняем время текущей проверки
             current_check_time = datetime.now(ZoneInfo("UTC"))
             self._save_last_check_time(current_check_time)
 
@@ -274,7 +255,6 @@ class BackgroundIndexingService:
 
         except Exception as e:
             logger.error(f"Ошибка при проверке и обработке: {e}", exc_info=True)
-            # Продолжаем работу даже при ошибках
 
     async def _run_loop(self):
         """Основной цикл фонового процесса."""
@@ -282,7 +262,6 @@ class BackgroundIndexingService:
             f"Фоновая индексация запущена (интервал: {self.check_interval} секунд)"
         )
 
-        # Инициализируем ChromaDB
         try:
             self._initialize_chromadb()
         except Exception as e:
@@ -295,7 +274,6 @@ class BackgroundIndexingService:
             except Exception as e:
                 logger.error(f"Ошибка в цикле фоновой индексации: {e}", exc_info=True)
 
-            # Ждем до следующей проверки
             if self._running:
                 await asyncio.sleep(self.check_interval)
 

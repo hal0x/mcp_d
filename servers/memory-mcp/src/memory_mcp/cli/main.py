@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-CLI интерфейс для Telegram Dump Manager
-Оптимизированная версия 2.0 - только двухуровневая индексация и граф инсайтов
-"""
+"""CLI интерфейс для Telegram Dump Manager v2.0."""
 
 import asyncio
 import json
@@ -19,7 +16,6 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import click
 
-# Импортируем улучшенную токенизацию
 from ..utils.russian_tokenizer import tokenize_text as enhanced_tokenize
 
 # Отключаем телеметрию ChromaDB
@@ -32,16 +28,12 @@ from ..core.indexer import TwoLevelIndexer
 from ..indexing import TelegramIndexer
 from ..memory.ingest import MemoryIngestor
 from ..memory.typed_graph import TypedGraphMemory
+from ..utils.message_extractor import MessageExtractor
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
-# Импортируем MessageExtractor из общего модуля
-from ..utils.message_extractor import MessageExtractor
 
 
 class MessageDeduplicator:
@@ -70,7 +62,6 @@ class MessageDeduplicator:
         if not chat_dir.exists():
             return chat_stats
 
-        # Собираем все сообщения из всех файлов чата
         all_messages = []
         for json_file in chat_dir.glob("*.json"):
             try:
@@ -88,29 +79,23 @@ class MessageDeduplicator:
 
         chat_stats["total_messages"] = len(all_messages)
 
-        # Дедупликация по полю 'id'
         from ..utils.deduplication import deduplicate_by_id
 
         unique_messages = deduplicate_by_id(all_messages)
         chat_stats["duplicates_removed"] = len(all_messages) - len(unique_messages)
-
         chat_stats["unique_messages"] = len(unique_messages)
 
-        # Перезаписываем файлы с уникальными сообщениями
         if unique_messages != all_messages:
-            # Создаем временный файл
             temp_file = chat_dir / "temp_dedup.json"
             try:
                 with open(temp_file, "w", encoding="utf-8") as f:
                     for message in unique_messages:
                         f.write(json.dumps(message, ensure_ascii=False) + "\n")
 
-                # Заменяем оригинальные файлы
                 for json_file in chat_dir.glob("*.json"):
                     if json_file.name != "temp_dedup.json":
                         json_file.unlink()
 
-                # Переименовываем временный файл
                 final_file = chat_dir / "messages.json"
                 temp_file.rename(final_file)
 
@@ -169,10 +154,9 @@ class ProcessManager:
 
     @staticmethod
     def kill_processes_by_name(pattern: str) -> int:
-        """Убивает процессы по имени."""
+        """Останавливает процессы по имени."""
         killed_count = 0
         try:
-            # Получаем список процессов
             result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
             lines = result.stdout.split("\n")
 
@@ -197,7 +181,6 @@ class ProcessManager:
         """Остановка Ollama сервера."""
         logger.info("🛑 Остановка Ollama сервера...")
 
-        # Пробуем остановить через ollama stop
         try:
             result = subprocess.run(
                 ["ollama", "stop"], capture_output=True, text=True, timeout=10
@@ -280,18 +263,12 @@ class ProcessManager:
         logger.info("🛑 ОСТАНОВКА ВСЕХ ПРОЦЕССОВ ИНДЕКСАЦИИ")
         logger.info("=" * 50)
 
-        # Останавливаем процессы индексации
         ProcessManager.stop_indexing_processes()
-
-        # Останавливаем Ollama
         ProcessManager.stop_ollama()
 
-        # Небольшая пауза
         import time
-
         time.sleep(2)
 
-        # Проверяем оставшиеся процессы
         ProcessManager.check_remaining_processes()
 
         logger.info("=" * 50)
@@ -511,7 +488,6 @@ def check(embedding_model):
 @click.option(
     "--recent-days", default=7, type=int, help="Пересаммаризировать последние N дней"
 )
-@click.option("--progress", is_flag=True, help="Показать прогресс-бар")
 @click.option(
     "--no-quality-check",
     is_flag=True,
@@ -607,7 +583,6 @@ def index(
     chat,
     force_full,
     recent_days,
-    progress,
     no_quality_check,
     no_improvement,
     min_quality,
@@ -638,12 +613,10 @@ def index(
         click.echo("=" * 80)
         click.echo()
 
-        # Валидация параметров
         if scope == "chat" and not chat:
             click.echo("❌ Для scope='chat' необходимо указать --chat")
             return
 
-        # Создаём индексатор с параметрами качества и кластеризации
         click.echo("📦 Инициализация индексатора...")
         from ..core.lmstudio_client import LMStudioEmbeddingClient
         from ..config import get_settings
@@ -653,7 +626,6 @@ def index(
             model_name=embedding_model or settings.lmstudio_model,
             base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
         )
-        # Используем chroma_path из настроек или переменной окружения
         chroma_path = os.getenv("MEMORY_MCP_CHROMA_PATH") or settings.chroma_path
         indexer = TwoLevelIndexer(
             chroma_path=chroma_path,
@@ -679,7 +651,6 @@ def index(
         click.echo("✅ Индексатор готов")
         click.echo()
 
-        # Параметры индексации
         click.echo("⚙️  Параметры индексации:")
         click.echo(f"   - Scope: {scope}")
         click.echo(f"   - Chat: {chat or 'все чаты'}")
@@ -732,7 +703,6 @@ def index(
             click.echo("   - Объединение маленьких групп")
         click.echo()
 
-        # Запускаем индексацию
         click.echo("🔄 Начало индексации...")
         click.echo()
 
@@ -863,8 +833,7 @@ def list_instructions():
 
 
 def highlight_text(text: str, query: str) -> str:
-    """Подсветка найденных терминов в тексте"""
-    # Разбиваем запрос на слова (минимум 3 символа)
+    """Подсветка найденных терминов в тексте."""
     keywords = [
         word.strip().lower() for word in query.split() if len(word.strip()) >= 3
     ]
@@ -872,10 +841,8 @@ def highlight_text(text: str, query: str) -> str:
     if not keywords:
         return text
 
-    # Подсвечиваем каждое ключевое слово
     result = text
     for keyword in keywords:
-        # Ищем слово с учетом регистра (case-insensitive)
         pattern = re.compile(re.escape(keyword), re.IGNORECASE)
         result = pattern.sub(
             lambda m: click.style(m.group(0), fg="yellow", bold=True), result
@@ -901,15 +868,13 @@ RELEVANCE_THRESHOLDS = {
 
 
 def _tokenize(text: str) -> list[str]:
-    """Улучшенная токенизация для русского языка с поддержкой морфологии"""
+    """Токенизация для русского языка с fallback на простую."""
     if not text:
         return []
 
     try:
-        # Используем улучшенную токенизацию
         return enhanced_tokenize(text)
     except Exception as e:
-        # Fallback к простой токенизации в случае ошибки
         logger.warning(f"Ошибка улучшенной токенизации, используем fallback: {e}")
         return [
             token
@@ -921,7 +886,7 @@ def _tokenize(text: str) -> list[str]:
 def _bm25_scores(
     query_tokens: list[str], documents_tokens: list[list[str]]
 ) -> list[float]:
-    """Вычисляет BM25 для корпуса документов"""
+    """Вычисляет BM25 для корпуса документов."""
     if not query_tokens or not documents_tokens:
         return [0.0] * len(documents_tokens)
 
@@ -940,10 +905,10 @@ def _bm25_scores(
 
     idf = {}
     for token, freq in doc_freq.items():
-        # Добавляем +1, чтобы избежать отрицательных значений при freq == num_docs
         idf[token] = math.log(((num_docs - freq + 0.5) / (freq + 0.5)) + 1.0)
 
     scores = []
+    k1, b = 1.5, 0.75  # Параметры BM25
     for tokens, doc_len in zip(documents_tokens, doc_lengths):
         if not tokens:
             scores.append(0.0)
@@ -956,9 +921,6 @@ def _bm25_scores(
             tf = term_freq.get(token)
             if not token_idf or not tf:
                 continue
-            # Параметры BM25 по умолчанию
-            k1 = 1.5
-            b = 0.75
             denom = tf + k1 * (1 - b + b * (doc_len / avgdl))
             score += token_idf * (tf * (k1 + 1) / denom)
 
@@ -1006,7 +968,6 @@ def search(query, limit, collection, chat, highlight, embedding_model):
             click.echo(f"📋 Фильтр по чату: '{chat}'")
 
         try:
-            # Инициализируем клиентов
             chroma_client = chromadb.PersistentClient(path="./chroma_db")
             settings = get_settings()
             embedding_client = LMStudioEmbeddingClient(
@@ -1014,7 +975,6 @@ def search(query, limit, collection, chat, highlight, embedding_model):
                 base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
             )
 
-            # Получаем коллекцию
             collection_name = f"chat_{collection}"
             try:
                 coll = chroma_client.get_collection(collection_name)
@@ -1023,7 +983,6 @@ def search(query, limit, collection, chat, highlight, embedding_model):
                 click.echo("💡 Запустите 'memory_mcp index' для создания индексов")
                 return
 
-            # Генерируем эмбеддинг
             async with embedding_client:
                 query_embedding = await embedding_client._generate_single_embedding(query)
 
@@ -1031,7 +990,6 @@ def search(query, limit, collection, chat, highlight, embedding_model):
                     click.echo("❌ Не удалось сгенерировать эмбеддинг для запроса")
                     return
 
-                # Гибридный поиск: векторный + BM25
                 where_filter = {"chat": chat} if chat else None
                 vector_limit = max(limit * 4, 20)
                 results = coll.query(
@@ -1058,7 +1016,6 @@ def search(query, limit, collection, chat, highlight, embedding_model):
                         value = metadata.get(key)
                         if value:
                             return value
-                    # Фолбэк на основе текста — достаточно стабилен для локального поиска
                     return f"doc-{abs(hash((doc_text or '')[:80]))}"
 
                 vector_scores: dict[str, float] = {}
@@ -1105,7 +1062,6 @@ def search(query, limit, collection, chat, highlight, embedding_model):
                             score = (max_distance - distance) / denominator
                             vector_scores[doc_id] = max(score, 0.0)
 
-                # Получаем корпус документов для лексического поиска
                 get_kwargs = {"include": ["documents", "metadatas"]}
                 if where_filter:
                     get_kwargs["where"] = where_filter
@@ -1121,7 +1077,6 @@ def search(query, limit, collection, chat, highlight, embedding_model):
                 for idx, (doc_text, metadata) in enumerate(
                     zip(corpus_docs, corpus_meta)
                 ):
-                    # Генерируем ID на основе индекса и содержимого
                     raw_id = f"doc_{idx}_{hash(doc_text or '')}"
                     resolved_id = resolve_doc_id(raw_id, metadata, doc_text)
                     doc_store[resolved_id] = {

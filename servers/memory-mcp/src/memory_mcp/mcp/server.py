@@ -98,16 +98,12 @@ logger.info(f"MCP сервер '{server.name}' создан, начинаем р
 ToolResponse = Tuple[List[TextContent], Dict[str, Any]]
 
 _adapter: MemoryServiceAdapter | None = None
-
-# Глобальный словарь для хранения активных задач индексации
 _active_indexing_jobs: Dict[str, Dict[str, Any]] = {}
-
-# Глобальный сервис фоновой индексации
 _background_indexing_service = None
 
 
 def _get_adapter() -> MemoryServiceAdapter:
-    """Получить или создать адаптер памяти."""
+    """Ленивая инициализация адаптера памяти."""
     global _adapter
     if _adapter is None:
         db_path = os.getenv("MEMORY_DB_PATH", "data/memory_graph.db")
@@ -129,7 +125,7 @@ def _get_adapter() -> MemoryServiceAdapter:
 
 
 def _to_serializable(value: Any) -> Any:
-    """Recursively convert Pydantic models and iterables into plain Python data."""
+    """Рекурсивно конвертирует Pydantic модели и итерируемые объекты в обычные Python данные."""
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, BaseModel):
@@ -145,7 +141,7 @@ def _to_serializable(value: Any) -> Any:
 
 
 def _format_tool_response(payload: Any, *, root_key: str = "result") -> ToolResponse:
-    """Return combined textual and structured content for tool responses."""
+    """Форматирует ответ инструмента в текстовый и структурированный формат."""
     serialized = _to_serializable(payload)
     if isinstance(serialized, dict):
         structured = serialized
@@ -159,7 +155,7 @@ def _format_tool_response(payload: Any, *, root_key: str = "result") -> ToolResp
 
 @server.list_tools()  # type: ignore[misc]
 async def list_tools() -> List[Tool]:
-    """Returns a list of available memory MCP tools."""
+    """Возвращает список доступных инструментов MCP."""
     logger.info("list_tools() вызвана, регистрируем инструменты...")
     tools = [
         Tool(
@@ -1006,7 +1002,7 @@ async def list_tools() -> List[Tool]:
 
 @server.call_tool()  # type: ignore[misc]
 async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
-    """Execute a tool call and format the result."""
+    """Выполняет вызов инструмента и форматирует результат."""
     try:
         logger.info(f"Вызов инструмента: {name} с аргументами: {arguments}")
 
@@ -1240,7 +1236,6 @@ async def _run_indexing_job(
     from datetime import timezone
     
     try:
-        # Обновляем статус на "running"
         _active_indexing_jobs[job_id] = {
             "status": "running",
             "chat": request.chat,
@@ -1250,13 +1245,11 @@ async def _run_indexing_job(
         
         settings = get_settings()
         
-        # Инициализируем embedding client
         embedding_client = LMStudioEmbeddingClient(
             model_name=settings.lmstudio_model,
             base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
         )
         
-        # Инициализируем индексатор с параметрами из запроса
         indexer = TwoLevelIndexer(
             chroma_path=settings.chroma_path,
             artifacts_path=settings.artifacts_path,
@@ -1281,7 +1274,6 @@ async def _run_indexing_job(
             enable_time_analysis=request.enable_time_analysis if request.enable_time_analysis is not None else True,
         )
         
-        # Очистка старых данных при полной переиндексации
         if request.force_full:
             _active_indexing_jobs[job_id]["current_stage"] = "Очистка старых данных"
             logger.info(f"🧹 Очистка старых данных чата '{request.chat}' перед переиндексацией...")
@@ -1293,7 +1285,6 @@ async def _run_indexing_job(
                     f"векторов={cleanup_stats.get('vectors_deleted', 0)}, "
                     f"ChromaDB={cleanup_stats.get('chromadb_deleted', 0)}"
                 )
-                # Сохраняем статистику очистки в job
                 _active_indexing_jobs[job_id]["cleanup_stats"] = cleanup_stats
             except Exception as e:
                 logger.warning(
@@ -1302,10 +1293,8 @@ async def _run_indexing_job(
                     exc_info=True,
                 )
         
-        # Обновляем статус
         _active_indexing_jobs[job_id]["current_stage"] = "Загрузка сообщений"
         
-        # Запускаем индексацию (передаём adapter для возможной дополнительной очистки)
         stats = await indexer.build_index(
             scope="chat",
             chat=request.chat,
@@ -1314,7 +1303,6 @@ async def _run_indexing_job(
             adapter=adapter,
         )
         
-        # Обновляем статус на "completed"
         _active_indexing_jobs[job_id] = {
             "status": "completed",
             "chat": request.chat,
@@ -1329,7 +1317,6 @@ async def _run_indexing_job(
         
     except Exception as e:
         logger.error(f"Ошибка при индексации чата '{request.chat}' (job_id: {job_id}): {e}", exc_info=True)
-        # Обновляем статус на "failed"
         _active_indexing_jobs[job_id] = {
             "status": "failed",
             "chat": request.chat,
@@ -1337,10 +1324,6 @@ async def _run_indexing_job(
             "failed_at": datetime.now(timezone.utc).isoformat(),
             "error": str(e),
         }
-    finally:
-        # Удаляем задачу через 1 час после завершения (чтобы можно было посмотреть результат)
-        # В реальности можно использовать более сложную логику очистки
-        pass
 
 
 async def _start_indexing_job(
@@ -1352,10 +1335,8 @@ async def _start_indexing_job(
     
     from datetime import timezone
     
-    # Генерируем уникальный ID задачи
     job_id = f"index_{uuid.uuid4().hex[:12]}"
     
-    # Проверяем, не запущена ли уже индексация для этого чата
     for existing_job_id, job_info in _active_indexing_jobs.items():
         if job_info.get("chat") == request.chat and job_info.get("status") == "running":
             return IndexChatResponse(
@@ -1365,7 +1346,6 @@ async def _start_indexing_job(
                 message=f"Индексация чата '{request.chat}' уже выполняется (job_id: {existing_job_id})",
             )
     
-    # Создаем задачу
     _active_indexing_jobs[job_id] = {
         "status": "started",
         "chat": request.chat,
@@ -1374,7 +1354,6 @@ async def _start_indexing_job(
         "recent_days": request.recent_days,
     }
     
-    # Запускаем индексацию в фоне
     asyncio.create_task(
         _run_indexing_job(
             job_id=job_id,

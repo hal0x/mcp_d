@@ -188,15 +188,7 @@ class MemoryServiceAdapter:
             self.vector_store.close()
 
     def clear_chat_data(self, chat_name: str) -> Dict[str, int]:
-        """
-        Очистка всех данных конкретного чата из всех хранилищ.
-
-        Args:
-            chat_name: Название чата для очистки
-
-        Returns:
-            Словарь со статистикой удаления: {"nodes_deleted": ..., "vectors_deleted": ..., "chromadb_deleted": ...}
-        """
+        """Очистка всех данных конкретного чата из всех хранилищ."""
         stats = {
             "nodes_deleted": 0,
             "vectors_deleted": 0,
@@ -205,7 +197,6 @@ class MemoryServiceAdapter:
 
         logger.info(f"Начало очистки данных чата: {chat_name}")
 
-        # 1. Очистка TypedGraphMemory (SQLite граф)
         try:
             nodes_deleted = self.graph.delete_nodes_by_chat(chat_name)
             stats["nodes_deleted"] = nodes_deleted
@@ -216,7 +207,6 @@ class MemoryServiceAdapter:
                 exc_info=True,
             )
 
-        # 2. Очистка Qdrant (векторное хранилище)
         if self.vector_store:
             try:
                 vectors_deleted = self.vector_store.delete_by_chat(chat_name)
@@ -232,7 +222,6 @@ class MemoryServiceAdapter:
         else:
             logger.debug("Qdrant недоступен, пропускаем очистку векторов")
 
-        # 3. Очистка ChromaDB коллекций
         try:
             chromadb_deleted = self._clear_chromadb_chat(chat_name)
             stats["chromadb_deleted"] = chromadb_deleted
@@ -691,12 +680,11 @@ class MemoryServiceAdapter:
     def get_indexing_progress(
         self, request: GetIndexingProgressRequest
     ) -> GetIndexingProgressResponse:
-        """Get indexing progress from ChromaDB and active jobs.
+        """Получить прогресс индексации из ChromaDB и активных задач.
         
         ВАЖНО: ChromaDB может паниковать (Rust panic), что убьет процесс Python.
         При ошибках инициализации возвращаем ошибку без попытки восстановления.
         """
-        # Импортируем глобальный словарь активных задач
         from ..mcp.server import _active_indexing_jobs
         try:
             import chromadb
@@ -748,7 +736,6 @@ class MemoryServiceAdapter:
                     message=f"Cannot access ChromaDB directory: {str(e)}",
                 )
         
-        # ВАЖНО: Rust panic в ChromaDB не перехватывается try-except и убьет процесс
         try:
             chroma_client = chromadb.PersistentClient(path=str(chroma_path_obj))
         except Exception as e:
@@ -775,18 +762,14 @@ class MemoryServiceAdapter:
                 message="Indexing progress collection not found. Run indexing first.",
             )
 
-        # Импортируем глобальный словарь активных задач
         from ..mcp.server import _active_indexing_jobs
         
-        # Получаем активные задачи для запрошенного чата
         active_jobs_for_chat = []
         if request.chat:
-            # Фильтруем активные задачи по запрошенному чату
             for job_id, job_info in _active_indexing_jobs.items():
                 if job_info.get("chat") == request.chat:
                     active_jobs_for_chat.append((job_id, job_info))
         else:
-            # Если чат не указан, берем все активные задачи
             active_jobs_for_chat = list(_active_indexing_jobs.items())
 
         if request.chat:
@@ -806,16 +789,14 @@ class MemoryServiceAdapter:
                         total_sessions=metadata.get("total_sessions", 0),
                     )
                 
-                # Добавляем информацию об активной задаче, если есть
                 if active_jobs_for_chat:
-                    job_id, job_info = active_jobs_for_chat[0]  # Берем первую активную задачу
+                    job_id, job_info = active_jobs_for_chat[0]
                     if progress_item:
                         progress_item.job_id = job_id
                         progress_item.status = job_info.get("status")
                         progress_item.started_at = job_info.get("started_at")
                         progress_item.current_stage = job_info.get("current_stage")
                     else:
-                        # Создаем новый элемент прогресса из активной задачи
                         progress_item = IndexingProgressItem(
                             chat_name=request.chat,
                             job_id=job_id,
@@ -846,7 +827,6 @@ class MemoryServiceAdapter:
                 progress_items = []
                 metadatas = result.get("metadatas", [])
                 
-                # Создаем словарь прогресса по чатам
                 progress_by_chat = {}
                 for metadata in metadatas:
                     if not isinstance(metadata, dict):
@@ -860,17 +840,14 @@ class MemoryServiceAdapter:
                         total_sessions=metadata.get("total_sessions", 0),
                     )
                 
-                # Добавляем активные задачи
                 for job_id, job_info in active_jobs_for_chat:
                     chat_name = job_info.get("chat", "Unknown")
                     if chat_name in progress_by_chat:
-                        # Обновляем существующий прогресс
                         progress_by_chat[chat_name].job_id = job_id
                         progress_by_chat[chat_name].status = job_info.get("status")
                         progress_by_chat[chat_name].started_at = job_info.get("started_at")
                         progress_by_chat[chat_name].current_stage = job_info.get("current_stage")
                     else:
-                        # Создаем новый элемент для активной задачи
                         progress_by_chat[chat_name] = IndexingProgressItem(
                             chat_name=chat_name,
                             job_id=job_id,
@@ -1816,7 +1793,6 @@ class MemoryServiceAdapter:
             settings = get_settings()
             chroma_path = settings.chroma_path
             
-            # Разрешаем относительный путь
             if not os.path.isabs(chroma_path):
                 current_dir = Path(__file__).parent
                 project_root = current_dir
@@ -1833,26 +1809,20 @@ class MemoryServiceAdapter:
             
             chroma_client = chromadb.PersistentClient(path=chroma_path)
             
-            # Генерируем эмбеддинг запроса
             query_vector = self.embedding_service.embed(query)
             if not query_vector:
                 return []
             
             results: List[SearchResultItem] = []
             
-            # Ищем в коллекциях: messages, sessions, tasks
             for collection_name in ["chat_messages", "chat_sessions", "chat_tasks"]:
                 try:
                     collection = chroma_client.get_collection(collection_name)
                     
-                    # Формируем фильтр where
                     where_filter = {}
                     if source:
-                        # Если source указан, проверяем метаданные
-                        # Для чатов source может быть названием чата
                         where_filter["chat"] = source
                     
-                    # Выполняем поиск
                     search_results = collection.query(
                         query_embeddings=[query_vector],
                         n_results=limit,
@@ -1862,16 +1832,13 @@ class MemoryServiceAdapter:
                     if not search_results.get("ids") or not search_results["ids"][0]:
                         continue
                     
-                    # Обрабатываем результаты
                     for i, doc_id in enumerate(search_results["ids"][0]):
                         distance = search_results["distances"][0][i] if search_results.get("distances") else 0.0
                         document = search_results["documents"][0][i] if search_results.get("documents") else ""
                         metadata = search_results["metadatas"][0][i] if search_results.get("metadatas") else {}
                         
-                        # Конвертируем distance в similarity score
                         similarity = 1.0 / (1.0 + distance)
                         
-                        # Извлекаем информацию из метаданных
                         chat_name = metadata.get("chat", "")
                         date_utc = metadata.get("date_utc", "")
                         timestamp = None
@@ -1881,23 +1848,20 @@ class MemoryServiceAdapter:
                             except Exception:
                                 pass
                         
-                        # Формируем source для результата
                         result_source = chat_name if chat_name else collection_name.replace("chat_", "")
                         if source and source != chat_name:
-                            continue  # Пропускаем если фильтр по source не совпадает
+                            continue
                         
-                        # Проверяем фильтры по дате
                         if timestamp:
                             if date_from and timestamp < date_from:
                                 continue
                             if date_to and timestamp > date_to:
                                 continue
                         
-                        # Создаем результат
                         result = SearchResultItem(
                             record_id=doc_id,
                             score=similarity,
-                            content=document[:500] if document else "",  # Ограничиваем длину
+                            content=document[:500] if document else "",
                             source=result_source,
                             timestamp=timestamp,
                             author=None,
@@ -1921,15 +1885,7 @@ class MemoryServiceAdapter:
             return []
 
     def _clear_chromadb_chat(self, chat_name: str) -> int:
-        """
-        Удаление всех записей конкретного чата из ChromaDB коллекций.
-
-        Args:
-            chat_name: Название чата для удаления
-
-        Returns:
-            Общее количество удалённых записей
-        """
+        """Удаление всех записей конкретного чата из ChromaDB коллекций."""
         total_deleted = 0
         try:
             import chromadb
@@ -1938,7 +1894,6 @@ class MemoryServiceAdapter:
             settings = get_settings()
             chroma_path = settings.chroma_path
 
-            # Разрешаем относительный путь
             if not os.path.isabs(chroma_path):
                 current_dir = Path(__file__).parent
                 project_root = current_dir
@@ -1956,12 +1911,10 @@ class MemoryServiceAdapter:
 
             chroma_client = chromadb.PersistentClient(path=chroma_path)
 
-            # Удаляем из всех коллекций
             for collection_name in ["chat_sessions", "chat_messages", "chat_tasks"]:
                 try:
                     collection = chroma_client.get_collection(collection_name)
 
-                    # Получаем все ID записей с фильтром по chat
                     result = collection.get(where={"chat": chat_name})
                     ids_to_delete = result.get("ids", [])
 
@@ -1971,7 +1924,6 @@ class MemoryServiceAdapter:
                         )
                         continue
 
-                    # Удаляем записи
                     collection.delete(ids=ids_to_delete)
                     deleted_count = len(ids_to_delete)
                     total_deleted += deleted_count
