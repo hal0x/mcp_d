@@ -198,72 +198,140 @@ class TwoLevelIndexer:
             self.ingestor = None
             logger.debug("TwoLevelIndexer: граф памяти не подключен, записи будут только в ChromaDB")
 
+    def _get_embedding_dimension(self) -> Optional[int]:
+        """Получить размерность эмбеддингов из клиента."""
+        if not self.embedding_client:
+            return None
+        
+        # Пытаемся получить размерность из клиента
+        if hasattr(self.embedding_client, '_embedding_dimension') and self.embedding_client._embedding_dimension:
+            return self.embedding_client._embedding_dimension
+        
+        # Если размерность ещё не определена, делаем тестовый запрос
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Если цикл уже запущен, создаём новый
+                import nest_asyncio
+                try:
+                    nest_asyncio.apply()
+                except ImportError:
+                    pass
+            
+            async def _get_dim():
+                async with self.embedding_client:
+                    test_embedding = await self.embedding_client.get_embedding("test")
+                    return len(test_embedding) if test_embedding else None
+            
+            try:
+                dimension = asyncio.run(_get_dim())
+                if dimension:
+                    self.embedding_client._embedding_dimension = dimension
+                return dimension
+            except RuntimeError:
+                # Если цикл уже запущен, возвращаем None - размерность определится позже
+                return None
+        except Exception as e:
+            logger.debug(f"Не удалось определить размерность эмбеддингов: {e}")
+            return None
+
+    def _check_and_recreate_collection(self, collection_name: str, description: str, force_recreate: bool = False):
+        """Проверить коллекцию и пересоздать при несоответствии размерности."""
+        expected_dimension = self._get_embedding_dimension()
+        
+        try:
+            collection = self.chroma_client.get_collection(collection_name)
+            
+            # Проверяем размерность коллекции
+            if expected_dimension:
+                try:
+                    # Получаем информацию о коллекции
+                    collection_info = collection.get()
+                    # Проверяем размерность по первому эмбеддингу, если есть
+                    if collection_info.get("embeddings") and len(collection_info["embeddings"]) > 0:
+                        existing_dimension = len(collection_info["embeddings"][0])
+                        if existing_dimension != expected_dimension:
+                            logger.warning(
+                                f"Коллекция {collection_name} имеет размерность {existing_dimension}, "
+                                f"ожидается {expected_dimension}. Пересоздаём коллекцию..."
+                            )
+                            self.chroma_client.delete_collection(collection_name)
+                            collection = None
+                        else:
+                            logger.info(
+                                f"Найдена коллекция {collection_name} с {collection.count()} записями "
+                                f"(размерность: {existing_dimension})"
+                            )
+                    else:
+                        # Если коллекция пустая, оставляем как есть
+                        logger.info(
+                            f"Найдена пустая коллекция {collection_name}"
+                        )
+                except Exception as e:
+                    logger.debug(f"Не удалось проверить размерность коллекции {collection_name}: {e}")
+                    # Если не удалось проверить, оставляем коллекцию как есть
+                    logger.info(
+                        f"Найдена коллекция {collection_name} с {collection.count()} записями"
+                    )
+            else:
+                logger.info(
+                    f"Найдена коллекция {collection_name} с {collection.count()} записями"
+                )
+            
+            if collection is None or force_recreate:
+                # Пересоздаём коллекцию
+                if collection:
+                    self.chroma_client.delete_collection(collection_name)
+                collection = self.chroma_client.create_collection(
+                    name=collection_name,
+                    metadata={"description": description},
+                )
+                logger.info(f"Создана новая коллекция {collection_name}")
+            
+            return collection
+            
+        except Exception:
+            # Коллекция не существует, создаём новую
+            collection = self.chroma_client.create_collection(
+                name=collection_name,
+                metadata={"description": description},
+            )
+            logger.info(f"Создана новая коллекция {collection_name}")
+            return collection
+
     def _initialize_collections(self):
-        """Инициализация коллекций ChromaDB"""
+        """Инициализация коллекций ChromaDB с проверкой размерности эмбеддингов"""
         try:
             # L1: Sessions
-            try:
-                self.sessions_collection = self.chroma_client.get_collection(
-                    "chat_sessions"
-                )
-                logger.info(
-                    f"Найдена коллекция chat_sessions с {self.sessions_collection.count()} сессиями"
-                )
-            except Exception:
-                self.sessions_collection = self.chroma_client.create_collection(
-                    name="chat_sessions",
-                    metadata={
-                        "description": "Саммаризации сессий для векторного поиска (L1)"
-                    },
-                )
-                logger.info("Создана новая коллекция chat_sessions")
+            self.sessions_collection = self._check_and_recreate_collection(
+                "chat_sessions",
+                "Саммаризации сессий для векторного поиска (L1)",
+                force_recreate=self.force
+            )
 
             # L2: Messages
-            try:
-                self.messages_collection = self.chroma_client.get_collection(
-                    "chat_messages"
-                )
-                logger.info(
-                    f"Найдена коллекция chat_messages с {self.messages_collection.count()} сообщениями"
-                )
-            except Exception:
-                self.messages_collection = self.chroma_client.create_collection(
-                    name="chat_messages",
-                    metadata={
-                        "description": "Сообщения с контекстом для уточняющего поиска (L2)"
-                    },
-                )
-                logger.info("Создана новая коллекция chat_messages")
+            self.messages_collection = self._check_and_recreate_collection(
+                "chat_messages",
+                "Сообщения с контекстом для уточняющего поиска (L2)",
+                force_recreate=self.force
+            )
 
             # Tasks
-            try:
-                self.tasks_collection = self.chroma_client.get_collection("chat_tasks")
-                logger.info(
-                    f"Найдена коллекция chat_tasks с {self.tasks_collection.count()} задачами"
-                )
-            except Exception:
-                self.tasks_collection = self.chroma_client.create_collection(
-                    name="chat_tasks",
-                    metadata={"description": "Action Items из сессий"},
-                )
-                logger.info("Создана новая коллекция chat_tasks")
+            self.tasks_collection = self._check_and_recreate_collection(
+                "chat_tasks",
+                "Action Items из сессий",
+                force_recreate=self.force
+            )
 
             # Clusters
-            try:
-                self.clusters_collection = self.chroma_client.get_collection(
-                    "session_clusters"
-                )
-                logger.info(
-                    f"Найдена коллекция session_clusters с {self.clusters_collection.count()} кластерами"
-                )
-            except Exception:
-                self.clusters_collection = self.chroma_client.create_collection(
-                    name="session_clusters",
-                    metadata={"description": "Тематические кластеры сессий"},
-                )
-                logger.info("Создана новая коллекция session_clusters")
+            self.clusters_collection = self._check_and_recreate_collection(
+                "session_clusters",
+                "Тематические кластеры сессий",
+                force_recreate=self.force
+            )
 
-            # Progress tracking
+            # Progress tracking (не требует эмбеддингов, поэтому без проверки размерности)
             try:
                 self.progress_collection = self.chroma_client.get_collection(
                     "indexing_progress"
