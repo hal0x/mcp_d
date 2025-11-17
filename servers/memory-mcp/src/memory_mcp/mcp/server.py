@@ -17,6 +17,7 @@ from mcp.types import Tool, TextContent
 from pydantic import BaseModel
 
 from ..quality_analyzer.utils.error_handler import format_error_message
+from ..config import get_settings
 
 from .adapters import MemoryServiceAdapter
 from .schema import (
@@ -84,11 +85,19 @@ from .schema import (
     UpdateSummariesResponse,
 )
 
-if not logging.getLogger().handlers:
-    logging.basicConfig(
-        level=os.getenv("MEMORY_LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+
+def configure_logging() -> None:
+    """Configure logging for the MCP server."""
+    if not logging.getLogger().handlers:
+        settings = get_settings()
+        logging.basicConfig(
+            level=settings.log_level.upper(),
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        )
+
+
+# Настраиваем логирование при импорте модуля
+configure_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +115,8 @@ def _get_adapter() -> MemoryServiceAdapter:
     """Ленивая инициализация адаптера памяти."""
     global _adapter
     if _adapter is None:
-        db_path = os.getenv("MEMORY_DB_PATH", "data/memory_graph.db")
+        settings = get_settings()
+        db_path = settings.db_path
         if not os.path.isabs(db_path):
             current_dir = Path(__file__).parent
             project_root = current_dir
@@ -148,9 +158,22 @@ def _format_tool_response(payload: Any, *, root_key: str = "result") -> ToolResp
         text_payload = serialized
     else:
         structured = {root_key: serialized}
-        text_payload = serialized
+        text_payload = {root_key: serialized}
     text = json.dumps(text_payload, indent=2, ensure_ascii=False)
     return ([TextContent(type="text", text=text)], structured)
+
+
+def _parse_date_safe(date_str: str | None) -> datetime | None:
+    """Безопасный парсинг даты из ISO строки с обработкой ошибок."""
+    if not date_str:
+        return None
+    try:
+        # Заменяем Z на +00:00 для совместимости с fromisoformat
+        normalized = date_str.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized)
+    except (ValueError, AttributeError) as e:
+        logger.warning(f"Не удалось распарсить дату '{date_str}': {e}")
+        return None
 
 
 @server.list_tools()  # type: ignore[misc]
@@ -1064,9 +1087,15 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
                 result = adapter.generate_embedding(request)
                 return _format_tool_response(result.model_dump())
             except ValueError as e:
+                # Сохраняем оригинальное сообщение об ошибке
+                original_msg = str(e)
                 error_msg = format_error_message(e)
-                logger.warning(f"generate_embedding failed: {error_msg}")
-                raise RuntimeError(error_msg) from e
+                logger.warning(
+                    f"generate_embedding failed: {error_msg} (original: {original_msg})",
+                    exc_info=True,
+                )
+                # Используем оригинальное сообщение в RuntimeError для сохранения контекста
+                raise RuntimeError(f"{error_msg} (original: {original_msg})") from e
 
         elif name == "update_record":
             request = UpdateRecordRequest(**arguments)
@@ -1108,11 +1137,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
         elif name == "search_by_embedding":
             if "date_from" in arguments and arguments["date_from"]:
-                from datetime import datetime
-                arguments["date_from"] = datetime.fromisoformat(arguments["date_from"].replace("Z", "+00:00"))
+                parsed_date = _parse_date_safe(arguments["date_from"])
+                if parsed_date is not None:
+                    arguments["date_from"] = parsed_date
+                else:
+                    del arguments["date_from"]
             if "date_to" in arguments and arguments["date_to"]:
-                from datetime import datetime
-                arguments["date_to"] = datetime.fromisoformat(arguments["date_to"].replace("Z", "+00:00"))
+                parsed_date = _parse_date_safe(arguments["date_to"])
+                if parsed_date is not None:
+                    arguments["date_to"] = parsed_date
+                else:
+                    del arguments["date_to"]
             request = SearchByEmbeddingRequest(**arguments)
             result = adapter.search_by_embedding(request)
             return _format_tool_response(result.model_dump())
@@ -1133,11 +1168,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
         elif name == "get_timeline":
             if "date_from" in arguments and arguments["date_from"]:
-                from datetime import datetime
-                arguments["date_from"] = datetime.fromisoformat(arguments["date_from"].replace("Z", "+00:00"))
+                parsed_date = _parse_date_safe(arguments["date_from"])
+                if parsed_date is not None:
+                    arguments["date_from"] = parsed_date
+                else:
+                    del arguments["date_from"]
             if "date_to" in arguments and arguments["date_to"]:
-                from datetime import datetime
-                arguments["date_to"] = datetime.fromisoformat(arguments["date_to"].replace("Z", "+00:00"))
+                parsed_date = _parse_date_safe(arguments["date_to"])
+                if parsed_date is not None:
+                    arguments["date_to"] = parsed_date
+                else:
+                    del arguments["date_to"]
             request = GetTimelineRequest(**arguments)
             result = adapter.get_timeline(request)
             return _format_tool_response(result.model_dump())
@@ -1157,11 +1198,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
         elif name == "export_records":
             if "date_from" in arguments and arguments["date_from"]:
-                from datetime import datetime
-                arguments["date_from"] = datetime.fromisoformat(arguments["date_from"].replace("Z", "+00:00"))
+                parsed_date = _parse_date_safe(arguments["date_from"])
+                if parsed_date is not None:
+                    arguments["date_from"] = parsed_date
+                else:
+                    del arguments["date_from"]
             if "date_to" in arguments and arguments["date_to"]:
-                from datetime import datetime
-                arguments["date_to"] = datetime.fromisoformat(arguments["date_to"].replace("Z", "+00:00"))
+                parsed_date = _parse_date_safe(arguments["date_to"])
+                if parsed_date is not None:
+                    arguments["date_to"] = parsed_date
+                else:
+                    del arguments["date_to"]
             request = ExportRecordsRequest(**arguments)
             result = adapter.export_records(request)
             return _format_tool_response(result.model_dump())
@@ -1384,7 +1431,8 @@ def get_health_payload() -> Dict[str, Any]:
         status = "degraded"
         error = str(exc)
 
-    db_path = os.getenv("MEMORY_DB_PATH", "memory_graph.db")
+    settings = get_settings()
+    db_path = settings.db_path
 
     payload: Dict[str, Any] = {
         "status": status,
@@ -1505,14 +1553,6 @@ async def _stop_background_indexing_on_shutdown():
             await _stop_background_indexing()
         except Exception as e:
             logger.error(f"Ошибка при остановке фоновой индексации: {e}")
-
-
-def configure_logging() -> None:
-    """Configure logging for the MCP server."""
-    logging.basicConfig(
-        level=os.getenv("MEMORY_LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
 
 
 async def run_stdio_server() -> None:

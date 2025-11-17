@@ -5,7 +5,6 @@ HTTP MCP сервер для Memory MCP.
 """
 
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -16,6 +15,9 @@ from fastapi_mcp.transport.http import FastApiHttpSessionManager
 
 # Добавляем src в PYTHONPATH
 sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+# Импортируем настройки
+from memory_mcp.config import get_settings
 
 # Configure logging
 logging.basicConfig(
@@ -34,9 +36,11 @@ try:
 except Exception as e:
     logger.warning(f"Не удалось импортировать MCP server: {e}", exc_info=True)
 
-PORT = int(os.getenv("PORT", os.getenv("TG_DUMP_PORT", "8050")))
-HOST = os.getenv("HOST", os.getenv("TG_DUMP_HOST", "0.0.0.0"))
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+# Загружаем настройки
+settings = get_settings()
+PORT = settings.port
+HOST = settings.host
+LOG_LEVEL = settings.log_level
 SERVER_NAME = "memory-mcp"
 
 

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Iterable, List, Optional
 
 import requests
+
+from ..config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -102,26 +103,28 @@ class EmbeddingService:
 
 
 def build_embedding_service_from_env() -> EmbeddingService | None:
-    """Build embedding service from environment variables.
+    """Build embedding service from settings.
     
     Priority:
-    1. EMBEDDINGS_URL (if set, use it directly)
-    2. LM Studio variables (LMSTUDIO_HOST, LMSTUDIO_PORT, LMSTUDIO_MODEL)
+    1. embeddings_url (if set, use it directly)
+    2. LM Studio variables (lmstudio_host, lmstudio_port, lmstudio_model)
     
     Returns None if no configuration is found.
     """
-    # Priority 1: EMBEDDINGS_URL
-    url = os.getenv("EMBEDDINGS_URL")
+    settings = get_settings()
+    
+    # Priority 1: embeddings_url
+    url = settings.embeddings_url
     model_name = None
     
     if url:
-        # Use EMBEDDINGS_URL as-is
+        # Use embeddings_url as-is
         service = EmbeddingService(url)
     else:
         # Priority 2: LM Studio variables
-        host = os.getenv("LMSTUDIO_HOST", "127.0.0.1")
-        port = os.getenv("LMSTUDIO_PORT", "1234")
-        model_name = os.getenv("LMSTUDIO_MODEL")
+        host = settings.lmstudio_host
+        port = str(settings.lmstudio_port)
+        model_name = settings.lmstudio_model
         
         # Build URL from LM Studio variables
         url = f"http://{host}:{port}"

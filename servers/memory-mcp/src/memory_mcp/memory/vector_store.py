@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Iterable, List, Optional
+
+from ..config import get_settings
 
 try:  # pragma: no cover - optional dependency tested at runtime
     from qdrant_client import QdrantClient
@@ -273,7 +274,8 @@ class VectorStore:
 
 
 def build_vector_store_from_env() -> VectorStore | None:
-    url = os.getenv("QDRANT_URL")
+    settings = get_settings()
+    url = settings.qdrant_url
     if not url:
         return None
     store = VectorStore(url=url)

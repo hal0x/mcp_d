@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     lmstudio_model: str = Field(
         "text-embedding-qwen3-embedding-0.6b", description="Модель для эмбеддингов в LM Studio"
     )
+    
+    # Дополнительные настройки
+    db_path: str = Field("data/memory_graph.db", description="Путь к SQLite базе данных")
+    embeddings_url: str | None = Field(None, description="URL сервиса эмбеддингов (приоритет над LM Studio)")
+    qdrant_url: str | None = Field(None, description="URL Qdrant векторной базы данных")
 
     model_config = SettingsConfigDict(
         env_prefix="MEMORY_MCP_",
@@ -201,8 +206,11 @@ def get_quality_analysis_settings(config_path: Path | None = None) -> QualityAna
     """
     Кэшированный доступ к настройкам анализа качества.
 
-    Сначала пытается загрузить из переменных окружения (Pydantic Settings),
-    затем из JSON файла (для обратной совместимости).
+    Стратегия загрузки настроек:
+    1. Загружаем настройки из переменных окружения (Pydantic Settings)
+    2. Если доступен JSON файл, загружаем настройки из него
+    3. Объединяем: для каждого поля, если значение из env равно дефолтному,
+       заменяем его значением из JSON (env имеет приоритет только для явно заданных значений)
 
     Args:
         config_path: Путь к JSON файлу конфигурации (опционально)
@@ -210,26 +218,31 @@ def get_quality_analysis_settings(config_path: Path | None = None) -> QualityAna
     Returns:
         Экземпляр QualityAnalysisSettings
     """
-    # Пытаемся загрузить из env переменных
     try:
+        # Загружаем настройки из переменных окружения
         settings = QualityAnalysisSettings()
-        # Если есть хотя бы одна не-дефолтная настройка из env, используем её
-        # Иначе загружаем из JSON
-        if config_path or Path("config/quality_analysis.json").exists():
+        
+        # Если доступен JSON файл, объединяем настройки
+        json_config_path = config_path or Path("config/quality_analysis.json")
+        if json_config_path.exists():
             json_settings = QualityAnalysisSettings.load_from_json(config_path)
-            # Объединяем: env переменные имеют приоритет
+            
+            # Объединяем настройки: env имеет приоритет только для явно заданных значений
+            # Если значение из env равно дефолтному, используем значение из JSON
             for field_name in QualityAnalysisSettings.model_fields:
                 env_value = getattr(settings, field_name)
                 json_value = getattr(json_settings, field_name)
-                # Если значение из env отличается от дефолтного, используем его
                 default_value = QualityAnalysisSettings.model_fields[field_name].default
-                if env_value != default_value:
-                    continue
-                # Иначе используем значение из JSON
-                setattr(settings, field_name, json_value)
+                
+                # Если значение из env равно дефолтному, значит оно не было задано явно
+                # В этом случае используем значение из JSON
+                if env_value == default_value:
+                    setattr(settings, field_name, json_value)
+                # Иначе оставляем значение из env (оно было задано явно)
+        
         return settings
     except Exception:
-        # Fallback на JSON
+        # Fallback на JSON при ошибке загрузки из env
         return QualityAnalysisSettings.load_from_json(config_path)
 
 
@@ -237,7 +250,16 @@ __all__ = ["Settings", "QualityAnalysisSettings", "get_settings", "get_quality_a
 
 
 def _apply_env_aliases() -> None:
-    """Обеспечивает обратную совместимость со старыми именами переменных."""
+    """
+    Обеспечивает обратную совместимость со старыми именами переменных.
+    
+    Логика работы:
+    - Если целевая переменная (например, MEMORY_MCP_HOST) уже установлена, она используется как есть.
+    - Если целевая переменная не установлена, проверяются старые имена (алиасы) в порядке приоритета.
+    - Первое найденное значение из алиасов копируется в целевую переменную.
+    
+    Приоритет: новые переменные (MEMORY_MCP_*) > старые переменные (TG_DUMP_*, MEMORY_*, и т.д.)
+    """
     alias_map = {
         "MEMORY_MCP_HOST": ["TG_DUMP_HOST", "HOST"],
         "MEMORY_MCP_PORT": ["TG_DUMP_PORT", "PORT"],
@@ -247,11 +269,15 @@ def _apply_env_aliases() -> None:
         "MEMORY_MCP_LMSTUDIO_HOST": ["LMSTUDIO_HOST"],
         "MEMORY_MCP_LMSTUDIO_PORT": ["LMSTUDIO_PORT"],
         "MEMORY_MCP_LMSTUDIO_MODEL": ["LMSTUDIO_MODEL"],
+        "MEMORY_MCP_EMBEDDINGS_URL": ["EMBEDDINGS_URL"],
+        "MEMORY_MCP_QDRANT_URL": ["QDRANT_URL"],
     }
 
     for target, candidates in alias_map.items():
+        # Если целевая переменная уже установлена, пропускаем
         if os.getenv(target):
             continue
+        # Ищем значение в старых переменных (алиасах)
         for legacy in candidates:
             value = os.getenv(legacy)
             if value:
