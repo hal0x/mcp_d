@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Sequence
 from datetime import datetime
 from importlib import metadata
 from typing import Any, Dict, List, Optional, Tuple
@@ -15,7 +16,7 @@ import uvicorn
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.types import CallToolResult, ContentBlock, TextContent, Tool
 
 from pydantic import BaseModel
 
@@ -23,8 +24,8 @@ from pydantic import BaseModel
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from tradingview_mcp.config import Settings, get_settings
-from tradingview_mcp.pro_scanners import ScannerProfiles, ScannerService
-from tradingview_mcp.pro_scanners.models import BacktestRequest
+from tradingview_mcp.core.utils.validators import EXCHANGE_SCREENER
+from tradingview_mcp import server as legacy_server
 
 # Настройка логирования (конфигурируется в main)
 logger = logging.getLogger(__name__)
@@ -71,27 +72,48 @@ def _format_error_message(exc: Exception) -> str:
     return message
 
 
-@server.list_tools()  # type: ignore[misc]
-async def list_tools() -> List[Tool]:
-    """Returns a curated list of available TradingView tools."""
+def _empty_schema() -> Dict[str, Any]:
+    return {"type": "object", "properties": {}, "required": []}
+
+
+def _build_meta_tools() -> List[Tool]:
+    """Return tradingview-specific meta tools that mirror other servers."""
     return [
         Tool(
             name="health",
             description="Check MCP server health and configuration status.",
-            inputSchema={"type": "object", "properties": {}, "required": []},
+            inputSchema=_empty_schema(),
         ),
         Tool(
             name="version",
             description="Return server version and enabled capabilities.",
-            inputSchema={"type": "object", "properties": {}, "required": []},
+            inputSchema=_empty_schema(),
         ),
         Tool(
             name="exchanges_list",
-            description="List available cryptocurrency exchanges.",
-            inputSchema={"type": "object", "properties": {}, "required": []},
+            description="List available cryptocurrency exchanges with TradingView support.",
+            inputSchema=_empty_schema(),
         ),
-        # TODO: Добавить остальные tools из старого server.py
     ]
+
+
+async def _list_legacy_tools() -> List[Tool]:
+    """Fetch tool metadata from the original FastMCP implementation."""
+    try:
+        legacy_tools = await legacy_server.mcp.list_tools()
+        # Tool is already a pydantic model; return copies to avoid accidental mutation.
+        return [Tool.model_validate(tool) for tool in legacy_tools]
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Не удалось получить список инструментов из legacy сервера: %s", exc)
+        raise RuntimeError(_format_error_message(exc)) from exc
+
+
+@server.list_tools()  # type: ignore[misc]
+async def list_tools() -> List[Tool]:
+    """Returns combined list of meta tools and legacy TradingView tools."""
+    meta_tools = _build_meta_tools()
+    legacy_tools = await _list_legacy_tools()
+    return meta_tools + legacy_tools
 
 
 @server.call_tool()  # type: ignore[misc]
@@ -101,20 +123,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
         logger.info(f"Вызов инструмента: {name} с аргументами: {arguments}")
 
         if name == "health":
-            result = get_health_payload()
+            return _format_tool_response(get_health_payload())
+        if name == "version":
+            return _format_tool_response(get_version_payload())
+        if name == "exchanges_list":
+            result = {
+                "exchanges": sorted({exchange.upper() for exchange in EXCHANGE_SCREENER}),
+                "source": "tradingview_mcp.core.utils.validators.EXCHANGE_SCREENER",
+            }
             return _format_tool_response(result)
 
-        elif name == "version":
-            result = get_version_payload()
-            return _format_tool_response(result)
-
-        elif name == "exchanges_list":
-            # TODO: Реализовать
-            result = {"exchanges": ["BINANCE", "KUCOIN", "BYBIT", "OKX"]}
-            return _format_tool_response(result)
-
-        else:
-            raise ValueError(f"Неизвестный инструмент: {name}")
+        return await _call_legacy_tool(name, arguments)
 
     except ValueError as exc:
         logger.warning(f"Ошибка при выполнении инструмента {name}: {exc}")
@@ -183,6 +202,72 @@ def get_version_payload() -> Dict[str, Any]:
     }
 
 
+def _normalize_legacy_response(
+    payload: Any,
+) -> Tuple[Optional[List[ContentBlock]], Optional[Dict[str, Any]], Optional[Any]]:
+    """Return (content, structured, fallback_payload) for legacy FastMCP responses."""
+    if isinstance(payload, CallToolResult):
+        return list(payload.content), payload.structuredContent or {}, None
+
+    if (
+        isinstance(payload, tuple)
+        and len(payload) == 2
+        and isinstance(payload[0], Sequence)
+        and all(isinstance(item, ContentBlock) for item in payload[0])
+    ):
+        content_blocks = list(payload[0])  # type: ignore[arg-type]
+        structured = payload[1] if isinstance(payload[1], dict) else {}
+        return content_blocks, structured, None
+
+    if isinstance(payload, Sequence) and all(isinstance(item, ContentBlock) for item in payload):
+        return list(payload), {}, None
+
+    if isinstance(payload, ContentBlock):
+        return [payload], {}, None
+
+    return None, None, payload
+
+
+def _content_to_text(blocks: Sequence[ContentBlock]) -> List[TextContent]:
+    """Convert arbitrary content blocks into TextContent for stdio transport."""
+    text_blocks: List[TextContent] = []
+    for block in blocks:
+        if isinstance(block, TextContent):
+            text_blocks.append(block)
+            continue
+        # Fall back to JSON serialization for unsupported block types
+        try:
+            payload = block.model_dump()
+        except AttributeError:
+            payload = str(block)
+        text_blocks.append(
+            TextContent(
+                type="text",
+                text=json.dumps(payload, ensure_ascii=False, indent=2)
+                if isinstance(payload, (dict, list))
+                else str(payload),
+            )
+        )
+    return text_blocks
+
+
+async def _call_legacy_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
+    """Delegate tool execution to the legacy FastMCP server implementation."""
+    try:
+        legacy_payload = await legacy_server.mcp.call_tool(name, arguments or {})
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Legacy tool %s failed: %s", name, exc)
+        raise RuntimeError(_format_error_message(exc)) from exc
+
+    content_blocks, structured, fallback = _normalize_legacy_response(legacy_payload)
+    if fallback is not None:
+        return _format_tool_response(fallback)
+
+    assert content_blocks is not None  # for type checkers
+    text_blocks = _content_to_text(content_blocks)
+    return (text_blocks, structured or {})
+
+
 async def run_stdio_server() -> None:
     """Запускает MCP сервер в stdio режиме."""
     try:
@@ -206,16 +291,18 @@ async def run_stdio_server() -> None:
 
 
 def run_http_server(host: str, port: int, log_level: str) -> None:
-    """Запускает MCP сервер в streamable-http режиме через FastAPI."""
+    """Запускает MCP сервер в HTTP режиме через FastAPI."""
     logger.info(
-        "Запуск TradingView MCP сервера в режиме streamable-http (host=%s, port=%s, log_level=%s)",
+        "Запуск TradingView MCP сервера в HTTP режиме (host=%s, port=%s, log_level=%s)",
         host,
         port,
         log_level,
     )
     
+    # Используем FastAPI приложение из api.py с FastApiMCP (как в binance-mcp)
     from src.api import create_app
     app = create_app()
+    logger.info(f"Starting uvicorn on {host}:{port}")
     uvicorn.run(app, host=host, port=port, log_level=log_level.lower())
 
 

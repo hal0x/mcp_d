@@ -11,7 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
-from ..models import AggregationResult, Fact, Metric
+from ..pydantic_models import AggregationResult, Fact, Metric
 from ..models.orm import AggregateORM, FactORM, MetricORM
 
 SessionProvider = Callable[[], AsyncContextManager[AsyncSession]]

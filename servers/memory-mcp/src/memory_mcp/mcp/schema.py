@@ -232,3 +232,431 @@ class ScrapedContentResponse(BaseModel):
     status: str = Field(..., description="Ingestion status")
     url: str = Field(..., description="Original URL")
     message: Optional[str] = Field(None, description="Status message")
+
+
+# --------------------------- Embedding schemas ---------------------------
+
+
+class GenerateEmbeddingRequest(BaseModel):
+    """Request for generating embedding for text."""
+
+    text: str = Field(..., description="Текст для генерации эмбеддинга")
+    model: Optional[str] = Field(
+        None, description="Модель для эмбеддингов (опционально, используется из конфигурации)"
+    )
+
+
+class GenerateEmbeddingResponse(BaseModel):
+    """Response with generated embedding."""
+
+    embedding: list[float] = Field(..., description="Векторное представление текста")
+    dimension: int = Field(..., description="Размерность эмбеддинга")
+    model: Optional[str] = Field(None, description="Использованная модель")
+
+
+# --------------------------- Record management schemas ---------------------------
+
+
+class UpdateRecordRequest(BaseModel):
+    """Request for updating a memory record."""
+
+    record_id: str = Field(..., description="Идентификатор записи для обновления")
+    content: Optional[str] = Field(None, description="Новый контент записи")
+    source: Optional[str] = Field(None, description="Новый источник")
+    tags: Optional[list[str]] = Field(None, description="Новые теги")
+    entities: Optional[list[str]] = Field(None, description="Новые сущности")
+    metadata: Optional[dict[str, Any]] = Field(
+        None, description="Дополнительные метаданные (объединяются с существующими)"
+    )
+
+
+class UpdateRecordResponse(BaseModel):
+    """Response after updating a record."""
+
+    record_id: str = Field(..., description="Идентификатор обновлённой записи")
+    updated: bool = Field(..., description="Успешно ли обновлена запись")
+    message: Optional[str] = Field(None, description="Сообщение о результате")
+
+
+class DeleteRecordRequest(BaseModel):
+    """Request for deleting a memory record."""
+
+    record_id: str = Field(..., description="Идентификатор записи для удаления")
+
+
+class DeleteRecordResponse(BaseModel):
+    """Response after deleting a record."""
+
+    record_id: str = Field(..., description="Идентификатор удалённой записи")
+    deleted: bool = Field(..., description="Успешно ли удалена запись")
+    message: Optional[str] = Field(None, description="Сообщение о результате")
+
+
+# --------------------------- Statistics schemas ---------------------------
+
+
+class GetStatisticsResponse(BaseModel):
+    """Response with system statistics."""
+
+    graph_stats: dict[str, Any] = Field(..., description="Статистика графа знаний")
+    sources_count: dict[str, int] = Field(
+        default_factory=dict, description="Количество записей по источникам"
+    )
+    tags_count: dict[str, int] = Field(
+        default_factory=dict, description="Количество записей по тегам"
+    )
+    database_size_bytes: Optional[int] = Field(
+        None, description="Размер базы данных в байтах"
+    )
+
+
+class GetIndexingProgressRequest(BaseModel):
+    """Request for indexing progress."""
+
+    chat: Optional[str] = Field(None, description="Фильтр по конкретному чату")
+
+
+class IndexingProgressItem(BaseModel):
+    """Single indexing progress entry."""
+
+    chat_name: str = Field(..., description="Название чата")
+    last_indexed_date: Optional[str] = Field(None, description="Дата последнего проиндексированного сообщения")
+    last_indexing_time: Optional[str] = Field(None, description="Время последней индексации")
+    total_messages: int = Field(0, description="Всего проиндексированных сообщений")
+    total_sessions: int = Field(0, description="Всего созданных сессий")
+
+
+class GetIndexingProgressResponse(BaseModel):
+    """Response with indexing progress."""
+
+    progress: list[IndexingProgressItem] = Field(
+        default_factory=list, description="Список прогресса индексации"
+    )
+    message: Optional[str] = Field(None, description="Сообщение о статусе")
+
+
+# --------------------------- Graph operations schemas ---------------------------
+
+
+class GetGraphNeighborsRequest(BaseModel):
+    """Request for getting graph neighbors."""
+
+    node_id: str = Field(..., description="ID узла")
+    edge_type: Optional[str] = Field(None, description="Фильтр по типу рёбер")
+    direction: str = Field(
+        default="both", description="Направление: 'out', 'in', 'both'"
+    )
+
+
+class GraphNeighborItem(BaseModel):
+    """Single neighbor node entry."""
+
+    node_id: str = Field(..., description="ID соседнего узла")
+    edge_type: Optional[str] = Field(None, description="Тип ребра")
+    edge_data: dict[str, Any] = Field(
+        default_factory=dict, description="Данные ребра"
+    )
+
+
+class GetGraphNeighborsResponse(BaseModel):
+    """Response with graph neighbors."""
+
+    neighbors: list[GraphNeighborItem] = Field(
+        default_factory=list, description="Список соседних узлов"
+    )
+
+
+class FindGraphPathRequest(BaseModel):
+    """Request for finding graph path."""
+
+    source_id: str = Field(..., description="ID исходного узла")
+    target_id: str = Field(..., description="ID целевого узла")
+    max_length: int = Field(default=5, ge=1, le=20, description="Максимальная длина пути")
+
+
+class FindGraphPathResponse(BaseModel):
+    """Response with graph path."""
+
+    path: Optional[list[str]] = Field(None, description="Путь как список ID узлов")
+    total_weight: Optional[float] = Field(None, description="Суммарный вес пути")
+    found: bool = Field(..., description="Найден ли путь")
+
+
+class GetRelatedRecordsRequest(BaseModel):
+    """Request for getting related records."""
+
+    record_id: str = Field(..., description="ID записи")
+    max_depth: int = Field(default=1, ge=1, le=3, description="Максимальная глубина поиска")
+    limit: int = Field(default=10, ge=1, le=50, description="Максимальное количество результатов")
+
+
+class GetRelatedRecordsResponse(BaseModel):
+    """Response with related records."""
+
+    records: list[MemoryRecordPayload] = Field(
+        default_factory=list, description="Список связанных записей"
+    )
+
+
+# --------------------------- Advanced search schemas ---------------------------
+
+
+class SearchByEmbeddingRequest(BaseModel):
+    """Request for searching by embedding vector."""
+
+    embedding: list[float] = Field(..., description="Вектор эмбеддинга для поиска")
+    top_k: int = Field(default=5, ge=1, le=50, description="Максимальное количество результатов")
+    source: Optional[str] = Field(None, description="Фильтр по источнику")
+    tags: list[str] = Field(default_factory=list, description="Фильтр по тегам")
+    date_from: Optional[datetime] = Field(None, description="Фильтр: дата не раньше")
+    date_to: Optional[datetime] = Field(None, description="Фильтр: дата не позже")
+
+
+class SearchByEmbeddingResponse(BaseModel):
+    """Response with search results by embedding."""
+
+    results: list[SearchResultItem] = Field(
+        default_factory=list, description="Список результатов поиска"
+    )
+    total_matches: int = Field(..., description="Общее количество совпадений")
+
+
+class SimilarRecordsRequest(BaseModel):
+    """Request for finding similar records."""
+
+    record_id: str = Field(..., description="ID записи для поиска похожих")
+    top_k: int = Field(default=5, ge=1, le=50, description="Максимальное количество результатов")
+
+
+class SimilarRecordsResponse(BaseModel):
+    """Response with similar records."""
+
+    results: list[SearchResultItem] = Field(
+        default_factory=list, description="Список похожих записей"
+    )
+
+
+class SearchExplainRequest(BaseModel):
+    """Request for explaining search results."""
+
+    query: str = Field(..., description="Поисковый запрос")
+    record_id: str = Field(..., description="ID записи для объяснения")
+    rank: int = Field(default=0, description="Позиция в результатах (0-based)")
+
+
+class SearchExplainResponse(BaseModel):
+    """Response with search explanation."""
+
+    explanation: dict[str, Any] = Field(..., description="Объяснение релевантности")
+    score_breakdown: dict[str, Any] = Field(..., description="Декомпозиция score")
+    connection_paths: list[dict[str, Any]] = Field(
+        default_factory=list, description="Пути связей через граф"
+    )
+    explanation_text: str = Field(..., description="Текстовое объяснение")
+
+
+# --------------------------- Analytics schemas ---------------------------
+
+
+class GetTagsStatisticsResponse(BaseModel):
+    """Response with tags statistics."""
+
+    tags_count: dict[str, int] = Field(
+        default_factory=dict, description="Количество записей по тегам"
+    )
+    total_tags: int = Field(..., description="Всего уникальных тегов")
+    total_tagged_records: int = Field(..., description="Всего записей с тегами")
+
+
+class GetTimelineRequest(BaseModel):
+    """Request for timeline."""
+
+    source: Optional[str] = Field(None, description="Фильтр по источнику")
+    date_from: Optional[datetime] = Field(None, description="Начало периода")
+    date_to: Optional[datetime] = Field(None, description="Конец периода")
+    limit: int = Field(default=50, ge=1, le=500, description="Максимальное количество записей")
+
+
+class TimelineItem(BaseModel):
+    """Single timeline entry."""
+
+    record_id: str = Field(..., description="ID записи")
+    timestamp: datetime = Field(..., description="Временная метка")
+    source: str = Field(..., description="Источник")
+    content_preview: str = Field(..., description="Превью контента")
+
+
+class GetTimelineResponse(BaseModel):
+    """Response with timeline."""
+
+    items: list[TimelineItem] = Field(
+        default_factory=list, description="Список записей временной линии"
+    )
+    total: int = Field(..., description="Всего записей в периоде")
+
+
+class AnalyzeEntitiesRequest(BaseModel):
+    """Request for entity analysis."""
+
+    text: str = Field(..., description="Текст для анализа сущностей")
+    entity_types: Optional[list[str]] = Field(
+        None, description="Типы сущностей для извлечения (опционально)"
+    )
+
+
+class EntityItem(BaseModel):
+    """Single entity entry."""
+
+    value: str = Field(..., description="Значение сущности")
+    entity_type: str = Field(..., description="Тип сущности")
+    count: int = Field(..., description="Количество упоминаний")
+
+
+class AnalyzeEntitiesResponse(BaseModel):
+    """Response with entity analysis."""
+
+    entities: list[EntityItem] = Field(
+        default_factory=list, description="Список найденных сущностей"
+    )
+    total_entities: int = Field(..., description="Всего найдено сущностей")
+
+
+# --------------------------- Batch operations schemas ---------------------------
+
+
+class BatchUpdateRecordItem(BaseModel):
+    """Single record update item."""
+
+    record_id: str = Field(..., description="ID записи для обновления")
+    content: Optional[str] = Field(None, description="Новый контент")
+    source: Optional[str] = Field(None, description="Новый источник")
+    tags: Optional[list[str]] = Field(None, description="Новые теги")
+    entities: Optional[list[str]] = Field(None, description="Новые сущности")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Новые метаданные")
+
+
+class BatchUpdateRecordsRequest(BaseModel):
+    """Request for batch updating records."""
+
+    updates: list[BatchUpdateRecordItem] = Field(
+        ..., description="Список обновлений записей"
+    )
+
+
+class BatchUpdateResult(BaseModel):
+    """Single batch update result."""
+
+    record_id: str = Field(..., description="ID записи")
+    updated: bool = Field(..., description="Успешно ли обновлена")
+    message: Optional[str] = Field(None, description="Сообщение о результате")
+
+
+class BatchUpdateRecordsResponse(BaseModel):
+    """Response after batch update."""
+
+    results: list[BatchUpdateResult] = Field(
+        default_factory=list, description="Результаты обновления"
+    )
+    total_updated: int = Field(..., description="Всего успешно обновлено")
+    total_failed: int = Field(..., description="Всего неудачных обновлений")
+
+
+# --------------------------- Export/Import schemas ---------------------------
+
+
+class ExportRecordsRequest(BaseModel):
+    """Request for exporting records."""
+
+    format: str = Field(default="json", description="Формат экспорта: json, csv, markdown")
+    source: Optional[str] = Field(None, description="Фильтр по источнику")
+    tags: list[str] = Field(default_factory=list, description="Фильтр по тегам")
+    date_from: Optional[datetime] = Field(None, description="Начало периода")
+    date_to: Optional[datetime] = Field(None, description="Конец периода")
+    limit: int = Field(default=100, ge=1, le=10000, description="Максимальное количество записей")
+
+
+class ExportRecordsResponse(BaseModel):
+    """Response with exported records."""
+
+    format: str = Field(..., description="Формат экспорта")
+    content: str = Field(..., description="Экспортированные данные")
+    records_count: int = Field(..., description="Количество экспортированных записей")
+
+
+class ImportRecordsRequest(BaseModel):
+    """Request for importing records."""
+
+    format: str = Field(..., description="Формат импорта: json, csv")
+    content: str = Field(..., description="Содержимое для импорта")
+    source: Optional[str] = Field(None, description="Источник для импортируемых записей")
+
+
+class ImportRecordsResponse(BaseModel):
+    """Response after importing records."""
+
+    records_imported: int = Field(..., description="Количество импортированных записей")
+    records_failed: int = Field(..., description="Количество неудачных импортов")
+    message: Optional[str] = Field(None, description="Сообщение о результате")
+
+
+# --------------------------- Summaries schemas ---------------------------
+
+
+class UpdateSummariesRequest(BaseModel):
+    """Request for updating markdown summaries."""
+
+    chat: Optional[str] = Field(None, description="Обновить отчеты только для конкретного чата")
+    force: bool = Field(default=False, description="Принудительно пересоздать существующие артефакты")
+
+
+class UpdateSummariesResponse(BaseModel):
+    """Response after updating summaries."""
+
+    chats_updated: int = Field(..., description="Количество обновленных чатов")
+    message: str = Field(..., description="Сообщение о результате")
+
+
+class ReviewSummariesRequest(BaseModel):
+    """Request for reviewing summaries."""
+
+    dry_run: bool = Field(default=False, description="Только анализ, без изменения файлов")
+    chat: Optional[str] = Field(None, description="Обработать только конкретный чат")
+    limit: Optional[int] = Field(None, description="Максимальное количество файлов для обработки")
+
+
+class ReviewSummariesResponse(BaseModel):
+    """Response after reviewing summaries."""
+
+    files_processed: int = Field(..., description="Количество обработанных файлов")
+    files_fixed: int = Field(..., description="Количество исправленных файлов")
+    message: str = Field(..., description="Сообщение о результате")
+
+
+# --------------------------- Insight Graph schemas ---------------------------
+
+
+class BuildInsightGraphRequest(BaseModel):
+    """Request for building insight graph."""
+
+    summaries_dir: Optional[str] = Field(None, description="Директория с саммаризациями")
+    chroma_path: Optional[str] = Field(None, description="Путь к ChromaDB")
+    similarity_threshold: float = Field(default=0.76, description="Порог схожести")
+    max_similar_results: int = Field(default=8, description="Максимальное количество похожих результатов")
+
+
+class InsightItem(BaseModel):
+    """Single insight item."""
+
+    title: str = Field(..., description="Заголовок инсайта")
+    description: str = Field(..., description="Описание инсайта")
+    confidence: float = Field(..., description="Уверенность в инсайте")
+
+
+class BuildInsightGraphResponse(BaseModel):
+    """Response with insight graph."""
+
+    nodes_count: int = Field(..., description="Количество узлов в графе")
+    edges_count: int = Field(..., description="Количество связей в графе")
+    insights: list[InsightItem] = Field(default_factory=list, description="Список инсайтов")
+    metrics: dict[str, Any] = Field(default_factory=dict, description="Метрики графа")
+    message: str = Field(..., description="Сообщение о результате")

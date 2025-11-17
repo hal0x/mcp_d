@@ -217,6 +217,175 @@ class TypedGraphMemory:
             self.conn.rollback()
             return False
 
+    def update_node(
+        self,
+        node_id: str,
+        *,
+        properties: Optional[Dict[str, Any]] = None,
+        content: Optional[str] = None,
+        source: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        entities: Optional[List[str]] = None,
+        embedding: Optional[List[float]] = None,
+    ) -> bool:
+        """
+        Обновление свойств узла
+
+        Args:
+            node_id: ID узла для обновления
+            properties: Новые свойства (объединяются с существующими)
+            content: Новый контент (для DOC_CHUNK)
+            source: Новый источник
+            tags: Новые теги
+            entities: Новые сущности
+            embedding: Новый эмбеддинг
+
+        Returns:
+            True если узел обновлён
+        """
+        if node_id not in self.graph:
+            logger.error(f"Узел {node_id} не найден")
+            return False
+
+        try:
+            cursor = self.conn.cursor()
+            
+            # Получаем текущие данные узла
+            cursor.execute(
+                "SELECT type, properties, embedding FROM nodes WHERE id = ?",
+                (node_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                logger.error(f"Узел {node_id} не найден в БД")
+                return False
+
+            node_type = row["type"]
+            current_props = json.loads(row["properties"]) if row["properties"] else {}
+            current_embedding = (
+                json.loads(row["embedding"].decode()) if row["embedding"] else None
+            )
+
+            # Объединяем свойства
+            updated_props = dict(current_props)
+            if properties:
+                updated_props.update(properties)
+            
+            # Обновляем специфичные поля
+            if content is not None:
+                updated_props["content"] = content
+            if source is not None:
+                updated_props["source"] = source
+            if tags is not None:
+                updated_props["tags"] = tags
+            if entities is not None:
+                updated_props["entities"] = entities
+
+            # Обновляем эмбеддинг
+            new_embedding = embedding if embedding is not None else current_embedding
+            embedding_bytes = (
+                json.dumps(new_embedding).encode() if new_embedding else None
+            )
+
+            # Обновляем в БД
+            cursor.execute(
+                """
+                UPDATE nodes 
+                SET properties = ?, embedding = ?, updated_at = ?
+                WHERE id = ?
+            """,
+                (
+                    json.dumps(updated_props),
+                    embedding_bytes,
+                    datetime.now().isoformat(),
+                    node_id,
+                ),
+            )
+
+            # Обновляем в NetworkX графе
+            if node_id in self.graph:
+                self.graph.nodes[node_id]["properties"] = updated_props
+                if content is not None:
+                    self.graph.nodes[node_id]["content"] = content
+                if source is not None:
+                    self.graph.nodes[node_id]["source"] = source
+                if new_embedding is not None:
+                    self.graph.nodes[node_id]["embedding"] = new_embedding
+
+            self.conn.commit()
+
+            # Обновляем FTS индекс для DOC_CHUNK
+            if node_type == NodeType.DOC_CHUNK.value or node_type == NodeType.DOC_CHUNK:
+                final_content = content or updated_props.get("content", "")
+                final_source = source or updated_props.get("source", "")
+                final_tags = tags or updated_props.get("tags", [])
+                final_entities = entities or updated_props.get("entities", [])
+                
+                self._fts_refresh_doc(
+                    node_id=node_id,
+                    content=final_content,
+                    source=final_source,
+                    tags=final_tags,
+                    entities=final_entities,
+                )
+
+            logger.info(f"Обновлён узел: {node_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Ошибка обновления узла {node_id}: {e}")
+            self.conn.rollback()
+            return False
+
+    def delete_node(self, node_id: str) -> bool:
+        """
+        Удаление узла из графа
+
+        Args:
+            node_id: ID узла для удаления
+
+        Returns:
+            True если узел удалён
+        """
+        if node_id not in self.graph:
+            logger.warning(f"Узел {node_id} не найден в графе")
+            return False
+
+        try:
+            cursor = self.conn.cursor()
+            
+            # Проверяем существование узла в БД
+            cursor.execute("SELECT id FROM nodes WHERE id = ?", (node_id,))
+            if not cursor.fetchone():
+                logger.warning(f"Узел {node_id} не найден в БД")
+                return False
+
+            # Удаляем из FTS индекса
+            cursor.execute("DELETE FROM node_search WHERE node_id = ?", (node_id,))
+
+            # Удаляем все рёбра, связанные с узлом
+            # Сначала удаляем исходящие рёбра
+            cursor.execute(
+                "DELETE FROM edges WHERE source_id = ? OR target_id = ?",
+                (node_id, node_id),
+            )
+
+            # Удаляем узел из БД
+            cursor.execute("DELETE FROM nodes WHERE id = ?", (node_id,))
+
+            # Удаляем из NetworkX графа (это также удалит все связанные рёбра)
+            if node_id in self.graph:
+                self.graph.remove_node(node_id)
+
+            self.conn.commit()
+            logger.info(f"Удалён узел: {node_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Ошибка удаления узла {node_id}: {e}")
+            self.conn.rollback()
+            return False
+
     def add_edge(self, edge: GraphEdge) -> bool:
         """
         Добавление ребра в граф

@@ -11,7 +11,7 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import HealthStatus, MCPInfo
+from ..pydantic_models import HealthStatus, MCPInfo
 from ..models.orm import HealthStatusORM
 
 SessionProvider = Callable[[], AsyncContextManager[AsyncSession]]

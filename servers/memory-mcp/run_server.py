@@ -70,11 +70,24 @@ def create_app() -> FastAPI:
         """Health check endpoint для Docker/K8s."""
         return {"status": "ok"}
 
+    @app.get("/version")
+    async def version():
+        """Возвращает информацию о версии сервера и доступных возможностях."""
+        from memory_mcp.mcp.server import get_version_payload
+        return get_version_payload()
+
     # Настраиваем MCP интеграцию
     # Используем FastApiHttpSessionManager для интеграции стандартного MCP Server с FastAPI
     try:
         # Импортируем server из mcp_server (уже импортирован в начале файла)
         from mcp_server import server as mcp_server_instance
+        
+        # Проверяем, что инструменты зарегистрированы
+        # Проверяем наличие обработчика list_tools
+        if hasattr(mcp_server_instance, 'list_tools'):
+            logger.info("Обработчик list_tools найден в сервере")
+        else:
+            logger.warning("Обработчик list_tools НЕ найден в сервере!")
         
         # Создаем HTTP transport для стандартного MCP Server
         http_transport = FastApiHttpSessionManager(mcp_server=mcp_server_instance)
@@ -83,7 +96,7 @@ def create_app() -> FastAPI:
         @app.post("/mcp")
         async def mcp_endpoint(request: Request):
             """MCP endpoint для обработки MCP запросов."""
-            return await http_transport.handle_request(request)
+            return await http_transport.handle_fastapi_request(request)
         
         logger.info("MCP сервер успешно подключен к FastAPI через FastApiHttpSessionManager")
         

@@ -60,9 +60,10 @@ class EmbeddingService:
             # Determine endpoint and payload format
             if self.api_format == "openai":
                 endpoint = f"{self.base_url}/v1/embeddings"
+                # LM Studio и OpenAI API ожидают input как массив строк
                 payload = {
                     "model": self.model_name or "text-embedding-ada-002",
-                    "input": payload_text,
+                    "input": [payload_text],
                 }
             else:  # tei format
                 endpoint = f"{self.base_url}/embeddings"

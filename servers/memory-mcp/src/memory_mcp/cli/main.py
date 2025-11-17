@@ -653,7 +653,11 @@ def index(
             model_name=embedding_model or settings.lmstudio_model,
             base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
         )
+        # Используем chroma_path из настроек или переменной окружения
+        chroma_path = os.getenv("MEMORY_MCP_CHROMA_PATH") or settings.chroma_path
         indexer = TwoLevelIndexer(
+            chroma_path=chroma_path,
+            artifacts_path=settings.artifacts_path,
             embedding_client=embedding_client,
             enable_quality_check=not no_quality_check,
             enable_iterative_refinement=not no_improvement,

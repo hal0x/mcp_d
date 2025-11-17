@@ -18,9 +18,18 @@ Optional:
 
 ## Technology Choices
 
-- Default to `mcp.server.fastmcp.FastMCP` with `@mcp.tool()` for simplicity.
-- Use low-level `mcp.server.Server` only when you need custom protocol control.
+- **Default**: Use `mcp.server.fastmcp.FastMCP` with `@mcp.tool()` decorators for 90% of cases. This provides simplicity, automatic tool registration, and built-in HTTP transport support.
+- **For custom logic**: Use low-level `mcp.server.Server` with `@server.list_tools()` and `@server.call_tool()` only when you need:
+  - Custom tool dispatching logic (manual if/elif chains for 50+ tools)
+  - Unified response formatting across all tools
+  - Dynamic tool list generation
+  - Integration with legacy code (combining old and new implementations)
+  - Lazy resource initialization
 - Prefer `uv` for execution and dependency management, or `pip` if your team standardizes on it.
+
+**Examples:**
+- FastMCP: `supervisor-mcp`, `policy-mcp`, `learning-mcp`, `shell-mcp`, `backtesting-mcp`
+- Standard MCP Server: `binance-mcp` (50+ tools with custom dispatching), `tradingview-mcp` (legacy integration), `memory-mcp` (lazy initialization)
 
 ## Tool Design
 
@@ -87,8 +96,26 @@ def main() -> None:
 
 ## When To Use Low-Level Server
 
-- You need custom `list_tools` or `call_tool` dispatching logic
-- Streaming patterns outside FastMCP’s convenience
-- Full control over transport lifecycle
+Use `mcp.server.Server` instead of FastMCP when you need:
 
-Mirror patterns from `binance-mcp` when you need this flexibility.
+1. **Custom tool dispatching**: Manual routing logic in `call_tool()` (e.g., large if/elif chains for 50+ tools)
+   - Example: `binance-mcp` uses custom dispatching for 50+ trading tools with unified error handling
+
+2. **Unified response formatting**: Consistent response format across all tools via helper functions
+   - Example: `binance-mcp` uses `_format_tool_response()` for all tools
+
+3. **Dynamic tool lists**: Programmatic tool list generation based on runtime state
+   - Example: `tradingview-mcp` combines meta tools with legacy tools from another server
+
+4. **Legacy code integration**: Combining old FastMCP implementations with new standard MCP Server
+   - Example: `tradingview-mcp` delegates some tool calls to legacy FastMCP server
+
+5. **Lazy resource initialization**: Creating expensive resources only when first needed
+   - Example: `memory-mcp` initializes database adapter on first tool call
+
+6. **Full transport control**: Custom transport lifecycle management beyond FastMCP's convenience
+
+**Reference implementations:**
+- `binance-mcp/mcp_server.py` - Custom dispatching for 50+ tools
+- `tradingview-mcp/mcp_server.py` - Legacy integration pattern
+- `memory-mcp/src/memory_mcp/mcp/server.py` - Lazy initialization pattern

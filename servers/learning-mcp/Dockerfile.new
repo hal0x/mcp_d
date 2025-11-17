@@ -35,13 +35,13 @@ RUN pip install --upgrade pip && \
         pydantic-settings>=2.1.0 \
     && \
     # Установка MCP зависимостей
-    (pip install fastmcp || pip install mcp) && \
-    # Установка зависимостей проекта
-    (test -f requirements.txt && pip install -r requirements.txt || true) && \
-    (test -f pyproject.toml && pip install -e . || true)
+    pip install fastmcp>=0.1.0 || pip install mcp>=1.12.0
 
 # Копирование исходного кода
 COPY . /app
+
+# Установка зависимостей проекта после копирования кода
+RUN if [ -f pyproject.toml ]; then pip install -e .; fi
 
 # Создание пользователя для безопасности
 RUN groupadd -r mcp && useradd -r -g mcp mcp && \

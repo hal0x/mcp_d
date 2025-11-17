@@ -89,7 +89,7 @@ mcp/
 
 ### 2. FastMCP как базовый фреймворк
 
-Все MCP серверы используют **FastMCP** — Python-фреймворк для быстрой разработки MCP серверов.
+**Большинство MCP серверов** используют **FastMCP** — Python-фреймворк для быстрой разработки MCP серверов. FastMCP рекомендуется для 90% случаев благодаря простоте использования, автоматической регистрации инструментов и встроенной поддержке HTTP транспорта.
 
 ```python
 from fastmcp import FastMCP
@@ -102,6 +102,57 @@ def example_tool(param: str) -> dict:
     # Implementation
     return {"result": "value"}
 ```
+
+**Примеры серверов с FastMCP:**
+- `supervisor-mcp` — управление и мониторинг серверов
+- `policy-mcp` — управление профилями решений
+- `learning-mcp` — система обучения и адаптации
+- `shell-mcp` — выполнение кода в Docker контейнерах
+- `backtesting-mcp` — бэктестинг торговых стратегий
+- `orchestrator-mcp` — оркестрация MCP серверов
+
+### 2.1. Стандартный MCP Server для кастомной логики
+
+Для серверов с **специфическими требованиями** используется низкоуровневый `mcp.server.Server` с декораторами `@server.list_tools()` и `@server.call_tool()`. Этот подход применяется только когда нужен:
+
+- **Кастомный диспатчинг инструментов**: Ручная маршрутизация вызовов (например, большие if/elif цепочки для 50+ инструментов)
+- **Единое форматирование ответов**: Консистентный формат ответов через вспомогательные функции
+- **Динамическое построение списка инструментов**: Программная генерация списка инструментов на основе состояния во время выполнения
+- **Интеграция с legacy-кодом**: Комбинирование старых FastMCP реализаций с новым стандартным MCP Server
+- **Ленивая инициализация ресурсов**: Создание дорогих ресурсов только при первом использовании
+
+```python
+from mcp.server import Server
+from mcp.types import Tool, TextContent
+
+server = Server("server-name")
+
+@server.list_tools()
+async def list_tools() -> List[Tool]:
+    """Returns a list of available tools."""
+    return [
+        Tool(
+            name="example_tool",
+            description="Example tool description",
+            inputSchema={"type": "object", "properties": {}, "required": []},
+        )
+    ]
+
+@server.call_tool()
+async def call_tool(name: str, arguments: Dict[str, Any]) -> Tuple[List[TextContent], Dict[str, Any]]:
+    """Execute a tool call with custom logic."""
+    if name == "example_tool":
+        result = {"result": "value"}
+        return ([TextContent(type="text", text=json.dumps(result))], result)
+    raise ValueError(f"Unknown tool: {name}")
+```
+
+**Примеры серверов со стандартным MCP Server:**
+- `binance-mcp` — кастомный диспатчинг для 50+ торговых инструментов с единым форматированием ответов
+- `tradingview-mcp` — интеграция legacy-кода, комбинирование мета-инструментов и legacy-инструментов
+- `memory-mcp` — ленивая инициализация адаптера памяти, единое форматирование ответов
+
+**Рекомендация:** Начинайте с FastMCP. Переходите на стандартный MCP Server только если FastMCP не покрывает ваши требования.
 
 ### 3. Модульная структура проектов
 
@@ -134,7 +185,7 @@ project-mcp/
 
 **Чистая архитектура:**
 
-- `server.py` — Настройка FastMCP, регистрация инструментов
+- `server.py` — Настройка FastMCP (или стандартного MCP Server для кастомной логики), регистрация инструментов
 - `config.py` — Загрузка настроек через Pydantic Settings
 - `services/` — Бизнес-логика без зависимостей от MCP
 - `tools/` — MCP инструменты, тонкая обертка над сервисами

@@ -1,8 +1,17 @@
 -- Supervisor MCP Database Initialization
 -- Creates database and schemas for supervisor-mcp
 
+-- Create user first if it doesn't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_user WHERE usename = 'supervisor') THEN
+        CREATE USER supervisor WITH PASSWORD 'supervisor';
+    END IF;
+END
+$$;
+
 -- Create database if it doesn't exist
-SELECT 'CREATE DATABASE supervisor OWNER tradingview'
+SELECT 'CREATE DATABASE supervisor OWNER supervisor'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'supervisor')\gexec
 
 -- Connect to supervisor database
@@ -155,9 +164,7 @@ CREATE TRIGGER update_alert_rules_updated_at
 
 -- Create user and grant permissions
 -- NOTE: Password should be changed after initial setup using:
--- ALTER USER supervisor WITH PASSWORD 'your_secure_password';
--- For development, default password is 'supervisor' (change in production!)
-CREATE USER IF NOT EXISTS supervisor WITH PASSWORD 'supervisor';
+-- User already created above, just grant permissions
 GRANT CONNECT ON DATABASE supervisor TO supervisor;
 GRANT USAGE ON SCHEMA supervisor TO supervisor;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA supervisor TO supervisor;

@@ -52,6 +52,7 @@ dependencies = [
     "hdbscan>=0.8.33",
     "natasha>=1.6.0",
     "qdrant-client>=1.7.0",
+    "setuptools>=61.0",  # Требуется для Natasha (pkg_resources)
 ]
 
 [project.optional-dependencies]

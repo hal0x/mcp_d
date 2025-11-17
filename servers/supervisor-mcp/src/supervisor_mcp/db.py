@@ -59,7 +59,7 @@ async def init_db(settings: Optional[Settings] = None) -> None:
     """Ensure database schema is created."""
     engine = get_engine(settings=settings)
     async with engine.begin() as conn:
-        from .models import orm  # noqa: F401
+        from .pydantic_models import orm  # noqa: F401
         await conn.run_sync(Base.metadata.create_all)
 
 

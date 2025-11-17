@@ -8,13 +8,13 @@ from datetime import datetime
 from functools import partial
 from typing import Any, Dict, Optional
 
-from fastapi import HTTPException, Query, status
+from fastapi import FastAPI, HTTPException, Query, status
 from fastmcp import FastMCP
 
 from .cache import get_redis
 from .config import Settings, get_settings
 from .db import get_session, init_db
-from .models import Fact, Metric
+from .pydantic_models import Fact, Metric
 from .services.alerts import AlertsService
 from .services.health import HealthService
 from .services.metrics import MetricsService
@@ -44,9 +44,17 @@ def _register_http_routes(
     mcp: FastMCP,
     metrics_service: MetricsService,
     settings: Settings,
+    app: Optional[FastAPI] = None,
 ) -> None:
     """Attach REST endpoints for aggregates and facts."""
-    app = mcp.http_app
+    if app is None:
+        # Try to get from mcp, but create new if needed
+        try:
+            app = mcp.http_app
+            if not isinstance(app, FastAPI):
+                raise AttributeError("http_app is not a FastAPI instance")
+        except (AttributeError, TypeError):
+            app = FastAPI()
 
     async def _aggregation_scheduler() -> None:
         kinds = ("business", "technical")
@@ -128,7 +136,7 @@ def create_server(settings: Optional[Settings] = None) -> FastMCP:
         scraper_service=scraper_service,
     )
 
-    # Attach REST API for aggregates / facts
+    # Attach REST API for aggregates / facts (will use mcp.http_app if available)
     _register_http_routes(mcp, metrics_service=metrics_service, settings=settings)
 
     return mcp
@@ -139,7 +147,15 @@ def main() -> None:
     import sys
 
     settings = get_settings()
-    asyncio.run(init_db(settings=settings))
+    
+    # Initialize database
+    try:
+        asyncio.run(init_db(settings=settings))
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to initialize database: {e}")
+        # Continue anyway - database might not be critical for startup
+    
     server = create_server(settings=settings)
 
     if "--stdio" in sys.argv:
@@ -157,30 +173,9 @@ def main() -> None:
         elif arg == "--port" and i + 1 < len(sys.argv):
             port = int(sys.argv[i + 1])
 
+    # Use FastMCP's built-in HTTP transport
     asyncio.run(server.run_http_async(host=host, port=port))
 
 
 if __name__ == "__main__":
     main()
-    @app.post("/ingest/metric")
-    async def ingest_metric(payload: Dict[str, Any]) -> Dict[str, Any]:
-        metric = Metric(
-            name=payload["name"],
-            value=float(payload.get("value", 0.0)),
-            ts=_parse_datetime(payload.get("ts")) or datetime.utcnow(),
-            tags=payload.get("tags", {}),
-        )
-        await metrics_service.ingest_metric(metric)
-        return {"status": "ok"}
-
-    @app.post("/ingest/fact")
-    async def ingest_fact(payload: Dict[str, Any]) -> Dict[str, Any]:
-        fact = Fact(
-            ts=_parse_datetime(payload.get("ts")) or datetime.utcnow(),
-            kind=payload["kind"],
-            actor=payload.get("actor", ""),
-            correlation_id=payload.get("correlation_id", ""),
-            payload=payload.get("payload", {}),
-        )
-        await metrics_service.ingest_fact(fact)
-        return {"status": "ok"}

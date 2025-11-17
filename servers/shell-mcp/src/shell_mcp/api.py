@@ -163,6 +163,24 @@ def create_app() -> FastAPI:
         except Exception as e:
             return {"ok": False, "message": str(e)}
     
+    # Integrate MCP with FastAPI using fastapi_mcp
+    from fastapi_mcp import FastApiMCP
+    from .server import _make_server
+    
+    # Create MCP server and register tools
+    mcp_server = _make_server()
+    
+    # Use FastApiMCP to mount MCP endpoint
+    mcp = FastApiMCP(app, name="shell-mcp")
+    
+    # Register all tools from the MCP server
+    # FastMCP tools are registered via decorators, so we need to use the server directly
+    # Instead, we'll use the FastApiMCP's built-in tool registration
+    mcp.mount_http()
+    
+    # Also register the MCP server's tools manually if needed
+    # The FastApiMCP will handle the /mcp endpoint
+    
     # Run code endpoints
     @app.post("/run_code_simple", operation_id="run_code")
     async def run_code_simple(request: RunCodeSimpleRequest) -> dict:

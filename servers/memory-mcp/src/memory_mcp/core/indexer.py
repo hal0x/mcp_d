@@ -1747,10 +1747,24 @@ class TwoLevelIndexer:
 
         if strategy == "fresh":
             # Обрабатываем только NOW и FRESH окна
-            window_strategies = [
-                ("now", now_messages, "session"),
-                ("fresh", fresh_messages, "day"),
-            ]
+            # Если в этих окнах нет сообщений, но есть в OLD, автоматически переключаемся на OLD
+            if not now_messages and not fresh_messages and old_messages:
+                logger.info(
+                    f"⚠️  В окнах NOW и FRESH нет сообщений, но есть {len(old_messages)} в OLD. "
+                    "Автоматически переключаемся на стратегию OLD."
+                )
+                strategy = "old"
+                window_strategies = [
+                    ("now", now_messages, "session"),
+                    ("fresh", fresh_messages, "day"),
+                    ("recent", recent_messages, "week"),
+                    ("old", old_messages, "month"),
+                ]
+            else:
+                window_strategies = [
+                    ("now", now_messages, "session"),
+                    ("fresh", fresh_messages, "day"),
+                ]
         elif strategy == "recent":
             # Обрабатываем NOW, FRESH и RECENT окна
             window_strategies = [

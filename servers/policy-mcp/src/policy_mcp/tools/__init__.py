@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
-from ..models import DecisionProfile, DecisionRequest
+from ..pydantic_models import DecisionProfile, DecisionRequest
 from ..services.profile_service import ProfileService
 
 

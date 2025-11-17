@@ -21,10 +21,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Копирование файлов зависимостей
-COPY requirements.txt* pyproject.toml* poetry.lock* uv.lock* /app/
-
-# Установка Python зависимостей
+# Установка базовых Python зависимостей
 RUN pip install --upgrade pip && \
     # Установка базовых зависимостей для HTTP транспорта
     pip install \
@@ -35,13 +32,26 @@ RUN pip install --upgrade pip && \
         pydantic-settings>=2.1.0 \
     && \
     # Установка MCP зависимостей
-    (pip install fastmcp || pip install mcp) && \
-    # Установка зависимостей проекта
-    (test -f requirements.txt && pip install -r requirements.txt || true) && \
-    (test -f pyproject.toml && pip install -e . || true)
+    pip install fastmcp
 
 # Копирование исходного кода
 COPY . /app
+
+# Явное копирование pyproject.toml если он не скопировался
+COPY pyproject.toml /app/pyproject.toml
+
+# Установка зависимостей проекта после копирования кода
+RUN if [ -f /app/pyproject.toml ]; then \
+        echo "Installing from pyproject.toml" && \
+        pip install --no-cache-dir -e /app; \
+    elif [ -f /app/requirements.txt ]; then \
+        echo "Installing from requirements.txt" && \
+        pip install -r /app/requirements.txt; \
+    else \
+        echo "ERROR: No pyproject.toml or requirements.txt found" && \
+        ls -la /app/ | head -20 && \
+        exit 1; \
+    fi
 
 # Создание пользователя для безопасности
 RUN groupadd -r mcp && useradd -r -g mcp mcp && \
@@ -58,4 +68,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Команда запуска
-CMD ["python", "run_server.py"]
+CMD ["python", "-m", "supervisor_mcp.server", "--host", "0.0.0.0", "--port", "8001"]

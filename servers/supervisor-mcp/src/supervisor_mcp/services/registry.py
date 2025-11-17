@@ -8,7 +8,7 @@ from typing import AsyncContextManager, Callable, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import MCPInfo
+from ..pydantic_models import MCPInfo
 from ..models.orm import MCPRegistryORM
 
 SessionProvider = Callable[[], AsyncContextManager[AsyncSession]]

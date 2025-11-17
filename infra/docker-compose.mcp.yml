@@ -153,7 +153,7 @@ services:
     ports:
       - "8070:8070"
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'shell-mcp' > /dev/null"]
+      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8070), 3).close()'"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -161,19 +161,31 @@ services:
 
   memory-mcp:
     build:
-      context: servers/memory-mcp
-      dockerfile: Dockerfile.new  # Используем оптимизированный Dockerfile с базовым образом
+      context: ../servers/memory-mcp
+      dockerfile: Dockerfile
     image: memory-mcp:latest
     restart: unless-stopped
     working_dir: /app
     environment:
       PYTHONUNBUFFERED: "1"
+      HOST: 0.0.0.0
+      PORT: 8050
       TG_DUMP_HOST: 0.0.0.0
       TG_DUMP_PORT: 8050
       TG_DUMP_TRANSPORT: streamable-http
-      MEMORY_DB_PATH: /data/memory_graph.db
+      # Используем локальный путь для БД (монтируется из хоста)
+      MEMORY_DB_PATH: /app/data/memory_graph.db
+      # Путь к ChromaDB (монтируется как volume)
+      MEMORY_MCP_CHROMA_PATH: /app/chroma_db
+      # Настройки эмбеддингов (LM Studio)
+      # Используем host.docker.internal для доступа к хосту из контейнера
+      LMSTUDIO_HOST: ${LMSTUDIO_HOST:-host.docker.internal}
+      LMSTUDIO_PORT: ${LMSTUDIO_PORT:-1234}
+      LMSTUDIO_MODEL: ${LMSTUDIO_MODEL:-text-embedding-qwen3-embedding-0.6b}
     volumes:
-      - memory-data:/data
+      # Локальная директория для БД (создается автоматически)
+      - ../servers/memory-mcp/data:/app/data
+      # Именованные volumes для других данных
       - memory-chroma:/app/chroma_db
       - memory-chats:/app/chats
     ports:
@@ -250,8 +262,8 @@ services:
   memory-core:
     profiles: ["memory-full"]
     build:
-      context: servers/memory-mcp
-      dockerfile: Dockerfile.new  # Используем оптимизированный Dockerfile с базовым образом
+      context: ../servers/memory-mcp
+      dockerfile: Dockerfile
     container_name: memory-core
     restart: unless-stopped
     environment:
@@ -275,7 +287,7 @@ services:
 
   supervisor-mcp:
     build:
-      context: servers/supervisor-mcp
+      context: ../servers/supervisor-mcp
       dockerfile: Dockerfile.new  # Используем оптимизированный Dockerfile с базовым образом
     image: supervisor-mcp:latest
     restart: unless-stopped
@@ -283,19 +295,18 @@ services:
       PYTHONUNBUFFERED: "1"
       HOST: 0.0.0.0
       PORT: 8001
-      DEFAULT_TRANSPORT: stdio
-      SUPERVISOR_DB_URL: postgresql://supervisor:supervisor@postgres:5432/supervisor
+      SUPERVISOR_DB_URL: postgresql+asyncpg://supervisor:supervisor@postgres:5432/supervisor
       SUPERVISOR_REDIS_URL: redis://redis:6379/1
       SUPERVISOR_LOG_LEVEL: ${SUPERVISOR_LOG_LEVEL:-INFO}
-      BRIGHT_DATA_MCP_URL: http://bright-data-mcp:8083
-      BRIGHT_DATA_API_TOKEN: ${BRIGHT_DATA_API_TOKEN}
+      # BRIGHT_DATA_MCP_URL: http://bright-data-mcp:8083
+      # BRIGHT_DATA_API_TOKEN: ${BRIGHT_DATA_API_TOKEN}
     depends_on:
       redis:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      bright-data-mcp:
-        condition: service_healthy
+      # bright-data-mcp:
+      #   condition: service_healthy
     ports:
       - "8001:8001"
     healthcheck:
@@ -305,33 +316,9 @@ services:
       retries: 5
       start_period: 30s
 
-  bright-data-mcp:
-    image: node:18-alpine
-    container_name: mcp-bright-data-mcp-1
-    restart: unless-stopped
-    working_dir: /app
-    command: ["npx", "-y", "@brightdata/mcp"]
-    environment:
-      - API_TOKEN=${BRIGHT_DATA_API_TOKEN}
-      - PORT=8083
-      - NODE_ENV=production
-    ports:
-      - "8083:8083"
-    networks:
-      - default
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8083/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
   learning-mcp:
     build:
-      context: servers/learning-mcp
+      context: ../servers/learning-mcp
       dockerfile: Dockerfile.new  # Используем оптимизированный Dockerfile с базовым образом
     image: learning-mcp:latest
     restart: unless-stopped
@@ -394,7 +381,7 @@ services:
       PYTHONUNBUFFERED: "1"
       HOST: 0.0.0.0
       PORT: 8082
-      DEFAULT_TRANSPORT: stdio
+      DEFAULT_TRANSPORT: http
       BACKTEST_PREFERRED_SOURCE: ${BACKTEST_PREFERRED_SOURCE:-binance}
       BACKTEST_BINANCE_URL: http://binance-mcp:8000
       BACKTEST_TRADINGVIEW_URL: http://tradingview-mcp:8060
@@ -416,7 +403,7 @@ services:
     ports:
       - "8082:8082"
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'backtesting-mcp' > /dev/null"]
+      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8082), 3).close()'"]
       interval: 30s
       timeout: 5s
       retries: 5

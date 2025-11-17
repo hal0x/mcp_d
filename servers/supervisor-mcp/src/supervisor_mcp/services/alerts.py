@@ -8,7 +8,7 @@ from typing import Any, AsyncContextManager, Callable, Dict, List, Optional
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Alert, AlertRule
+from ..pydantic_models import Alert, AlertRule
 from ..models.orm import ActiveAlertORM, AlertRuleORM
 
 SessionProvider = Callable[[], AsyncContextManager[AsyncSession]]

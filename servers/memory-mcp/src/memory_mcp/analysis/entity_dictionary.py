@@ -191,22 +191,35 @@ class EntityDictionary:
     def save_dictionaries(self) -> None:
         """Сохранение словарей в файлы"""
         try:
+            # Убеждаемся, что директория существует и доступна для записи
+            self.storage_path.mkdir(parents=True, exist_ok=True)
+            
             # Сохраняем счетчики частоты
             counts_file = self.storage_path / "entity_counts.json"
-            with open(counts_file, 'w', encoding='utf-8') as f:
-                json.dump(dict(self.entity_counts), f, ensure_ascii=False, indent=2)
+            try:
+                with open(counts_file, 'w', encoding='utf-8') as f:
+                    json.dump(dict(self.entity_counts), f, ensure_ascii=False, indent=2)
+            except PermissionError as e:
+                logger.error(f"Ошибка прав доступа при сохранении {counts_file}: {e}")
+                # Не прерываем выполнение, продолжаем с другими файлами
 
             # Сохраняем счетчики по чатам
             chat_counts_file = self.storage_path / "chat_entity_counts.json"
-            with open(chat_counts_file, 'w', encoding='utf-8') as f:
-                json.dump(dict(self.chat_entity_counts), f, ensure_ascii=False, indent=2)
+            try:
+                with open(chat_counts_file, 'w', encoding='utf-8') as f:
+                    json.dump(dict(self.chat_entity_counts), f, ensure_ascii=False, indent=2)
+            except PermissionError as e:
+                logger.error(f"Ошибка прав доступа при сохранении {chat_counts_file}: {e}")
 
             # Сохраняем обученные словари
             for entity_type in ENTITY_TYPES:
                 dict_file = self.storage_path / f"{entity_type}.json"
                 entities_list = sorted(list(self.learned_dictionaries[entity_type]))
-                with open(dict_file, 'w', encoding='utf-8') as f:
-                    json.dump(entities_list, f, ensure_ascii=False, indent=2)
+                try:
+                    with open(dict_file, 'w', encoding='utf-8') as f:
+                        json.dump(entities_list, f, ensure_ascii=False, indent=2)
+                except PermissionError as e:
+                    logger.error(f"Ошибка прав доступа при сохранении {dict_file}: {e}")
 
             logger.info(f"Словари сохранены в {self.storage_path}")
         except Exception as e:

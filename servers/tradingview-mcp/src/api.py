@@ -92,7 +92,7 @@ def create_app() -> FastAPI:
         description=description,
     )
 
-    # Регистрируем эндпоинты
+    # Регистрируем эндпоинты (должно быть до mount_http, как в binance-mcp)
     register_routes(app)
 
     @app.on_event("startup")
@@ -125,7 +125,10 @@ def create_app() -> FastAPI:
         from tradingview_mcp.server import _shutdown_scanner_service
         await _shutdown_scanner_service()
 
-    # Настраиваем MCP интеграцию  (создаст свой MCP server)
+    # Настраиваем MCP интеграцию (как в binance-mcp)
+    # FastApiMCP автоматически создаст инструменты из FastAPI endpoints с operation_id
+    from fastapi_mcp import FastApiMCP
+    
     mcp = FastApiMCP(app, name="tradingview-mcp")
     mcp.mount_http()
 

@@ -1,7 +1,7 @@
 """MCP tools registration for supervisor server."""
 
 from fastmcp import FastMCP
-from ..models import (
+from ..pydantic_models import (
     Metric, Fact, MCPInfo, AlertRule, 
     ScrapeRequest, ScrapeBatchRequest, ScrapeSearchRequest,
     ScrapeResponse, ScrapeBatchResponse, ScrapeSearchResponse,

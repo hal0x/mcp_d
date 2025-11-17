@@ -31,13 +31,60 @@ tradingview-mcp/
 
 ### Компоненты системы
 
-#### 1. MCP Server (`server.py`)
+#### 1. MCP Server (`mcp_server.py`)
 - **Назначение**: Главная точка входа MCP сервера
 - **Функции**: 
   - Регистрация инструментов (tools)
   - Обработка вызовов инструментов
   - Поддержка stdio и HTTP транспортов
-- **Паттерны**: FastMCP, декораторы для инструментов
+- **Паттерны**: Стандартный MCP Server с интеграцией legacy-кода
+
+##### Почему используется стандартный MCP Server
+
+TradingView MCP использует низкоуровневый `mcp.server.Server` вместо FastMCP по следующим причинам:
+
+1. **Комбинирование мета-инструментов и legacy-инструментов**: Сервер объединяет новые мета-инструменты (health, version, exchanges_list) с legacy-инструментами из старого FastMCP сервера. Функция `list_tools()` динамически комбинирует оба набора:
+   ```python
+   @server.list_tools()
+   async def list_tools() -> List[Tool]:
+       meta_tools = _build_meta_tools()
+       legacy_tools = await _list_legacy_tools()
+       return meta_tools + legacy_tools
+   ```
+
+2. **Делегирование вызовов в старый FastMCP сервер**: Функция `call_tool()` обрабатывает мета-инструменты напрямую, а для legacy-инструментов делегирует вызовы в старый FastMCP сервер через `_call_legacy_tool()`:
+   ```python
+   @server.call_tool()
+   async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
+       if name in ["health", "version", "exchanges_list"]:
+           # Обработка мета-инструментов
+           return _format_tool_response(...)
+       # Делегирование в legacy сервер
+       return await _call_legacy_tool(name, arguments)
+   ```
+
+3. **Нормализация ответов для совместимости**: Функция `_normalize_legacy_response()` преобразует ответы из старого FastMCP формата в стандартный формат MCP Server, обеспечивая единообразие ответов независимо от источника.
+
+4. **Постепенная миграция**: Такой подход позволяет постепенно мигрировать с FastMCP на стандартный MCP Server, сохраняя работоспособность существующих инструментов.
+
+**Пример использования:**
+```python
+@server.list_tools()
+async def list_tools() -> List[Tool]:
+    """Returns combined list of meta tools and legacy TradingView tools."""
+    meta_tools = _build_meta_tools()
+    legacy_tools = await _list_legacy_tools()
+    return meta_tools + legacy_tools
+
+@server.call_tool()
+async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
+    """Execute a tool call and format the result."""
+    if name in ["health", "version", "exchanges_list"]:
+        # Мета-инструменты
+        return _format_tool_response(...)
+    # Legacy инструменты
+    return await _call_legacy_tool(name, arguments)
+```
 
 #### 2. Configuration (`config.py`)
 - **Назначение**: Управление конфигурацией приложения

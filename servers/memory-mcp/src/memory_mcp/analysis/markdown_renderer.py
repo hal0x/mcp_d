@@ -46,7 +46,12 @@ class MarkdownRenderer:
         quality_status = quality.get("status", "accepted")
 
         sessions_dir = self.output_dir / chat_id / "sessions"
-        sessions_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError as e:
+            logger.error(f"Ошибка прав доступа при создании директории {sessions_dir}: {e}")
+            # Пытаемся создать в альтернативном месте или просто логируем ошибку
+            raise
 
         json_path = sessions_dir / f"{session_id}.json"
         md_filename = (
@@ -61,8 +66,12 @@ class MarkdownRenderer:
             logger.info(f"Артефакты сессии уже существуют: {md_path}, {json_path}")
             return {"markdown": md_path, "json": json_path}
 
-        with open(json_path, "w", encoding="utf-8") as fp:
-            json.dump(summary, fp, ensure_ascii=False, indent=2)
+        try:
+            with open(json_path, "w", encoding="utf-8") as fp:
+                json.dump(summary, fp, ensure_ascii=False, indent=2)
+        except PermissionError as e:
+            logger.error(f"Ошибка прав доступа при сохранении {json_path}: {e}")
+            raise
 
         if profile == "broadcast":
             content = self._render_broadcast_markdown(summary)
@@ -73,8 +82,12 @@ class MarkdownRenderer:
             banner = "> ⚠️ **Этот отчёт помечен как needs_review.** Проверить данные вручную перед использованием.\n\n"
             content = banner + content
 
-        with open(md_path, "w", encoding="utf-8") as fp:
-            fp.write(content)
+        try:
+            with open(md_path, "w", encoding="utf-8") as fp:
+                fp.write(content)
+        except PermissionError as e:
+            logger.error(f"Ошибка прав доступа при сохранении {md_path}: {e}")
+            raise
 
         logger.info(f"Созданы артефакты сессии: {md_path}, {json_path}")
         return {"markdown": md_path, "json": json_path}

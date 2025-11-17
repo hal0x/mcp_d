@@ -1,5 +1,14 @@
 # Memory MCP Server — Архитектура и Руководство
 
+## Содержание
+
+- [Обзор](#обзор)
+- [Основные компоненты](#основные-компоненты)
+- [MCP инструменты](#mcp-инструменты)
+- [Конфигурация и запуск](#конфигурация-и-запуск)
+- [Сценарии использования](#сценарии-использования)
+- [Тестирование](#тестирование)
+
 ## Обзор
 
 **Memory MCP** — сервер Model Context Protocol для индексации и поиска по унифицированной памяти
@@ -101,55 +110,145 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
 ## MCP инструменты
 
+### Список всех инструментов
+
+Memory MCP сервер предоставляет следующие инструменты:
+
+1. **`health`** — Проверка состояния MCP сервера и конфигурации
+2. **`version`** — Получение информации о версии сервера и доступных возможностях
+3. **`ingest_records`** — Приём пачки записей памяти в хранилище
+4. **`search_memory`** — Поиск по памяти (FTS + векторный)
+5. **`fetch_record`** — Получение полной записи по идентификатору
+6. **`store_trading_signal`** — Сохранение торгового сигнала в хранилище памяти
+7. **`search_trading_patterns`** — Поиск сохранённых торговых паттернов и сигналов
+8. **`get_signal_performance`** — Получение метрик производительности торгового сигнала
+9. **`ingest_scraped_content`** — Инжест скрапленного веб-контента в память
+
+### Недостающие инструменты (рекомендуемые для реализации)
+
+Исходя из описанных сценариев использования, следующие инструменты могли бы дополнить функциональность:
+
+#### Эмбеддинги
+- **`generate_embedding`** — Генерация эмбеддинга для произвольного текста (сейчас доступно только через прямое использование `EmbeddingService`)
+
+#### Управление записями
+- **`update_record`** — Обновление существующей записи (метаданные, теги, контент)
+- **`delete_record`** — Удаление записи из хранилища
+- **`batch_update_records`** — Массовое обновление записей
+
+#### Статистика и мониторинг
+- **`get_indexing_progress`** — Получение прогресса инкрементальной индексации (эквивалент `memory_mcp indexing-progress`)
+- **`get_statistics`** — Получение статистики системы (эквивалент `memory_mcp stats`)
+  - Количество записей по источникам
+  - Количество записей по тегам
+  - Временная статистика (записи по периодам)
+  - Размер базы данных
+
+#### Работа с графом знаний
+- **`get_graph_neighbors`** — Получение соседних узлов для записи
+- **`find_graph_path`** — Поиск пути между двумя узлами в графе
+- **`build_insight_graph`** — Построение графа знаний (эквивалент `memory_mcp insight-graph`)
+- **`get_related_records`** — Получение связанных записей через граф
+
+#### Саммаризация и отчёты
+- **`update_summaries`** — Обновление markdown-отчётов без полной индексации (эквивалент `memory_mcp update-summaries`)
+- **`review_summaries`** — Автоматическое ревью и исправление саммаризаций (эквивалент `memory_mcp review-summaries`)
+
+#### Экспорт и импорт
+- **`export_records`** — Экспорт записей в различных форматах (JSON, CSV, Markdown)
+- **`import_records`** — Импорт записей из файлов
+
+#### Расширенный поиск
+- **`search_by_embedding`** — Поиск по эмбеддингу (без текстового запроса)
+- **`similar_records`** — Поиск похожих записей по заданной записи
+- **`search_explain`** — Объяснение результатов поиска с декомпозицией scores
+
+#### Аналитика
+- **`analyze_entities`** — Анализ сущностей в записях
+- **`get_timeline`** — Получение временной линии записей
+- **`get_tags_statistics`** — Статистика по тегам
+
 ### Стандарт описания инструментов
 - **Первая строка**: лаконичное действие на английском (≤90 символов), начинаем с глагола.
 - **Где хранится**: описания находятся в `src/memory_mcp/mcp/server.py` в функции `list_tools()` через объекты `Tool()` с полем `description`.
 - **Детали**: разворачиваем во втором предложении/абзаце docstring, чтобы `list_tools` оставался компактным.
 - **Единый подход**: новые инструменты должны следовать тем же правилам, чтобы клиенты видели консистентные подсказки.
 
-### 1. `ingest_records`
-- **Назначение**: Приём пачки `MemoryRecordPayload`.
-- **Описание**: для каждого record создаётся узел в графе и (при наличии) вектор в Qdrant.
-- **Ответ**: количество загруженных записей / вложений / пропущенных дубликатов.
+### Диагностика проблем с загрузкой инструментов
 
-### 2. `search_memory`
-- **Назначение**: Поиск по памяти (FTS + векторный).
-- **Параметры**: `query`, `top_k`, `source`, `tags`, `date_from`, `date_to`, `include_embeddings`.
-- **Ответ**: список `SearchResultItem` (record_id, score, snippet, source, timestamp, metadata).
+Если инструменты не загружаются в MCP клиенте (например, Cursor показывает "Loading tools" без результата):
 
-### 3. `fetch_record`
-- **Назначение**: Получение полной записи по `record_id`.
-- **Ответ**: `MemoryRecordPayload` либо `null`, если запись не найдена.
+1. **Проверьте логи сервера**: При запуске сервера должны появиться сообщения:
+   ```
+   list_tools() вызвана, регистрируем инструменты...
+   Зарегистрировано 9 инструментов: ['health', 'version', 'ingest_records', ...]
+   ```
 
-### 4. `health`
-- **Назначение**: Проверка состояния MCP сервера и конфигурации.
-- **Параметры**: нет (пустой объект).
-- **Ответ**: статус сервера, доступность сервисов (memory, vector_search, embeddings), конфигурация.
+2. **Проверьте конфигурацию MCP клиента**: Убедитесь, что в `~/.cursor/mcp.json` правильно указан путь к серверу:
+   ```json
+   {
+     "mcpServers": {
+       "memory-mcp": {
+         "command": "/path/to/venv/bin/python",
+         "args": ["-m", "memory_mcp.mcp.server"],
+         "cwd": "/path/to/memory-mcp"
+       }
+     }
+   }
+   ```
 
-### 5. `version`
-- **Назначение**: Получение информации о версии сервера и доступных возможностях.
-- **Параметры**: нет (пустой объект).
-- **Ответ**: название, версия, список доступных функций.
+3. **Проверьте, что сервер запускается без ошибок**: Запустите сервер вручную:
+   ```bash
+   python -m memory_mcp.mcp.server
+   ```
+   Сервер должен запуститься и ждать ввода через stdio.
 
-### 6. `store_trading_signal`
-- **Назначение**: Сохранение торгового сигнала в хранилище памяти.
-- **Параметры**: `signal` (объект с полями: `symbol`, `signal_type`, `direction`, `entry`, `confidence`, `context`, `timestamp`).
-- **Ответ**: сохранённый сигнал (`TradingSignalRecord`).
+4. **Проверьте импорты**: Убедитесь, что все зависимости установлены:
+   ```bash
+   pip install -e .
+   ```
 
-### 7. `search_trading_patterns`
-- **Назначение**: Поиск сохранённых торговых паттернов и сигналов.
-- **Параметры**: `query` (обязательный), `symbol` (опционально), `limit` (по умолчанию 10).
-- **Ответ**: список найденных сигналов (`TradingSignalRecord[]`).
+5. **Проверьте логирование**: В коде сервера добавлено логирование, которое поможет диагностировать проблему. Проверьте логи при запуске сервера.
 
-### 8. `get_signal_performance`
-- **Назначение**: Получение метрик производительности торгового сигнала.
-- **Параметры**: `signal_id` (обязательный).
-- **Ответ**: информация о сигнале и показатели эффективности (PnL, результат, время закрытия, заметки).
+6. **Проверьте, что Python доступен**: Убедитесь, что путь к Python в конфигурации правильный:
+   ```bash
+   # Проверьте, что Python доступен по указанному пути
+   /path/to/venv/bin/python --version
+   
+   # Проверьте, что модуль импортируется
+   /path/to/venv/bin/python -m memory_mcp.mcp.server --help
+   ```
 
-### 9. `ingest_scraped_content`
-- **Назначение**: Инжест скрапленного веб-контента в память.
-- **Параметры**: `content` (объект с полями: `url`, `title`, `content`, `metadata`, `source`, `tags`, `entities`).
-- **Ответ**: `record_id`, статус инжеста, URL, сообщение.
+7. **Проверьте логи Cursor**: В Cursor могут быть логи MCP сервера. Проверьте:
+   - Откройте Developer Tools в Cursor (View → Developer → Toggle Developer Tools)
+   - Проверьте консоль на наличие ошибок
+   - Проверьте вкладку Network на наличие запросов к MCP серверу
+
+8. **Важно**: `list_tools()` вызывается только когда клиент запрашивает список инструментов, а не при запуске сервера. Это означает, что логи "list_tools() вызвана..." появятся только после того, как Cursor запросит список инструментов.
+
+9. **Проблема с базой данных**: Если вы видите ошибку "unable to open database file":
+   - **Для локальной разработки**: БД создается автоматически в корне проекта (`memory_graph.db`) или в директории `data/` при использовании Docker
+   - **Для Docker**: БД монтируется из локальной директории `data/` в контейнер (`/app/data/memory_graph.db`)
+   - Убедитесь, что путь к БД правильный (можно задать через переменную окружения `MEMORY_DB_PATH`)
+   - Если путь относительный, он будет разрешен относительно корня проекта (где находится `pyproject.toml`)
+   - Убедитесь, что директория для БД существует и доступна для записи
+   - В Docker контейнере директория `data/` автоматически создается и монтируется из хоста
+
+### Краткая справка по инструментам
+
+| Инструмент | Назначение | Ключевые параметры |
+|------------|------------|-------------------|
+| `ingest_records` | Приём записей в хранилище | `records[]` (MemoryRecordPayload) |
+| `search_memory` | Гибридный поиск (FTS + векторный) | `query`, `top_k`, `source`, `tags`, `date_from`, `date_to` |
+| `fetch_record` | Получение записи по ID | `record_id` |
+| `health` | Проверка состояния сервера | - |
+| `version` | Информация о версии | - |
+| `store_trading_signal` | Сохранение торгового сигнала | `symbol`, `signal_type`, `direction`, `entry`, `confidence` |
+| `search_trading_patterns` | Поиск торговых паттернов | `query`, `symbol`, `limit` |
+| `get_signal_performance` | Метрики производительности сигнала | `signal_id` |
+| `ingest_scraped_content` | Индексация веб-контента | `url`, `content`, `title`, `metadata` |
+
+**Примечание**: Подробные описания параметров и примеры использования см. в `src/memory_mcp/mcp/server.py` и разделе [Сценарии использования](#сценарии-использования).
 
 ### Документация инструментов — best practices
 - **Обязательные/взаимоисключающие параметры**: явно указывайте `code` XOR `script_path`, `steps` как массив и т.п.
@@ -159,6 +258,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
   - `steps` — список строк.
   - `memory`/`cpus` — Docker-совместимые строки (`256m`, `1g`, `0.5`).
   - `tags`/`entities` — массивы строк.
+  - `timestamp` — ISO 8601 строка (например, `"2024-01-15T14:30:00Z"` или `"2024-01-15T14:30:00+00:00"`).
+- **Сериализация datetime**: Все datetime объекты автоматически сериализуются в ISO 8601 формат при возврате результатов.
 - **Подсказки/use cases**: добавляйте bullet tips (как добавить зависимости, как выполнять multi-step сценарии, как фильтровать поиск).
 - **Troubleshooting**: перечисляйте частые ошибки (пустой `steps`, неправильный формат `env`, отсутствие `records`).
 
@@ -166,139 +267,99 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
 ### Переменные окружения
 
-#### Таблица переменных окружения
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
+| `MEMORY_DB_PATH` | `memory_graph.db` | Путь к SQLite БД (относительный путь разрешается от корня проекта) |
+| `QDRANT_URL` | - | URL векторного хранилища Qdrant (опционально) |
+| `EMBEDDINGS_URL` | - | URL сервиса эмбеддингов (**приоритет 1**) |
+| `LMSTUDIO_HOST` | `127.0.0.1` | Хост LM Studio Server (**приоритет 2**) |
+| `LMSTUDIO_PORT` | `1234` | Порт LM Studio Server |
+| `LMSTUDIO_MODEL` | - | Модель для эмбеддингов в LM Studio |
+| `MEMORY_LOG_LEVEL` | `INFO` | Уровень логирования MCP сервера |
+| `PORT` / `TG_DUMP_PORT` | `8050` | Порт HTTP сервера |
+| `HOST` | `0.0.0.0` | Хост HTTP сервера |
+| `LOG_LEVEL` | `INFO` | Уровень логирования HTTP сервера |
 
-| Переменная | Обязательная | По умолчанию | Используется в | Описание |
-|------------|--------------|--------------|----------------|----------|
-| `MEMORY_DB_PATH` | Нет | `memory_graph.db` | MCP сервер | Путь к SQLite базе данных графа памяти |
-| `QDRANT_URL` | Нет | - | MCP сервер | URL векторного хранилища Qdrant (опционально) |
-| `EMBEDDINGS_URL` | Нет | - | MCP сервер | URL сервиса эмбеддингов (приоритет 1) |
-| `LMSTUDIO_HOST` | Нет | `127.0.0.1` | MCP сервер, CLI | Хост LM Studio Server (приоритет 2) |
-| `LMSTUDIO_PORT` | Нет | `1234` | MCP сервер, CLI | Порт LM Studio Server (приоритет 2) |
-| `LMSTUDIO_MODEL` | Нет | - | MCP сервер, CLI | Модель для эмбеддингов в LM Studio |
-| `MEMORY_LOG_LEVEL` | Нет | `INFO` | MCP сервер | Уровень логирования MCP сервера |
-| `PORT` | Нет | `8050` | HTTP сервер | Порт HTTP сервера (приоритетный) |
-| `TG_DUMP_PORT` | Нет | `8050` | HTTP сервер | Альтернативное имя для порта (для совместимости) |
-| `HOST` | Нет | `0.0.0.0` | HTTP сервер | Хост для HTTP сервера |
-| `LOG_LEVEL` | Нет | `INFO` | HTTP сервер | Уровень логирования HTTP сервера |
+**Приоритет конфигурации эмбеддингов:**
+1. `EMBEDDINGS_URL` (если установлен, используется напрямую)
+2. `LMSTUDIO_HOST` + `LMSTUDIO_PORT` + `LMSTUDIO_MODEL` (формируется URL автоматически)
 
-#### Приоритет конфигурации эмбеддингов
-
-Для MCP сервера используется следующий приоритет:
-
-1. **Приоритет 1**: `EMBEDDINGS_URL` — если установлен, используется напрямую
-2. **Приоритет 2**: `LMSTUDIO_HOST` + `LMSTUDIO_PORT` + `LMSTUDIO_MODEL` — если `EMBEDDINGS_URL` не установлен, формируется URL из этих переменных
-
-**Примеры конфигурации:**
-
+**Примеры:**
 ```bash
-# Вариант 1: Использование EMBEDDINGS_URL (text-embeddings-inference)
+# Вариант 1: text-embeddings-inference
 EMBEDDINGS_URL=http://embeddings:80
 
-# Вариант 2: Использование LM Studio (автоматически формируется URL)
+# Вариант 2: LM Studio
 LMSTUDIO_HOST=127.0.0.1
 LMSTUDIO_PORT=1234
 LMSTUDIO_MODEL=text-embedding-qwen3-embedding-0.6b
-```
 
-#### Полный список переменных
-
-```bash
-# База данных
-MEMORY_DB_PATH=/data/memory_graph.db
-
-# Векторное хранилище (опционально)
+# Для Docker
+MEMORY_DB_PATH=/app/data/memory_graph.db
 QDRANT_URL=http://qdrant:6333
-
-# Сервис эмбеддингов (приоритет 1)
-EMBEDDINGS_URL=http://embeddings:80
-
-# LM Studio Server (приоритет 2, используется если EMBEDDINGS_URL не установлен)
-LMSTUDIO_HOST=127.0.0.1
-LMSTUDIO_PORT=1234
-LMSTUDIO_MODEL=text-embedding-qwen3-embedding-0.6b
-
-# Логирование
-MEMORY_LOG_LEVEL=INFO
-LOG_LEVEL=INFO
-
-# HTTP сервер
-PORT=8050
-TG_DUMP_PORT=8050  # альтернативное имя для совместимости
-HOST=0.0.0.0
 ```
 
 ### Docker Compose развертывание
 
-#### Пересборка и перезапуск после изменений кода
-
-**⚠️ ВАЖНО**: После внесения изменений в код необходимо пересобрать контейнер и перезапустить сервис:
-
-```bash
-# Пересборка контейнера с изменениями кода
-docker-compose -f ../../infra/docker-compose.mcp.yml build memory-mcp
-
-# Перезапуск сервиса с новым образом
-docker-compose -f ../../infra/docker-compose.mcp.yml up -d memory-mcp
-
-# Проверка статуса сервиса
-docker-compose -f ../../infra/docker-compose.mcp.yml ps memory-mcp
-
-# Просмотр логов для диагностики
-docker-compose -f ../../infra/docker-compose.mcp.yml logs -f memory-mcp
-```
-
-#### Полная пересборка всех сервисов
-
-```bash
-# Пересборка всех MCP сервисов
-docker-compose -f ../../infra/docker-compose.mcp.yml build
-
-# Перезапуск всех сервисов
-docker-compose -f ../../infra/docker-compose.mcp.yml up -d
-
-# Проверка статуса всех сервисов
-docker-compose -f ../../infra/docker-compose.mcp.yml ps
-```
-
-#### Отладка и диагностика
-
-```bash
-# Вход в контейнер для отладки
-docker-compose -f ../../infra/docker-compose.mcp.yml exec memory-mcp bash
-
-# Проверка переменных окружения в контейнере
-docker-compose -f ../../infra/docker-compose.mcp.yml exec memory-mcp env
-
-# Проверка доступности сервиса
-curl http://localhost:8050/health
-```
-
-#### Очистка и пересборка с нуля
-
-```bash
-# Остановка и удаление контейнеров
-docker-compose -f ../../infra/docker-compose.mcp.yml down
-
-# Удаление образов (принудительная пересборка)
-docker-compose -f ../../infra/docker-compose.mcp.yml build --no-cache memory-mcp
-
-# Запуск с чистого листа
-docker-compose -f ../../infra/docker-compose.mcp.yml up -d memory-mcp
-```
-
-### Docker Compose
-
 **⚠️ ВАЖНО:** Файл `docker-compose.mcp.yml` находится в родительском репозитории `infra/` по пути `../../infra/docker-compose.mcp.yml` относительно корня проекта.
 
-**Для локальной разработки** можно создать собственный `docker-compose.yml` в корне проекта, но для продакшена используется общий файл в `infra/`.
+**Сервисы:**
+- `postgres` — хранение графа (или SQLite volume)
+- `qdrant` *(опционально)* — векторное хранилище
+- `redis` — кэш/очередь (зарезервировано)
+- `embeddings` — сервис `text-embeddings-inference` (опционально, можно использовать LM Studio)
+- `memory-mcp` — MCP сервер (entrypoint `python run_server.py`)
 
-Сервисы в docker-compose:
-- **postgres**: хранение графа (или SQLite volume).
-- **qdrant** *(опционально)*: векторное хранилище.
-- **redis**: кэш/очередь (зарезервировано).
-- **embeddings**: сервис `text-embeddings-inference` (опционально, можно использовать LM Studio).
-- **memory-mcp**: MCP сервер (entrypoint `python run_server.py`).
+**Основные команды:**
+
+```bash
+# Пересборка и перезапуск после изменений кода
+docker-compose -f ../../infra/docker-compose.mcp.yml build memory-mcp
+docker-compose -f ../../infra/docker-compose.mcp.yml up -d memory-mcp
+
+# Полная пересборка всех сервисов
+docker-compose -f ../../infra/docker-compose.mcp.yml build
+docker-compose -f ../../infra/docker-compose.mcp.yml up -d
+
+# Отладка
+docker-compose -f ../../infra/docker-compose.mcp.yml exec memory-mcp bash
+docker-compose -f ../../infra/docker-compose.mcp.yml logs -f memory-mcp
+curl http://localhost:8050/health
+
+# Очистка и пересборка с нуля
+docker-compose -f ../../infra/docker-compose.mcp.yml down
+docker-compose -f ../../infra/docker-compose.mcp.yml build --no-cache memory-mcp
+docker-compose -f ../../infra/docker-compose.mcp.yml up -d memory-mcp
+```
+
+**Оптимизация сборки Docker образа:**
+
+Dockerfile использует многоэтапную сборку для оптимизации кэширования:
+
+1. **Этап `deps`**: Устанавливает зависимости из `pyproject.toml` и `uv.lock`
+   - Этот слой кэшируется отдельно и пересобирается только при изменении зависимостей
+   - Использует кэш Docker для ускорения установки пакетов (`--mount=type=cache`)
+
+2. **Этап `final`**: Копирует исходный код приложения
+   - Этот слой пересобирается при изменении кода
+   - Зависимости уже установлены в предыдущем этапе
+
+**Преимущества:**
+- При изменении кода зависимости не переустанавливаются (используется кэш)
+- Значительно ускоряется сборка при разработке
+- Экономия времени и трафика при частых пересборках
+
+**Пример:**
+```bash
+# Первая сборка - устанавливаются зависимости и копируется код
+docker-compose -f ../../infra/docker-compose.mcp.yml build memory-mcp
+# Время: ~5-10 минут (зависит от зависимостей)
+
+# Изменение кода и пересборка - зависимости берутся из кэша
+# (изменили файл в src/)
+docker-compose -f ../../infra/docker-compose.mcp.yml build memory-mcp
+# Время: ~10-30 секунд (только копирование кода)
+```
 
 ### Режимы запуска MCP сервера
 
@@ -354,6 +415,148 @@ python -m memory_mcp.cli.main ingest-telegram --chats-dir chats --db-path memory
 - **Unit tests**: `pytest tests -q`
 - **CLI тесты**: сценарии в `tests/test_cli.py`
 - **Гибридный поиск**: `tests/test_mcp_server.py` проверяет FTS/ingest/search.
+
+## Сценарии использования
+
+### Индексация данных
+
+**CLI (Telegram чаты):**
+```bash
+memory_mcp index --progress              # Первоначальная индексация
+memory_mcp index                         # Инкрементальная (только новые)
+memory_mcp index --force-full            # Полная переиндексация
+```
+
+**MCP API:**
+```python
+# Индексация записей
+mcp_client.call_tool("ingest_records", {
+    "records": [{
+        "record_id": "msg-001",
+        "source": "telegram",
+        "content": "Текст сообщения",
+        "timestamp": "2024-01-15T14:30:00Z",
+        "tags": ["crypto", "news"]
+    }]
+})
+
+# Индексация веб-контента
+mcp_client.call_tool("ingest_scraped_content", {
+    "url": "https://example.com/article",
+    "content": "Основной текст...",
+    "title": "Заголовок"
+})
+```
+
+**Процесс:** Валидация → Создание узлов графа → Генерация эмбеддингов → Сохранение в векторное хранилище (Qdrant)
+
+### Поиск по данным
+
+**Гибридный поиск (FTS + векторный):**
+```python
+result = mcp_client.call_tool("search_memory", {
+    "query": "криптовалюты и блокчейн",
+    "top_k": 10,
+    "source": "telegram",  # опционально
+    "tags": ["crypto"],     # опционально
+    "date_from": "2024-01-01T00:00:00Z",
+    "include_embeddings": False
+})
+```
+
+**CLI:**
+```bash
+memory_mcp search "криптовалюты"
+memory_mcp search "TODO встреча" --collection tasks
+```
+
+**Алгоритм:** FTS (BM25, вес 0.4) + Vector Search (вес 0.6) → Объединение результатов
+
+### Работа с эмбеддингами
+
+**Конфигурация:**
+```bash
+# Приоритет 1: text-embeddings-inference
+EMBEDDINGS_URL=http://embeddings:80
+
+# Приоритет 2: LM Studio
+LMSTUDIO_HOST=127.0.0.1
+LMSTUDIO_PORT=1234
+LMSTUDIO_MODEL=text-embedding-qwen3-embedding-0.6b
+```
+
+**Использование:**
+- Автоматически при индексации (если настроен `EmbeddingService`)
+- При поиске с `include_embeddings=True`
+- Прямой вызов через `EmbeddingService.embed(text)`
+
+### Специализированные сценарии
+
+**Торговые сигналы:**
+```python
+mcp_client.call_tool("store_trading_signal", {
+    "symbol": "BTCUSDT", "signal_type": "momentum", "direction": "long"
+})
+mcp_client.call_tool("search_trading_patterns", {"query": "momentum"})
+mcp_client.call_tool("get_signal_performance", {"signal_id": "signal-001"})
+```
+
+**Мониторинг:**
+```python
+mcp_client.call_tool("health", {})    # Проверка состояния
+mcp_client.call_tool("version", {})   # Информация о версии
+```
+
+### Схема потока данных
+
+**Индексация:**
+```
+Telegram CLI / Web Scrape / MCP Ingest
+    ↓
+MemoryRecordPayload
+    ↓
+┌──────────────────┬──────────────────┐
+│ TypedGraphMemory │ EmbeddingService │
+│ (SQLite+NetworkX)│ → VectorStore    │
+│                  │   (Qdrant)       │
+└──────────────────┴──────────────────┘
+```
+
+**Поиск:**
+```
+Search Query
+    ↓
+┌──────────────┬──────────────┐
+│ FTS (FTS5)   │ Vector Search│
+│ (вес 0.4)    │ (вес 0.6)    │
+└──────┬───────┴──────┬───────┘
+       └──────┬───────┘
+              ↓
+      Hybrid Results
+```
+
+### Рекомендуемые workflow
+
+**Первоначальная настройка:**
+```bash
+export EMBEDDINGS_URL=http://embeddings:80  # или LM Studio
+memory_mcp check
+memory_mcp index --progress
+```
+
+**Регулярное обновление:**
+```bash
+memory_mcp index                    # Инкрементальная индексация
+memory_mcp update-summaries         # Обновление отчётов
+memory_mcp search "новые темы"      # Поиск
+```
+
+**Программная работа:**
+```python
+mcp_client.call_tool("ingest_records", {"records": [...]})
+mcp_client.call_tool("search_memory", {"query": "...", "top_k": 10})
+mcp_client.call_tool("fetch_record", {"record_id": "..."})
+```
 
 ## Документация
 

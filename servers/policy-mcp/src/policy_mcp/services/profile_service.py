@@ -7,7 +7,7 @@ from typing import AsyncContextManager, Callable, List, Optional, Dict, Any
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import DecisionProfile, DecisionRequest, DecisionResponse, ProfileVersion
+from ..pydantic_models import DecisionProfile, DecisionRequest, DecisionResponse, ProfileVersion
 from ..models.orm import DecisionProfileORM, ProfileVersionORM
 
 SessionProvider = Callable[[], AsyncContextManager[AsyncSession]]

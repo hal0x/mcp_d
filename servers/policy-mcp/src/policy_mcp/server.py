@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from .config import Settings, get_settings
 from .db import get_session, init_db
-from .models import DecisionProfile
+from .pydantic_models import DecisionProfile
 from .services.profile_service import ProfileService
 from .tools import register_tools
 

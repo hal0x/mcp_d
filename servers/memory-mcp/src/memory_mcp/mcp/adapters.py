@@ -423,15 +423,36 @@ class MemoryServiceAdapter:
     ) -> GenerateEmbeddingResponse:
         """Generate embedding for arbitrary text."""
         if not self.embedding_service:
-            raise ValueError("Embedding service is not configured. Please set EMBEDDINGS_URL or LMSTUDIO_HOST/LMSTUDIO_PORT/LMSTUDIO_MODEL environment variables.")
+            raise ValueError(
+                "Embedding service is not configured. "
+                "Please set EMBEDDINGS_URL or LMSTUDIO_HOST/LMSTUDIO_PORT/LMSTUDIO_MODEL environment variables."
+            )
+        
+        if not request.text or not request.text.strip():
+            raise ValueError("Text cannot be empty")
         
         try:
-            vector = self.embedding_service.embed(request.text)
-            if not vector:
-                raise ValueError("Embedding service returned empty result. Check if the service is running and configured correctly.")
-        except Exception as e:
+            vector = self.embedding_service.embed(request.text.strip())
+            if vector is None:
+                raise ValueError(
+                    "Embedding service returned None. "
+                    "Check if the service is running and configured correctly."
+                )
+            if not isinstance(vector, list) or len(vector) == 0:
+                raise ValueError(
+                    "Embedding service returned invalid result. "
+                    "Expected non-empty list of floats."
+                )
+        except ValueError as e:
+            # Пробрасываем ValueError как есть
             logger.error(f"Failed to generate embedding: {e}")
-            raise ValueError(f"Failed to generate embedding: {str(e)}. Check if the embedding service is running and accessible.")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to generate embedding: {e}", exc_info=True)
+            raise ValueError(
+                f"Failed to generate embedding: {str(e)}. "
+                "Check if the embedding service is running and accessible."
+            ) from e
         
         return GenerateEmbeddingResponse(
             embedding=vector,
@@ -589,29 +610,115 @@ class MemoryServiceAdapter:
     def get_indexing_progress(
         self, request: GetIndexingProgressRequest
     ) -> GetIndexingProgressResponse:
-        """Get indexing progress from ChromaDB."""
+        """Get indexing progress from ChromaDB.
+        
+        ВАЖНО: Эта функция использует ChromaDB, который может паниковать (Rust panic).
+        Если ChromaDB недоступен или поврежден, функция возвращает ошибку без попытки
+        инициализации, чтобы не убить весь сервер.
+        """
+        # Сначала проверяем, доступен ли chromadb
         try:
             import chromadb
+        except ImportError:
+            logger.warning("chromadb is not installed. Cannot get indexing progress.")
+            return GetIndexingProgressResponse(
+                progress=[],
+                message="ChromaDB is not installed. Install it with: pip install chromadb",
+            )
+        
+        try:
             from ..utils.naming import slugify
-
-            chroma_client = chromadb.PersistentClient(path="./chroma_db")
+        except ImportError:
+            logger.warning("Failed to import slugify utility")
+            return GetIndexingProgressResponse(
+                progress=[],
+                message="Internal error: failed to import required utilities",
+            )
+        
+        # Получаем путь к chroma_db из конфигурации или переменной окружения
+        # В Docker контейнере chroma_db монтируется как /app/chroma_db
+        chroma_path = os.getenv("MEMORY_MCP_CHROMA_PATH")
+        if not chroma_path:
+            # Пытаемся использовать настройки из config.py
             try:
-                progress_collection = chroma_client.get_collection("indexing_progress")
+                from ..config import get_settings
+                settings = get_settings()
+                chroma_path = settings.chroma_path
             except Exception:
-                # Коллекция не существует, возвращаем пустой результат
+                # По умолчанию используем /app/chroma_db в Docker или ./chroma_db локально
+                chroma_path = "/app/chroma_db" if os.path.exists("/app") else "./chroma_db"
+        
+        # Если путь относительный, делаем его абсолютным относительно корня проекта
+        if not os.path.isabs(chroma_path):
+            current_dir = Path(__file__).parent
+            project_root = current_dir
+            # Поднимаемся вверх до корня проекта
+            while project_root.parent != project_root:
+                if (project_root / "pyproject.toml").exists():
+                    break
+                project_root = project_root.parent
+            # Если не нашли pyproject.toml, используем текущую директорию
+            if not (project_root / "pyproject.toml").exists():
+                project_root = Path.cwd()
+            chroma_path = str(project_root / chroma_path)
+        
+        chroma_path_obj = Path(chroma_path)
+        
+        # Проверяем, существует ли директория и доступна ли она
+        if not chroma_path_obj.exists():
+            # Создаем директорию, если её нет
+            try:
+                chroma_path_obj.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                logger.warning(f"Cannot create ChromaDB directory {chroma_path_obj}: {e}")
                 return GetIndexingProgressResponse(
                     progress=[],
-                    message="Indexing progress collection not found. Run indexing first.",
+                    message=f"Cannot access ChromaDB directory: {str(e)}",
                 )
+        
+        # ВАЖНО: ChromaDB может паниковать (Rust panic), что убьет весь процесс Python.
+        # Мы не можем перехватить Rust panic через try-except.
+        # Поэтому мы просто пытаемся создать клиент и надеемся, что база не повреждена.
+        # Если база повреждена, процесс упадет, но это лучше, чем пытаться работать с поврежденной базой.
+        try:
+            chroma_client = chromadb.PersistentClient(path=str(chroma_path_obj))
+        except Exception as e:
+            # Если ChromaDB не может инициализироваться, возвращаем ошибку
+            # ВАЖНО: Если это Rust panic, мы не попадем сюда, процесс упадет
+            logger.error(
+                f"Failed to initialize ChromaDB client at {chroma_path_obj}: {e}. "
+                "The database may be corrupted. Consider removing the ChromaDB directory and re-indexing.",
+                exc_info=True
+            )
+            return GetIndexingProgressResponse(
+                progress=[],
+                message=(
+                    f"ChromaDB is not available: {str(e)}. "
+                    "The database may be corrupted. "
+                    "To fix: remove the ChromaDB directory and re-run indexing."
+                ),
+            )
+        
+        # Если мы дошли сюда, клиент создан успешно
+        try:
+            progress_collection = chroma_client.get_collection("indexing_progress")
+        except Exception as e:
+            # Коллекция не существует, возвращаем пустой результат
+            logger.debug(f"Indexing progress collection not found: {e}")
+            return GetIndexingProgressResponse(
+                progress=[],
+                message="Indexing progress collection not found. Run indexing first.",
+            )
 
-            if request.chat:
-                # Получаем прогресс для конкретного чата
-                progress_id = f"progress_{slugify(request.chat)}"
+        if request.chat:
+            # Получаем прогресс для конкретного чата
+            progress_id = f"progress_{slugify(request.chat)}"
+            try:
                 result = progress_collection.get(
                     ids=[progress_id], include=["metadatas"]
                 )
-                if result["ids"]:
-                    metadata = result["metadatas"][0]
+                if result.get("ids") and len(result["ids"]) > 0:
+                    metadata = result["metadatas"][0] if result.get("metadatas") else {}
                     return GetIndexingProgressResponse(
                         progress=[
                             IndexingProgressItem(
@@ -629,11 +736,21 @@ class MemoryServiceAdapter:
                         progress=[],
                         message=f"No progress found for chat '{request.chat}'",
                     )
-            else:
-                # Получаем прогресс для всех чатов
+            except Exception as e:
+                logger.warning(f"Failed to get progress for chat '{request.chat}': {e}")
+                return GetIndexingProgressResponse(
+                    progress=[],
+                    message=f"Failed to get progress for chat '{request.chat}': {str(e)}",
+                )
+        else:
+            # Получаем прогресс для всех чатов
+            try:
                 result = progress_collection.get(include=["metadatas"])
                 progress_items = []
-                for metadata in result.get("metadatas", []):
+                metadatas = result.get("metadatas", [])
+                for metadata in metadatas:
+                    if not isinstance(metadata, dict):
+                        continue
                     progress_items.append(
                         IndexingProgressItem(
                             chat_name=metadata.get("chat_name", "Unknown"),
@@ -647,12 +764,12 @@ class MemoryServiceAdapter:
                     progress=progress_items,
                     message=None,
                 )
-        except Exception as e:
-            logger.warning(f"Failed to get indexing progress: {e}")
-            return GetIndexingProgressResponse(
-                progress=[],
-                message=f"Indexing progress collection not available: {str(e)}",
-            )
+            except Exception as e:
+                logger.warning(f"Failed to get all progress: {e}")
+                return GetIndexingProgressResponse(
+                    progress=[],
+                    message=f"Failed to get indexing progress: {str(e)}",
+                )
 
     # ------------------------------------------------------------ Graph Operations
     def get_graph_neighbors(

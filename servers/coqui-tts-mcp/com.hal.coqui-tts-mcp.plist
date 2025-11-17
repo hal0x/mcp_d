@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hal.coqui-tts-mcp</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/hal/projects/mcp/servers/coqui-tts-mcp/.venv/bin/python</string>
+        <string>-m</string>
+        <string>coqui_tts_mcp.server</string>
+        <string>--transport</string>
+        <string>streamable-http</string>
+        <string>--log-level</string>
+        <string>INFO</string>
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>5002</string>
+    </array>
+    
+    <key>WorkingDirectory</key>
+    <string>/Users/hal/projects/mcp/servers/coqui-tts-mcp</string>
+    
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/hal/projects/mcp/servers/coqui-tts-mcp/.venv/bin</string>
+        <key>COQUI_TTS_MCP_HOST</key>
+        <string>0.0.0.0</string>
+        <key>COQUI_TTS_MCP_PORT</key>
+        <string>5002</string>
+        <key>COQUI_TTS_MCP_USE_MPS</key>
+        <string>true</string>
+        <key>COQUI_TTS_MCP_LOG_LEVEL</key>
+        <string>INFO</string>
+        <key>COQUI_TTS_MCP_MODEL_NAME</key>
+        <string>tts_models/multilingual/multi-dataset/xtts_v2</string>
+        <key>COQUI_TOS_AGREED</key>
+        <string>1</string>
+        <key>PYTORCH_ENABLE_MPS_FALLBACK</key>
+        <string>1</string>
+    </dict>
+    
+    <key>StandardOutPath</key>
+    <string>/Users/hal/projects/mcp/servers/coqui-tts-mcp/logs/stdout.log</string>
+    
+    <key>StandardErrorPath</key>
+    <string>/Users/hal/projects/mcp/servers/coqui-tts-mcp/logs/stderr.log</string>
+    
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    
+    <key>ProcessType</key>
+    <string>Background</string>
+    
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>
+

@@ -113,6 +113,20 @@ class VectorStore:
         except Exception as exc:  # pragma: no cover
             logger.warning("Failed to upsert vector for %s: %s", record_id, exc)
 
+    def delete(self, record_id: str) -> None:
+        """Delete a vector by record ID."""
+        if not self.client or qmodels is None:
+            return
+        try:
+            self.client.delete(
+                collection_name=self.collection,
+                points_selector=qmodels.PointIdsList(
+                    points=[str(record_id)],
+                ),
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to delete vector for %s: %s", record_id, exc)
+
     def search(
         self,
         vector: List[float],

@@ -13,8 +13,10 @@ COPY pyproject.toml ./
 COPY src ./src
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -e .
+RUN pip install --upgrade pip && \
+    pip install fastapi>=0.104.0 uvicorn[standard]>=0.24.0 fastmcp>=0.1.0 && \
+    pip install --no-cache-dir -e .
 
 # Run the server
-CMD ["python", "-m", "policy_mcp.server", "--stdio"]
+CMD ["python", "-m", "policy_mcp.server", "--host", "0.0.0.0", "--port", "8004"]
 
