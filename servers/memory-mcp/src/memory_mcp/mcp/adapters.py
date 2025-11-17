@@ -7,7 +7,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Dict, Iterable, Optional
 
 from ..core.constants import DEFAULT_SEARCH_LIMIT
 from ..indexing import Attachment, MemoryRecord
@@ -186,6 +186,79 @@ class MemoryServiceAdapter:
             self.embedding_service.close()
         if self.vector_store:
             self.vector_store.close()
+
+    def clear_chat_data(self, chat_name: str) -> Dict[str, int]:
+        """
+        Очистка всех данных конкретного чата из всех хранилищ.
+
+        Args:
+            chat_name: Название чата для очистки
+
+        Returns:
+            Словарь со статистикой удаления: {"nodes_deleted": ..., "vectors_deleted": ..., "chromadb_deleted": ...}
+        """
+        stats = {
+            "nodes_deleted": 0,
+            "vectors_deleted": 0,
+            "chromadb_deleted": 0,
+        }
+
+        logger.info(f"Начало очистки данных чата: {chat_name}")
+
+        # 1. Очистка TypedGraphMemory (SQLite граф)
+        try:
+            nodes_deleted = self.graph.delete_nodes_by_chat(chat_name)
+            stats["nodes_deleted"] = nodes_deleted
+            logger.info(f"Удалено {nodes_deleted} узлов из графа (чат: {chat_name})")
+        except Exception as e:
+            logger.warning(
+                f"Ошибка при очистке графа для чата {chat_name}: {e}",
+                exc_info=True,
+            )
+
+        # 2. Очистка Qdrant (векторное хранилище)
+        if self.vector_store:
+            try:
+                vectors_deleted = self.vector_store.delete_by_chat(chat_name)
+                stats["vectors_deleted"] = vectors_deleted
+                logger.info(
+                    f"Удалено {vectors_deleted} векторов из Qdrant (чат: {chat_name})"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Ошибка при очистке Qdrant для чата {chat_name}: {e}",
+                    exc_info=True,
+                )
+        else:
+            logger.debug("Qdrant недоступен, пропускаем очистку векторов")
+
+        # 3. Очистка ChromaDB коллекций
+        try:
+            chromadb_deleted = self._clear_chromadb_chat(chat_name)
+            stats["chromadb_deleted"] = chromadb_deleted
+            logger.info(
+                f"Удалено {chromadb_deleted} записей из ChromaDB (чат: {chat_name})"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Ошибка при очистке ChromaDB для чата {chat_name}: {e}",
+                exc_info=True,
+            )
+
+        total_deleted = (
+            stats["nodes_deleted"]
+            + stats["vectors_deleted"]
+            + stats["chromadb_deleted"]
+        )
+        logger.info(
+            f"Очистка завершена для чата {chat_name}: "
+            f"узлов={stats['nodes_deleted']}, "
+            f"векторов={stats['vectors_deleted']}, "
+            f"ChromaDB={stats['chromadb_deleted']}, "
+            f"всего={total_deleted}"
+        )
+
+        return stats
 
     # Ingest
     def ingest(self, payloads: Iterable[MemoryRecordPayload]) -> IngestResponse:
@@ -1846,6 +1919,84 @@ class MemoryServiceAdapter:
         except Exception as e:
             logger.debug(f"Ошибка при поиске в ChromaDB коллекциях: {e}", exc_info=True)
             return []
+
+    def _clear_chromadb_chat(self, chat_name: str) -> int:
+        """
+        Удаление всех записей конкретного чата из ChromaDB коллекций.
+
+        Args:
+            chat_name: Название чата для удаления
+
+        Returns:
+            Общее количество удалённых записей
+        """
+        total_deleted = 0
+        try:
+            import chromadb
+            from ..config import get_settings
+
+            settings = get_settings()
+            chroma_path = settings.chroma_path
+
+            # Разрешаем относительный путь
+            if not os.path.isabs(chroma_path):
+                current_dir = Path(__file__).parent
+                project_root = current_dir
+                while project_root.parent != project_root:
+                    if (project_root / "pyproject.toml").exists():
+                        break
+                    project_root = project_root.parent
+                if not (project_root / "pyproject.toml").exists():
+                    project_root = Path.cwd()
+                chroma_path = str(project_root / chroma_path)
+
+            if not os.path.exists(chroma_path):
+                logger.debug(f"ChromaDB путь не существует: {chroma_path}")
+                return 0
+
+            chroma_client = chromadb.PersistentClient(path=chroma_path)
+
+            # Удаляем из всех коллекций
+            for collection_name in ["chat_sessions", "chat_messages", "chat_tasks"]:
+                try:
+                    collection = chroma_client.get_collection(collection_name)
+
+                    # Получаем все ID записей с фильтром по chat
+                    result = collection.get(where={"chat": chat_name})
+                    ids_to_delete = result.get("ids", [])
+
+                    if not ids_to_delete:
+                        logger.debug(
+                            f"Нет записей для удаления в коллекции {collection_name} (чат: {chat_name})"
+                        )
+                        continue
+
+                    # Удаляем записи
+                    collection.delete(ids=ids_to_delete)
+                    deleted_count = len(ids_to_delete)
+                    total_deleted += deleted_count
+                    logger.info(
+                        f"Удалено {deleted_count} записей из коллекции {collection_name} (чат: {chat_name})"
+                    )
+
+                except Exception as e:
+                    logger.warning(
+                        f"Ошибка при удалении из коллекции {collection_name} (чат: {chat_name}): {e}",
+                        exc_info=True,
+                    )
+                    continue
+
+            logger.info(
+                f"Всего удалено {total_deleted} записей из ChromaDB (чат: {chat_name})"
+            )
+            return total_deleted
+
+        except Exception as e:
+            logger.warning(
+                f"Ошибка при очистке ChromaDB для чата {chat_name}: {e}",
+                exc_info=True,
+            )
+            return total_deleted
 
     # Utils
     def _build_item_from_graph(

@@ -127,6 +127,69 @@ class VectorStore:
         except Exception as exc:  # pragma: no cover
             logger.warning("Failed to delete vector for %s: %s", record_id, exc)
 
+    def delete_by_chat(self, chat_name: str) -> int:
+        """
+        Delete all vectors for a specific chat.
+
+        Args:
+            chat_name: Name of the chat to delete vectors for
+
+        Returns:
+            Number of deleted vectors
+        """
+        if not self.client or qmodels is None:
+            return 0
+
+        deleted_count = 0
+        try:
+            # Используем scroll для получения всех точек с фильтром по chat
+            filter_condition = qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="chat",
+                        match=qmodels.MatchValue(value=chat_name),
+                    )
+                ]
+            )
+
+            # Получаем все точки с фильтром
+            scroll_result = self.client.scroll(
+                collection_name=self.collection,
+                scroll_filter=filter_condition,
+                limit=10000,  # Максимальное количество за один запрос
+                with_payload=True,
+                with_vectors=False,
+            )
+
+            point_ids = [point.id for point in scroll_result[0]]
+            if not point_ids:
+                logger.info(f"No vectors found for chat: {chat_name}")
+                return 0
+
+            # Удаляем точки батчами (Qdrant может иметь ограничения на размер батча)
+            batch_size = 1000
+            for i in range(0, len(point_ids), batch_size):
+                batch = point_ids[i : i + batch_size]
+                try:
+                    self.client.delete(
+                        collection_name=self.collection,
+                        points_selector=qmodels.PointIdsList(points=batch),
+                    )
+                    deleted_count += len(batch)
+                except Exception as exc:
+                    logger.warning(
+                        f"Failed to delete batch of vectors for chat {chat_name}: {exc}"
+                    )
+
+            logger.info(f"Deleted {deleted_count} vectors for chat: {chat_name}")
+            return deleted_count
+
+        except Exception as exc:  # pragma: no cover
+            logger.warning(
+                f"Failed to delete vectors by chat {chat_name}: {exc}", exc_info=True
+            )
+            return deleted_count
+
     def search(
         self,
         vector: List[float],

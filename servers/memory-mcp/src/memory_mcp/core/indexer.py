@@ -589,6 +589,7 @@ class TwoLevelIndexer:
         chat: Optional[str] = None,
         force_full: bool = False,
         recent_days: int = 7,
+        adapter: Optional[Any] = None,  # MemoryServiceAdapter, но избегаем циклического импорта
     ) -> Dict[str, Any]:
         """
         Построение индекса
@@ -626,6 +627,24 @@ class TwoLevelIndexer:
             try:
                 chat_name = chat_dir.name
                 logger.info(f"📁 Чат {chat_idx}/{total_chats}: {chat_name}")
+
+                # Очистка старых данных при полной переиндексации
+                if force_full and adapter is not None:
+                    logger.info(f"🧹 Очистка старых данных чата {chat_name} перед переиндексацией...")
+                    try:
+                        cleanup_stats = adapter.clear_chat_data(chat_name)
+                        logger.info(
+                            f"✅ Очистка завершена: "
+                            f"узлов={cleanup_stats.get('nodes_deleted', 0)}, "
+                            f"векторов={cleanup_stats.get('vectors_deleted', 0)}, "
+                            f"ChromaDB={cleanup_stats.get('chromadb_deleted', 0)}"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"⚠️ Ошибка при очистке данных чата {chat_name}: {e}. "
+                            f"Продолжаем индексацию...",
+                            exc_info=True,
+                        )
 
                 # Загружаем сообщения из JSON файлов
                 messages = await self._load_messages_from_chat(chat_dir)

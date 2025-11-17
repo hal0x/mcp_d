@@ -386,6 +386,96 @@ class TypedGraphMemory:
             self.conn.rollback()
             return False
 
+    def delete_nodes_by_chat(self, chat_name: str) -> int:
+        """
+        Удаление всех узлов конкретного чата из графа.
+
+        Args:
+            chat_name: Название чата для удаления
+
+        Returns:
+            Количество удалённых узлов
+        """
+        deleted_count = 0
+        try:
+            cursor = self.conn.cursor()
+
+            # Находим все узлы, связанные с чатом
+            # 1. Поиск через FTS индекс по tags
+            node_ids_from_fts = set()
+            try:
+                # FTS поиск по тегам (tags хранятся как строка с пробелами)
+                fts_rows = cursor.execute(
+                    "SELECT node_id FROM node_search WHERE tags MATCH ?",
+                    (chat_name,),
+                ).fetchall()
+                node_ids_from_fts.update(row["node_id"] for row in fts_rows)
+            except Exception as e:
+                logger.debug(f"FTS поиск по тегам не удался: {e}")
+
+            # 2. Поиск через properties в nodes (chat в metadata или tags в списке)
+            node_ids_from_props = set()
+            try:
+                # Ищем узлы, где chat_name входит в tags или metadata.chat
+                # Используем JSON функции SQLite для поиска в JSON
+                all_nodes = cursor.execute(
+                    "SELECT id, properties FROM nodes WHERE properties IS NOT NULL"
+                ).fetchall()
+
+                for row in all_nodes:
+                    try:
+                        props = json.loads(row["properties"]) if row["properties"] else {}
+                        # Проверяем metadata.chat
+                        metadata = props.get("metadata", {})
+                        if isinstance(metadata, dict) and metadata.get("chat") == chat_name:
+                            node_ids_from_props.add(row["id"])
+                        # Проверяем tags (может быть список или строка)
+                        tags = props.get("tags", [])
+                        if isinstance(tags, list) and chat_name in tags:
+                            node_ids_from_props.add(row["id"])
+                        elif isinstance(tags, str) and chat_name in tags:
+                            node_ids_from_props.add(row["id"])
+                        # Проверяем chat напрямую в properties
+                        if props.get("chat") == chat_name:
+                            node_ids_from_props.add(row["id"])
+                    except (json.JSONDecodeError, Exception) as e:
+                        logger.debug(f"Ошибка парсинга properties для узла {row['id']}: {e}")
+                        continue
+            except Exception as e:
+                logger.debug(f"Поиск по properties не удался: {e}")
+
+            # 3. Поиск по record_id (формат: source:chat_name:record_id)
+            node_ids_from_id = set()
+            try:
+                id_pattern = f"%:{chat_name}:%"
+                id_rows = cursor.execute(
+                    "SELECT id FROM nodes WHERE id LIKE ?",
+                    (id_pattern,),
+                ).fetchall()
+                node_ids_from_id.update(row["id"] for row in id_rows)
+            except Exception as e:
+                logger.debug(f"Поиск по ID не удался: {e}")
+
+            # Объединяем все найденные ID
+            all_node_ids = node_ids_from_fts | node_ids_from_props | node_ids_from_id
+
+            logger.info(
+                f"Найдено {len(all_node_ids)} узлов для удаления (чат: {chat_name})"
+            )
+
+            # Удаляем каждый узел (delete_node уже удаляет рёбра и FTS записи)
+            for node_id in all_node_ids:
+                if self.delete_node(node_id):
+                    deleted_count += 1
+
+            logger.info(f"Удалено {deleted_count} узлов для чата {chat_name}")
+            return deleted_count
+
+        except Exception as e:
+            logger.error(f"Ошибка удаления узлов чата {chat_name}: {e}", exc_info=True)
+            self.conn.rollback()
+            return deleted_count
+
     def add_edge(self, edge: GraphEdge) -> bool:
         """
         Добавление ребра в граф

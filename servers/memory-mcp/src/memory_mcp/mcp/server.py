@@ -867,11 +867,6 @@ async def list_tools() -> List[Tool]:
                         "description": "Пересаммаризировать последние N дней",
                         "default": 7,
                     },
-                    "progress": {
-                        "type": "boolean",
-                        "description": "Показать прогресс-бар (не используется, индексация всегда в фоне)",
-                        "default": False,
-                    },
                     "enable_quality_check": {
                         "type": "boolean",
                         "description": "Включить проверку качества саммаризации",
@@ -1286,15 +1281,37 @@ async def _run_indexing_job(
             enable_time_analysis=request.enable_time_analysis if request.enable_time_analysis is not None else True,
         )
         
+        # Очистка старых данных при полной переиндексации
+        if request.force_full:
+            _active_indexing_jobs[job_id]["current_stage"] = "Очистка старых данных"
+            logger.info(f"🧹 Очистка старых данных чата '{request.chat}' перед переиндексацией...")
+            try:
+                cleanup_stats = adapter.clear_chat_data(request.chat)
+                logger.info(
+                    f"✅ Очистка завершена для чата '{request.chat}': "
+                    f"узлов={cleanup_stats.get('nodes_deleted', 0)}, "
+                    f"векторов={cleanup_stats.get('vectors_deleted', 0)}, "
+                    f"ChromaDB={cleanup_stats.get('chromadb_deleted', 0)}"
+                )
+                # Сохраняем статистику очистки в job
+                _active_indexing_jobs[job_id]["cleanup_stats"] = cleanup_stats
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ Ошибка при очистке данных чата '{request.chat}': {e}. "
+                    f"Продолжаем индексацию...",
+                    exc_info=True,
+                )
+        
         # Обновляем статус
         _active_indexing_jobs[job_id]["current_stage"] = "Загрузка сообщений"
         
-        # Запускаем индексацию
+        # Запускаем индексацию (передаём adapter для возможной дополнительной очистки)
         stats = await indexer.build_index(
             scope="chat",
             chat=request.chat,
             force_full=request.force_full,
             recent_days=request.recent_days,
+            adapter=adapter,
         )
         
         # Обновляем статус на "completed"
