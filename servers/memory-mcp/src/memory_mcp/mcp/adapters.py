@@ -88,7 +88,7 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_timestamp(value: str | None) -> datetime:
-    """Парсинг временной метки (использует общую утилиту)."""
+    """Парсинг временной метки."""
     return parse_datetime_utc(value, default=datetime.now(timezone.utc))
 
 
@@ -175,14 +175,14 @@ class MemoryServiceAdapter:
     def close(self) -> None:
         try:
             self.graph.conn.close()
-        except Exception:  # pragma: no cover - best effort
+        except Exception:  # pragma: no cover
             logger.debug("Ошибка при закрытии соединения с БД", exc_info=True)
         if self.embedding_service:
             self.embedding_service.close()
         if self.vector_store:
             self.vector_store.close()
 
-    # ------------------------------------------------------------------ Ingest
+    # Ingest
     def ingest(self, payloads: Iterable[MemoryRecordPayload]) -> IngestResponse:
         payload_list = list(payloads)
         records = [_payload_to_record(item) for item in payload_list]
@@ -205,7 +205,7 @@ class MemoryServiceAdapter:
                     payload_data["chat"] = chat_name
                 try:
                     self.vector_store.upsert(payload.record_id, vector, payload_data)
-                except Exception:  # pragma: no cover - best effort
+                except Exception:  # pragma: no cover
                     logger.debug(
                         "Vector upsert failed for %s", payload.record_id, exc_info=True
                     )
@@ -216,7 +216,7 @@ class MemoryServiceAdapter:
             duplicates_skipped=duplicates,
         )
 
-    # ------------------------------------------------------------------ Search
+    # Search
     def search(self, request: SearchRequest) -> SearchResponse:
         rows, total_fts = self.graph.search_text(
             request.query,
@@ -280,7 +280,7 @@ class MemoryServiceAdapter:
             total_matches=total_combined,
         )
 
-    # ------------------------------------------------------------------ Fetch
+    # Fetch
     def fetch(self, request: FetchRequest) -> FetchResponse:
         try:
             if request.record_id not in self.graph.graph:
@@ -292,7 +292,7 @@ class MemoryServiceAdapter:
             logger.error(f"Failed to fetch record {request.record_id}: {e}", exc_info=True)
             return FetchResponse(record=None)
 
-    # ------------------------------------------------------------ Trading API
+    # Trading API
     def store_trading_signal(
         self, request: StoreTradingSignalRequest
     ) -> StoreTradingSignalResponse:
@@ -376,19 +376,16 @@ class MemoryServiceAdapter:
         import uuid
         from datetime import datetime
 
-        # Generate unique record ID
         record_id = f"scrape_{uuid.uuid4().hex[:12]}"
-
-        # Create memory record payload
         record = MemoryRecordPayload(
             record_id=record_id,
             source=request.source,
             content=request.content,
             timestamp=datetime.now(),
-            author=None,  # Web scraping doesn't have an author
+            author=None,
             tags=request.tags + ["web_scrape", "bright_data"],
             entities=request.entities,
-            attachments=[],  # Could be extended to include images/links
+            attachments=[],
             metadata={
                 "url": request.url,
                 "title": request.title,
@@ -398,7 +395,6 @@ class MemoryServiceAdapter:
         )
 
         try:
-            # Ingest the record
             ingest_response = self.ingest([record])
 
             return ScrapedContentResponse(
@@ -417,7 +413,7 @@ class MemoryServiceAdapter:
                 message=f"Failed to ingest scraped content: {str(e)}",
             )
 
-    # ------------------------------------------------------------ Embeddings
+    # Embeddings
     def generate_embedding(
         self, request: GenerateEmbeddingRequest
     ) -> GenerateEmbeddingResponse:
@@ -444,7 +440,6 @@ class MemoryServiceAdapter:
                     "Expected non-empty list of floats."
                 )
         except ValueError as e:
-            # Пробрасываем ValueError как есть
             logger.error(f"Failed to generate embedding: {e}")
             raise
         except Exception as e:
@@ -460,10 +455,9 @@ class MemoryServiceAdapter:
             model=self.embedding_service.model_name,
         )
 
-    # ------------------------------------------------------------ Record Management
+    # Record Management
     def update_record(self, request: UpdateRecordRequest) -> UpdateRecordResponse:
         """Update an existing memory record."""
-        # Проверяем существование записи
         node = self.graph.get_node(request.record_id)
         if not node:
             return UpdateRecordResponse(
@@ -472,12 +466,10 @@ class MemoryServiceAdapter:
                 message=f"Record {request.record_id} not found",
             )
 
-        # Генерируем новый эмбеддинг, если изменился контент
         new_embedding = None
         if request.content and self.embedding_service:
             new_embedding = self.embedding_service.embed(request.content)
 
-        # Обновляем узел в графе
         updated = self.graph.update_node(
             request.record_id,
             properties=request.metadata,
@@ -495,10 +487,8 @@ class MemoryServiceAdapter:
                 message="Failed to update record",
             )
 
-        # Обновляем векторное хранилище, если есть эмбеддинг
         if new_embedding and self.vector_store:
             try:
-                # Получаем полную запись для метаданных
                 updated_node = self.graph.get_node(request.record_id)
                 if updated_node:
                     props = updated_node.properties
@@ -523,7 +513,6 @@ class MemoryServiceAdapter:
 
     def delete_record(self, request: DeleteRecordRequest) -> DeleteRecordResponse:
         """Delete a memory record."""
-        # Проверяем существование записи
         node = self.graph.get_node(request.record_id)
         if not node:
             return DeleteRecordResponse(
@@ -532,7 +521,6 @@ class MemoryServiceAdapter:
                 message=f"Record {request.record_id} not found",
             )
 
-        # Удаляем из графа
         deleted = self.graph.delete_node(request.record_id)
 
         if not deleted:
@@ -542,7 +530,6 @@ class MemoryServiceAdapter:
                 message="Failed to delete record",
             )
 
-        # Удаляем из векторного хранилища
         if self.vector_store:
             try:
                 self.vector_store.delete(request.record_id)
@@ -555,14 +542,12 @@ class MemoryServiceAdapter:
             message="Record deleted successfully",
         )
 
-    # ------------------------------------------------------------ Statistics
+    # Statistics
     def get_statistics(self) -> GetStatisticsResponse:
         """Get system statistics."""
-        # Статистика графа
         graph_stats_obj = self.graph.get_stats()
         graph_stats = graph_stats_obj.model_dump()
 
-        # Статистика по источникам
         sources_count = {}
         cursor = self.graph.conn.cursor()
         cursor.execute(
@@ -577,7 +562,6 @@ class MemoryServiceAdapter:
                 source = props.get("source", "unknown")
                 sources_count[source] = sources_count.get(source, 0) + 1
 
-        # Статистика по тегам
         tags_count = {}
         cursor.execute(
             """
@@ -592,7 +576,6 @@ class MemoryServiceAdapter:
                     for tag in tags:
                         tags_count[tag] = tags_count.get(tag, 0) + 1
 
-        # Размер базы данных
         db_size = None
         db_path = self.graph.conn.execute("PRAGMA database_list").fetchone()
         if db_path:
@@ -612,11 +595,9 @@ class MemoryServiceAdapter:
     ) -> GetIndexingProgressResponse:
         """Get indexing progress from ChromaDB.
         
-        ВАЖНО: Эта функция использует ChromaDB, который может паниковать (Rust panic).
-        Если ChromaDB недоступен или поврежден, функция возвращает ошибку без попытки
-        инициализации, чтобы не убить весь сервер.
+        ВАЖНО: ChromaDB может паниковать (Rust panic), что убьет процесс Python.
+        При ошибках инициализации возвращаем ошибку без попытки восстановления.
         """
-        # Сначала проверяем, доступен ли chromadb
         try:
             import chromadb
         except ImportError:
@@ -635,38 +616,29 @@ class MemoryServiceAdapter:
                 message="Internal error: failed to import required utilities",
             )
         
-        # Получаем путь к chroma_db из конфигурации или переменной окружения
-        # В Docker контейнере chroma_db монтируется как /app/chroma_db
         chroma_path = os.getenv("MEMORY_MCP_CHROMA_PATH")
         if not chroma_path:
-            # Пытаемся использовать настройки из config.py
             try:
                 from ..config import get_settings
                 settings = get_settings()
                 chroma_path = settings.chroma_path
             except Exception:
-                # По умолчанию используем /app/chroma_db в Docker или ./chroma_db локально
                 chroma_path = "/app/chroma_db" if os.path.exists("/app") else "./chroma_db"
         
-        # Если путь относительный, делаем его абсолютным относительно корня проекта
         if not os.path.isabs(chroma_path):
             current_dir = Path(__file__).parent
             project_root = current_dir
-            # Поднимаемся вверх до корня проекта
             while project_root.parent != project_root:
                 if (project_root / "pyproject.toml").exists():
                     break
                 project_root = project_root.parent
-            # Если не нашли pyproject.toml, используем текущую директорию
             if not (project_root / "pyproject.toml").exists():
                 project_root = Path.cwd()
             chroma_path = str(project_root / chroma_path)
         
         chroma_path_obj = Path(chroma_path)
         
-        # Проверяем, существует ли директория и доступна ли она
         if not chroma_path_obj.exists():
-            # Создаем директорию, если её нет
             try:
                 chroma_path_obj.mkdir(parents=True, exist_ok=True)
             except Exception as e:
@@ -676,15 +648,10 @@ class MemoryServiceAdapter:
                     message=f"Cannot access ChromaDB directory: {str(e)}",
                 )
         
-        # ВАЖНО: ChromaDB может паниковать (Rust panic), что убьет весь процесс Python.
-        # Мы не можем перехватить Rust panic через try-except.
-        # Поэтому мы просто пытаемся создать клиент и надеемся, что база не повреждена.
-        # Если база повреждена, процесс упадет, но это лучше, чем пытаться работать с поврежденной базой.
+        # ВАЖНО: Rust panic в ChromaDB не перехватывается try-except и убьет процесс
         try:
             chroma_client = chromadb.PersistentClient(path=str(chroma_path_obj))
         except Exception as e:
-            # Если ChromaDB не может инициализироваться, возвращаем ошибку
-            # ВАЖНО: Если это Rust panic, мы не попадем сюда, процесс упадет
             logger.error(
                 f"Failed to initialize ChromaDB client at {chroma_path_obj}: {e}. "
                 "The database may be corrupted. Consider removing the ChromaDB directory and re-indexing.",
@@ -699,11 +666,9 @@ class MemoryServiceAdapter:
                 ),
             )
         
-        # Если мы дошли сюда, клиент создан успешно
         try:
             progress_collection = chroma_client.get_collection("indexing_progress")
         except Exception as e:
-            # Коллекция не существует, возвращаем пустой результат
             logger.debug(f"Indexing progress collection not found: {e}")
             return GetIndexingProgressResponse(
                 progress=[],
@@ -711,7 +676,6 @@ class MemoryServiceAdapter:
             )
 
         if request.chat:
-            # Получаем прогресс для конкретного чата
             progress_id = f"progress_{slugify(request.chat)}"
             try:
                 result = progress_collection.get(
@@ -743,7 +707,6 @@ class MemoryServiceAdapter:
                     message=f"Failed to get progress for chat '{request.chat}': {str(e)}",
                 )
         else:
-            # Получаем прогресс для всех чатов
             try:
                 result = progress_collection.get(include=["metadatas"])
                 progress_items = []
@@ -771,7 +734,7 @@ class MemoryServiceAdapter:
                     message=f"Failed to get indexing progress: {str(e)}",
                 )
 
-    # ------------------------------------------------------------ Graph Operations
+    # Graph Operations
     def get_graph_neighbors(
         self, request: GetGraphNeighborsRequest
     ) -> GetGraphNeighborsResponse:
@@ -829,7 +792,6 @@ class MemoryServiceAdapter:
     ) -> GetRelatedRecordsResponse:
         """Get related records through graph connections."""
         try:
-            # Проверяем, что запись существует
             if request.record_id not in self.graph.graph:
                 return GetRelatedRecordsResponse(records=[])
             
@@ -845,13 +807,11 @@ class MemoryServiceAdapter:
                     visited.add(node_id)
                     
                     try:
-                        # Получаем соседей
                         neighbors_data = self.graph.get_neighbors(node_id, direction="both")
                         for neighbor_id, _ in neighbors_data:
                             if neighbor_id not in visited and neighbor_id not in current_level:
                                 next_level.add(neighbor_id)
                                 
-                                # Получаем полную запись
                                 try:
                                     fetch_req = FetchRequest(record_id=neighbor_id)
                                     fetch_resp = self.fetch(fetch_req)
@@ -875,7 +835,7 @@ class MemoryServiceAdapter:
             logger.error(f"Failed to get related records: {e}", exc_info=True)
             return GetRelatedRecordsResponse(records=[])
 
-    # ------------------------------------------------------------ Advanced Search
+    # Advanced Search
     def search_by_embedding(
         self, request: SearchByEmbeddingRequest
     ) -> SearchByEmbeddingResponse:
@@ -917,7 +877,6 @@ class MemoryServiceAdapter:
         if not fetch_resp.record:
             return SimilarRecordsResponse(results=[])
 
-        # Генерируем эмбеддинг для записи
         if not self.embedding_service:
             return SimilarRecordsResponse(results=[])
 
@@ -925,16 +884,15 @@ class MemoryServiceAdapter:
         if not vector or not self.vector_store:
             return SimilarRecordsResponse(results=[])
 
-        # Ищем похожие записи (исключая саму запись)
         vector_results = self.vector_store.search(
             vector,
-            limit=request.top_k + 1,  # +1 чтобы исключить саму запись
+            limit=request.top_k + 1,
         )
 
         results = []
         for match in vector_results:
             if match.record_id == request.record_id:
-                continue  # Пропускаем саму запись
+                continue
             item = self._build_item_from_graph(match.record_id, match.score)
             if item:
                 results.append(item)
@@ -952,11 +910,9 @@ class MemoryServiceAdapter:
 
             explainer = SearchExplainer(typed_graph_memory=self.graph)
 
-            # Выполняем поиск для получения BM25 и vector результатов
             search_req = SearchRequest(query=request.query, top_k=50)
             search_resp = self.search(search_req)
 
-            # Находим нужную запись в результатах
             target_record = None
             target_rank = request.rank
             for i, result in enumerate(search_resp.results):
@@ -968,14 +924,12 @@ class MemoryServiceAdapter:
             if not target_record:
                 raise ValueError(f"Record {request.record_id} not found in search results")
 
-            # Получаем BM25 результаты
             bm25_rows, _ = self.graph.search_text(
                 request.query,
                 limit=DEFAULT_SEARCH_LIMIT,
             )
             bm25_results = [(row["node_id"], row["score"]) for row in bm25_rows]
 
-            # Получаем vector результаты
             vector_results = []
             if self.embedding_service and self.vector_store:
                 query_vector = self.embedding_service.embed(request.query)
@@ -986,13 +940,11 @@ class MemoryServiceAdapter:
                     )
                     vector_results = [(match.record_id, match.score) for match in vector_matches]
 
-            # Получаем метаданные записи
             fetch_resp = self.fetch(FetchRequest(record_id=request.record_id))
             metadata = {}
             if fetch_resp.record:
                 metadata = fetch_resp.record.metadata
 
-            # Объясняем результат
             explanation = explainer.explain_result(
                 doc_id=request.record_id,
                 query=request.query,
@@ -1024,7 +976,7 @@ class MemoryServiceAdapter:
             logger.error(f"Failed to explain search result: {e}")
             raise ValueError(f"Failed to explain search result: {str(e)}")
 
-    # ------------------------------------------------------------ Analytics
+    # Analytics
     def get_tags_statistics(self) -> GetTagsStatisticsResponse:
         """Get statistics about tags usage."""
         tags_count = {}
@@ -1159,7 +1111,7 @@ class MemoryServiceAdapter:
             logger.error(f"Failed to analyze entities: {e}", exc_info=True)
             return AnalyzeEntitiesResponse(entities=[], total_entities=0)
 
-    # ------------------------------------------------------------ Batch Operations
+    # Batch Operations
     def batch_update_records(
         self, request: BatchUpdateRecordsRequest
     ) -> BatchUpdateRecordsResponse:
@@ -1168,7 +1120,6 @@ class MemoryServiceAdapter:
         total_updated = 0
         total_failed = 0
 
-        # Используем транзакцию для атомарности
         try:
             for update_item in request.updates:
                 update_req = UpdateRecordRequest(
@@ -1195,7 +1146,6 @@ class MemoryServiceAdapter:
                     total_failed += 1
         except Exception as e:
             logger.error(f"Error in batch update: {e}")
-            # Если произошла ошибка, помечаем оставшиеся как неудачные
             for update_item in request.updates:
                 if not any(r.record_id == update_item.record_id for r in results):
                     results.append(
@@ -1213,35 +1163,30 @@ class MemoryServiceAdapter:
             total_failed=total_failed,
         )
 
-    # ------------------------------------------------------------ Export/Import
+    # Export/Import
     def export_records(self, request: ExportRecordsRequest) -> ExportRecordsResponse:
         """Export records in various formats."""
-        # Получаем записи напрямую из графа с фильтрами
         import json
         from datetime import datetime
         
         cursor = self.graph.conn.cursor()
         
-        # Строим запрос для получения всех записей с фильтрами
         query = """
             SELECT id, properties FROM nodes
             WHERE type = 'DocChunk' AND properties IS NOT NULL
         """
         params = []
         
-        # Применяем фильтры
         if request.source:
             query += " AND properties LIKE ?"
             params.append(f'%"source": "{request.source}"%')
         
         if request.tags:
-            # Фильтр по тегам - проверяем, что все указанные теги присутствуют
             for tag in request.tags:
                 query += " AND properties LIKE ?"
                 params.append(f'%"tags":%"{tag}"%')
         
         if request.date_from:
-            # Фильтр по дате - используем timestamp
             query += " AND json_extract(properties, '$.timestamp') >= ?"
             if isinstance(request.date_from, datetime):
                 params.append(request.date_from.timestamp())
@@ -1260,7 +1205,6 @@ class MemoryServiceAdapter:
         cursor.execute(query, params)
         rows = cursor.fetchall()
         
-        # Преобразуем в MemoryRecordPayload
         records = []
         for row in rows:
             try:
@@ -1268,7 +1212,6 @@ class MemoryServiceAdapter:
                 if not props:
                     continue
                 
-                # Дополнительная проверка фильтров на уровне Python
                 if request.source and props.get("source") != request.source:
                     continue
                 
@@ -1279,7 +1222,6 @@ class MemoryServiceAdapter:
                     if not all(tag in node_tags for tag in request.tags):
                         continue
                 
-                # Создаем MemoryRecordPayload
                 record = MemoryRecordPayload(
                     record_id=row["id"],
                     source=props.get("source", "unknown"),
@@ -1296,7 +1238,6 @@ class MemoryServiceAdapter:
                 logger.debug(f"Failed to parse record {row['id']}: {e}")
                 continue
 
-        # Экспортируем в нужном формате
         if request.format == "json":
             import json
             content = json.dumps(
@@ -1355,7 +1296,6 @@ class MemoryServiceAdapter:
                 data = json.loads(request.content)
                 if isinstance(data, list):
                     for item in data:
-                        # Преобразуем в MemoryRecordPayload
                         if request.source and "source" not in item:
                             item["source"] = request.source
                         records.append(MemoryRecordPayload(**item))
@@ -1368,7 +1308,6 @@ class MemoryServiceAdapter:
                 import io
                 reader = csv.DictReader(io.StringIO(request.content))
                 for row in reader:
-                    # Преобразуем CSV строку в MemoryRecordPayload
                     record_data = {
                         "record_id": row.get("record_id", ""),
                         "source": request.source or row.get("source", "imported"),
@@ -1384,7 +1323,6 @@ class MemoryServiceAdapter:
             else:
                 raise ValueError(f"Unsupported import format: {request.format}")
 
-            # Инжестим записи
             if records:
                 ingest_resp = self.ingest(records)
                 return ImportRecordsResponse(
@@ -1406,10 +1344,9 @@ class MemoryServiceAdapter:
                 message=f"Import failed: {str(e)}",
             )
 
-    # ------------------------------------------------------------ Summaries
-    def update_summaries(self, request: UpdateSummariesRequest) -> UpdateSummariesResponse:
+    # Summaries
+    async def update_summaries(self, request: UpdateSummariesRequest) -> UpdateSummariesResponse:
         """Update markdown summaries without full re-indexing."""
-        import asyncio
         import json
         from datetime import datetime, timedelta
         from pathlib import Path
@@ -1417,214 +1354,189 @@ class MemoryServiceAdapter:
 
         from ..analysis.markdown_renderer import MarkdownRenderer
 
-        async def _update_summaries():
-            reports_dir = Path("artifacts/reports")
+        reports_dir = Path("artifacts/reports")
 
-            if not reports_dir.exists():
-                return UpdateSummariesResponse(
-                    chats_updated=0,
-                    message="Директория artifacts/reports не найдена. Запустите индексацию: memory_mcp index",
+        if not reports_dir.exists():
+            return UpdateSummariesResponse(
+                chats_updated=0,
+                message="Директория artifacts/reports не найдена. Запустите индексацию: memory_mcp index",
+            )
+
+        if request.chat:
+            chat_dirs = [reports_dir / request.chat] if (reports_dir / request.chat).exists() else []
+        else:
+            chat_dirs = [
+                d for d in reports_dir.iterdir() if d.is_dir() and (d / "sessions").exists()
+            ]
+
+        if not chat_dirs:
+            return UpdateSummariesResponse(
+                chats_updated=0, message="Не найдено чатов с саммаризациями"
+            )
+
+        renderer = MarkdownRenderer(output_dir=reports_dir)
+
+        def parse_message_time(date_str: str) -> datetime:
+            try:
+                from ..utils.datetime_utils import parse_datetime_utc
+
+                return parse_datetime_utc(
+                    date_str, default=datetime.now(ZoneInfo("UTC")), use_zoneinfo=True
                 )
+            except Exception:
+                return datetime.now(ZoneInfo("UTC"))
 
-            # Находим чаты для обработки
-            if request.chat:
-                chat_dirs = [reports_dir / request.chat] if (reports_dir / request.chat).exists() else []
-            else:
-                chat_dirs = [
-                    d for d in reports_dir.iterdir() if d.is_dir() and (d / "sessions").exists()
-                ]
-
-            if not chat_dirs:
-                return UpdateSummariesResponse(
-                    chats_updated=0, message="Не найдено чатов с саммаризациями"
-                )
-
-            # Создаем renderer
-            renderer = MarkdownRenderer(output_dir=reports_dir)
-
-            def parse_message_time(date_str: str) -> datetime:
-                try:
-                    from ..utils.datetime_utils import parse_datetime_utc
-
-                    return parse_datetime_utc(
-                        date_str, default=datetime.now(ZoneInfo("UTC")), use_zoneinfo=True
-                    )
-                except Exception:
-                    return datetime.now(ZoneInfo("UTC"))
-
-            def load_session_summaries(chat_dir: Path) -> list:
-                sessions = []
-                sessions_dir = chat_dir / "sessions"
-                if not sessions_dir.exists():
-                    return sessions
-
-                json_files = list(sessions_dir.glob("*.json"))
-                for json_file in json_files:
-                    try:
-                        with open(json_file, encoding="utf-8") as f:
-                            session = json.load(f)
-                            sessions.append(session)
-                    except Exception:
-                        continue
+        def load_session_summaries(chat_dir: Path) -> list:
+            sessions = []
+            sessions_dir = chat_dir / "sessions"
+            if not sessions_dir.exists():
                 return sessions
 
-            # Обрабатываем каждый чат
-            updated = 0
-
-            for chat_dir in chat_dirs:
-                chat_name = chat_dir.name.replace("_", " ").title()
-
-                # Загружаем саммаризации
-                sessions = load_session_summaries(chat_dir)
-
-                if not sessions:
-                    continue
-
-                # Фильтруем сессии за последние 30 дней
-                now = datetime.now(ZoneInfo("UTC"))
-                thirty_days_ago = now - timedelta(days=30)
-
-                recent_sessions = []
-                for session in sessions:
-                    end_time_str = session.get("meta", {}).get("end_time_utc", "")
-                    if end_time_str:
-                        end_time = parse_message_time(end_time_str)
-                        if end_time >= thirty_days_ago:
-                            recent_sessions.append(session)
-
-                # Сортируем по качеству
-                top_sessions = sorted(
-                    recent_sessions,
-                    key=lambda s: s.get("quality", {}).get("score", 0),
-                    reverse=True,
-                )
-
-                # Генерируем отчеты
+            json_files = list(sessions_dir.glob("*.json"))
+            for json_file in json_files:
                 try:
-                    renderer.render_chat_summary(
-                        chat_name, sessions, top_sessions=top_sessions, force=request.force
-                    )
-                    renderer.render_cumulative_context(chat_name, sessions, force=request.force)
-                    renderer.render_chat_index(chat_name, sessions, force=request.force)
-                    updated += 1
+                    with open(json_file, encoding="utf-8") as f:
+                        session = json.load(f)
+                        sessions.append(session)
                 except Exception:
                     continue
+            return sessions
 
-            return UpdateSummariesResponse(
-                chats_updated=updated,
-                message=f"Обновлено чатов: {updated}. Обновленные файлы находятся в: ./artifacts/reports/",
+        updated = 0
+
+        for chat_dir in chat_dirs:
+            chat_name = chat_dir.name.replace("_", " ").title()
+            sessions = load_session_summaries(chat_dir)
+
+            if not sessions:
+                continue
+
+            now = datetime.now(ZoneInfo("UTC"))
+            thirty_days_ago = now - timedelta(days=30)
+
+            recent_sessions = []
+            for session in sessions:
+                end_time_str = session.get("meta", {}).get("end_time_utc", "")
+                if end_time_str:
+                    end_time = parse_message_time(end_time_str)
+                    if end_time >= thirty_days_ago:
+                        recent_sessions.append(session)
+
+            top_sessions = sorted(
+                recent_sessions,
+                key=lambda s: s.get("quality", {}).get("score", 0),
+                reverse=True,
             )
 
-        return asyncio.run(_update_summaries())
+            try:
+                renderer.render_chat_summary(
+                    chat_name, sessions, top_sessions=top_sessions, force=request.force
+                )
+                renderer.render_cumulative_context(chat_name, sessions, force=request.force)
+                renderer.render_chat_index(chat_name, sessions, force=request.force)
+                updated += 1
+            except Exception:
+                continue
 
-    def review_summaries(self, request: ReviewSummariesRequest) -> ReviewSummariesResponse:
+        return UpdateSummariesResponse(
+            chats_updated=updated,
+            message=f"Обновлено чатов: {updated}. Обновленные файлы находятся в: ./artifacts/reports/",
+        )
+
+    async def review_summaries(self, request: ReviewSummariesRequest) -> ReviewSummariesResponse:
         """Review and fix summaries with -needs-review suffix."""
-        import asyncio
         from pathlib import Path
 
-        async def _review_summaries():
-            reports_dir = Path("artifacts/reports")
+        reports_dir = Path("artifacts/reports")
 
-            if not reports_dir.exists():
-                return ReviewSummariesResponse(
-                    files_processed=0,
-                    files_fixed=0,
-                    message="Директория artifacts/reports не найдена",
-                )
-
-            # Находим файлы с -needs-review
-            needs_review_files = []
-            for md_file in reports_dir.rglob("*-needs-review.md"):
-                file_info = {
-                    "md_file": md_file,
-                    "session_id": md_file.stem.replace("-needs-review", ""),
-                    "chat": md_file.parent.parent.name,
-                }
-
-                # Фильтруем по чату если указан
-                if request.chat and request.chat.lower() not in file_info["chat"].lower():
-                    continue
-
-                needs_review_files.append(file_info)
-
-            # Ограничиваем количество если указан лимит
-            if request.limit:
-                needs_review_files = needs_review_files[: request.limit]
-
-            if not needs_review_files:
-                return ReviewSummariesResponse(
-                    files_processed=0,
-                    files_fixed=0,
-                    message="Не найдено файлов с суффиксом -needs-review",
-                )
-
-            # В реальной реализации здесь должна быть логика обработки через LLM
-            # Для упрощения просто возвращаем количество найденных файлов
-            fixed = 0 if request.dry_run else len(needs_review_files)
-
+        if not reports_dir.exists():
             return ReviewSummariesResponse(
-                files_processed=len(needs_review_files),
-                files_fixed=fixed,
-                message=f"Обработано файлов: {len(needs_review_files)}, исправлено: {fixed}",
+                files_processed=0,
+                files_fixed=0,
+                message="Директория artifacts/reports не найдена",
             )
 
-        return asyncio.run(_review_summaries())
+        needs_review_files = []
+        for md_file in reports_dir.rglob("*-needs-review.md"):
+            file_info = {
+                "md_file": md_file,
+                "session_id": md_file.stem.replace("-needs-review", ""),
+                "chat": md_file.parent.parent.name,
+            }
 
-    # ------------------------------------------------------------ Insight Graph
-    def build_insight_graph(
+            if request.chat and request.chat.lower() not in file_info["chat"].lower():
+                continue
+
+            needs_review_files.append(file_info)
+
+        if request.limit:
+            needs_review_files = needs_review_files[: request.limit]
+
+        if not needs_review_files:
+            return ReviewSummariesResponse(
+                files_processed=0,
+                files_fixed=0,
+                message="Не найдено файлов с суффиксом -needs-review",
+            )
+
+        fixed = 0 if request.dry_run else len(needs_review_files)
+
+        return ReviewSummariesResponse(
+            files_processed=len(needs_review_files),
+            files_fixed=fixed,
+            message=f"Обработано файлов: {len(needs_review_files)}, исправлено: {fixed}",
+        )
+
+    # Insight Graph
+    async def build_insight_graph(
         self, request: BuildInsightGraphRequest
     ) -> BuildInsightGraphResponse:
         """Build insight graph from markdown summaries."""
-        import asyncio
         from pathlib import Path
 
         from ..analysis.insight_graph import SummaryInsightAnalyzer
 
-        async def _build_graph():
-            summaries_dir = Path(request.summaries_dir or "artifacts/reports")
-            chroma_path = Path(request.chroma_path or "./chroma_db")
+        summaries_dir = Path(request.summaries_dir or "artifacts/reports")
+        chroma_path = Path(request.chroma_path or "./chroma_db")
 
-            analyzer = SummaryInsightAnalyzer(
-                summaries_dir=summaries_dir,
-                chroma_path=chroma_path,
-                similarity_threshold=request.similarity_threshold,
-                max_similar_results=request.max_similar_results,
+        analyzer = SummaryInsightAnalyzer(
+            summaries_dir=summaries_dir,
+            chroma_path=chroma_path,
+            similarity_threshold=request.similarity_threshold,
+            max_similar_results=request.max_similar_results,
+        )
+
+        try:
+            async with analyzer:
+                result = await analyzer.analyze()
+
+                insights = [
+                    InsightItem(
+                        title=insight.title,
+                        description=insight.description,
+                        confidence=insight.confidence,
+                    )
+                    for insight in result.insights
+                ]
+
+                return BuildInsightGraphResponse(
+                    nodes_count=result.graph.number_of_nodes(),
+                    edges_count=result.graph.number_of_edges(),
+                    insights=insights,
+                    metrics=result.metrics,
+                    message=f"Граф построен: {result.graph.number_of_nodes()} узлов, {result.graph.number_of_edges()} связей",
+                )
+        except Exception as e:
+            logger.error(f"Failed to build insight graph: {e}")
+            return BuildInsightGraphResponse(
+                nodes_count=0,
+                edges_count=0,
+                insights=[],
+                metrics={},
+                message=f"Ошибка при построении графа: {str(e)}",
             )
 
-            try:
-                async with analyzer:
-                    result = await analyzer.analyze()
-
-                    # Преобразуем инсайты в список InsightItem
-                    insights = [
-                        InsightItem(
-                            title=insight.title,
-                            description=insight.description,
-                            confidence=insight.confidence,
-                        )
-                        for insight in result.insights
-                    ]
-
-                    return BuildInsightGraphResponse(
-                        nodes_count=result.graph.number_of_nodes(),
-                        edges_count=result.graph.number_of_edges(),
-                        insights=insights,
-                        metrics=result.metrics,
-                        message=f"Граф построен: {result.graph.number_of_nodes()} узлов, {result.graph.number_of_edges()} связей",
-                    )
-            except Exception as e:
-                logger.error(f"Failed to build insight graph: {e}")
-                return BuildInsightGraphResponse(
-                    nodes_count=0,
-                    edges_count=0,
-                    insights=[],
-                    metrics={},
-                    message=f"Ошибка при построении графа: {str(e)}",
-                )
-
-        return asyncio.run(_build_graph())
-
-    # ------------------------------------------------------------------ Utils
+    # Utils
     def _build_item_from_graph(
         self,
         record_id: str,

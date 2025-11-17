@@ -72,8 +72,6 @@ from .schema import (
     UpdateSummariesResponse,
 )
 
-# Настраиваем базовое логирование при импорте модуля
-# Это нужно для того, чтобы видеть логи при регистрации инструментов
 if not logging.getLogger().handlers:
     logging.basicConfig(
         level=os.getenv("MEMORY_LOG_LEVEL", "INFO").upper(),
@@ -82,13 +80,11 @@ if not logging.getLogger().handlers:
 
 logger = logging.getLogger(__name__)
 
-# Создаем MCP сервер
 server = Server("memory-mcp")
 logger.info(f"MCP сервер '{server.name}' создан, начинаем регистрацию инструментов...")
 
 ToolResponse = Tuple[List[TextContent], Dict[str, Any]]
 
-# Глобальный адаптер (инициализируется при первом использовании)
 _adapter: MemoryServiceAdapter | None = None
 
 
@@ -97,21 +93,16 @@ def _get_adapter() -> MemoryServiceAdapter:
     global _adapter
     if _adapter is None:
         db_path = os.getenv("MEMORY_DB_PATH", "memory_graph.db")
-        # Если путь относительный, делаем его абсолютным относительно директории проекта
         if not os.path.isabs(db_path):
-            # Пытаемся найти корень проекта (где находится pyproject.toml)
             current_dir = Path(__file__).parent
             project_root = current_dir
-            # Поднимаемся вверх до корня проекта
             while project_root.parent != project_root:
                 if (project_root / "pyproject.toml").exists():
                     break
                 project_root = project_root.parent
-            # Если не нашли pyproject.toml, используем текущую директорию
             if not (project_root / "pyproject.toml").exists():
                 project_root = Path.cwd()
             db_path = str(project_root / db_path)
-        # Создаем директорию для БД, если её нет
         db_path_obj = Path(db_path)
         db_path_obj.parent.mkdir(parents=True, exist_ok=True)
         logger.info(f"Используется путь к БД: {db_path}")
@@ -121,19 +112,15 @@ def _get_adapter() -> MemoryServiceAdapter:
 
 def _to_serializable(value: Any) -> Any:
     """Recursively convert Pydantic models and iterables into plain Python data."""
-    # Обработка datetime объектов - конвертируем в ISO строку
     if isinstance(value, datetime):
         return value.isoformat()
-    # Обработка Pydantic моделей
     if isinstance(value, BaseModel):
         try:
             return value.model_dump(mode="json")
         except AttributeError:
             return value.dict()
-    # Обработка словарей
     if isinstance(value, dict):
         return {key: _to_serializable(val) for key, val in value.items()}
-    # Обработка списков, кортежей и множеств
     if isinstance(value, (list, tuple, set)):
         return [_to_serializable(item) for item in value]
     return value
@@ -150,10 +137,6 @@ def _format_tool_response(payload: Any, *, root_key: str = "result") -> ToolResp
         text_payload = serialized
     text = json.dumps(text_payload, indent=2, ensure_ascii=False)
     return ([TextContent(type="text", text=text)], structured)
-
-
-# Используем общую функцию форматирования ошибок из error_handler
-# _format_error_message удалена, используется format_error_message из error_handler
 
 
 @server.list_tools()  # type: ignore[misc]
@@ -915,7 +898,6 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
                 result = adapter.generate_embedding(request)
                 return _format_tool_response(result.model_dump())
             except ValueError as e:
-                # Возвращаем понятную ошибку через format_error_message
                 error_msg = format_error_message(e)
                 logger.warning(f"generate_embedding failed: {error_msg}")
                 raise RuntimeError(error_msg) from e
@@ -959,7 +941,6 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
             return _format_tool_response(result.model_dump())
 
         elif name == "search_by_embedding":
-            # Парсим даты если есть
             if "date_from" in arguments and arguments["date_from"]:
                 from datetime import datetime
                 arguments["date_from"] = datetime.fromisoformat(arguments["date_from"].replace("Z", "+00:00"))
@@ -985,7 +966,6 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
             return _format_tool_response(result.model_dump())
 
         elif name == "get_timeline":
-            # Парсим даты если есть
             if "date_from" in arguments and arguments["date_from"]:
                 from datetime import datetime
                 arguments["date_from"] = datetime.fromisoformat(arguments["date_from"].replace("Z", "+00:00"))
@@ -1002,7 +982,6 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
             return _format_tool_response(result.model_dump())
 
         elif name == "batch_update_records":
-            # Преобразуем updates в список BatchUpdateRecordItem
             updates_data = arguments.get("updates", [])
             from .schema import BatchUpdateRecordItem
             updates = [BatchUpdateRecordItem(**item) for item in updates_data]
@@ -1011,7 +990,6 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
             return _format_tool_response(result.model_dump())
 
         elif name == "export_records":
-            # Парсим даты если есть
             if "date_from" in arguments and arguments["date_from"]:
                 from datetime import datetime
                 arguments["date_from"] = datetime.fromisoformat(arguments["date_from"].replace("Z", "+00:00"))
@@ -1029,17 +1007,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
         elif name == "update_summaries":
             request = UpdateSummariesRequest(**arguments)
-            result = adapter.update_summaries(request)
+            result = await adapter.update_summaries(request)
             return _format_tool_response(result.model_dump())
 
         elif name == "review_summaries":
             request = ReviewSummariesRequest(**arguments)
-            result = adapter.review_summaries(request)
+            result = await adapter.review_summaries(request)
             return _format_tool_response(result.model_dump())
 
         elif name == "build_insight_graph":
             request = BuildInsightGraphRequest(**arguments)
-            result = adapter.build_insight_graph(request)
+            result = await adapter.build_insight_graph(request)
             return _format_tool_response(result.model_dump())
 
         else:
@@ -1097,7 +1075,6 @@ def get_version_payload() -> Dict[str, Any]:
     except metadata.PackageNotFoundError:
         version = "0.0.0"
 
-    # Список всех доступных инструментов (синхронизирован с list_tools())
     features = [
         "health",
         "version",
