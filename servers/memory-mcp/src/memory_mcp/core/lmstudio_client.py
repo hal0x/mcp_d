@@ -5,6 +5,7 @@
 
 import asyncio
 import logging
+import random
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -167,6 +168,34 @@ class LMStudioEmbeddingClient:
                 all_embeddings.extend([[0.0] * default_dim] * len(batch_texts))
 
         return all_embeddings
+
+    async def _generate_batch_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Генерация эмбеддингов для батча текстов через параллельную обработку"""
+        if not texts:
+            return []
+        
+        # Обрабатываем тексты параллельно
+        tasks = []
+        for i, text in enumerate(texts):
+            task = self._process_single_text_async(text, i, len(texts))
+            tasks.append(task)
+        
+        # Выполняем все задачи параллельно
+        embeddings = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Обрабатываем результаты и исключения
+        result = []
+        default_dim = self._embedding_dimension or 1024
+        for i, emb in enumerate(embeddings):
+            if isinstance(emb, Exception):
+                logger.warning(f"Ошибка при генерации эмбеддинга для текста {i+1}: {emb}")
+                result.append([0.0] * default_dim)
+            elif emb:
+                result.append(emb)
+            else:
+                result.append([0.0] * default_dim)
+        
+        return result
 
     async def _process_single_text_async(
         self, text: str, index: int, total: int
@@ -343,7 +372,7 @@ class LMStudioEmbeddingClient:
                 headers={"Connection": "close"},
             )
 
-        # Повторные попытки с разумными таймаутами
+        # Повторные попытки с разумными таймаутами и экспоненциальной задержкой
         for attempt in range(3):
             try:
                 # Увеличенные таймауты: 60, 90, 120 секунд
@@ -395,16 +424,64 @@ class LMStudioEmbeddingClient:
                     f"Таймаут запроса к LM Studio (попытка {attempt + 1}/3)"
                 )
                 if attempt < 2:
-                    await asyncio.sleep(2 + attempt)
+                    # Экспоненциальная задержка с jitter: 2^attempt + случайное значение (0-1)
+                    delay = (2 ** attempt) + random.uniform(0, 1)
+                    await asyncio.sleep(delay)
                     continue
                 return None
             except aiohttp.ClientError as e:
-                logger.error(
-                    f"Ошибка соединения с LM Studio (попытка {attempt + 1}/3): {e}"
-                )
-                if attempt < 2:  # Не последняя попытка
-                    await asyncio.sleep(5 + (attempt * 2))  # 5, 7, 9 секунд
-                    continue
+                error_str = str(e)
+                is_connection_reset = "Connection reset" in error_str or "Errno 54" in error_str
+                
+                if is_connection_reset:
+                    logger.warning(
+                        f"Соединение с LM Studio разорвано сервером (попытка {attempt + 1}/3). "
+                        f"Возможно, сервер перегружен или перезапускается. "
+                        f"Ошибка: {e}"
+                    )
+                    # При Connection reset пересоздаем сессию для следующей попытки
+                    if attempt < 2:
+                        try:
+                            if self.session:
+                                await self.session.close()
+                        except Exception:
+                            pass
+                        # Создаем новую сессию
+                        connector = aiohttp.TCPConnector(
+                            limit=HTTP_CONNECTOR_LIMIT,
+                            limit_per_host=HTTP_CONNECTOR_LIMIT_PER_HOST,
+                            ttl_dns_cache=300,
+                            use_dns_cache=True,
+                            enable_cleanup_closed=True,
+                            force_close=True,
+                            ssl=False,
+                        )
+                        timeout = aiohttp.ClientTimeout(
+                            total=DEFAULT_TIMEOUT_MAX_RETRY,
+                            connect=DEFAULT_TIMEOUT_CONNECT,
+                            sock_read=DEFAULT_TIMEOUT_MAX_RETRY,
+                            sock_connect=DEFAULT_TIMEOUT_CONNECT,
+                        )
+                        self.session = aiohttp.ClientSession(
+                            connector=connector,
+                            timeout=timeout,
+                            headers={"Connection": "close"},
+                        )
+                        # Более длинная задержка для Connection reset: экспоненциальная с jitter
+                        # 5, 10, 20 секунд + случайное значение (0-2)
+                        delay = (5 * (2 ** attempt)) + random.uniform(0, 2)
+                        logger.debug(f"Ожидание {delay:.2f} секунд перед повторной попыткой...")
+                        await asyncio.sleep(delay)
+                        continue
+                else:
+                    logger.error(
+                        f"Ошибка соединения с LM Studio (попытка {attempt + 1}/3): {e}"
+                    )
+                    if attempt < 2:  # Не последняя попытка
+                        # Экспоненциальная задержка с jitter: 2^attempt * 2 + случайное значение (0-1)
+                        delay = (2 ** attempt) * 2 + random.uniform(0, 1)
+                        await asyncio.sleep(delay)
+                        continue
                 return None
             except aiohttp.InvalidURL as e:
                 logger.error(
@@ -415,13 +492,17 @@ class LMStudioEmbeddingClient:
             except aiohttp.ServerTimeoutError as e:
                 logger.error(f"Таймаут сервера LM Studio (попытка {attempt + 1}/3): {e}")
                 if attempt < 2:  # Не последняя попытка
-                    await asyncio.sleep(5 + (attempt * 2))
+                    # Экспоненциальная задержка с jitter
+                    delay = (2 ** attempt) * 3 + random.uniform(0, 1)
+                    await asyncio.sleep(delay)
                     continue
                 return None
             except Exception as e:
                 logger.error(f"Неожиданная ошибка при запросе к LM Studio: {e}")
                 if attempt < 2:  # Не последняя попытка
-                    await asyncio.sleep(5 + (attempt * 2))
+                    # Экспоненциальная задержка с jitter
+                    delay = (2 ** attempt) * 2 + random.uniform(0, 1)
+                    await asyncio.sleep(delay)
                     continue
                 return None
 
@@ -652,31 +733,112 @@ class LMStudioEmbeddingClient:
             "stream": False,
         }
 
-        try:
-            if not self.session:
-                self.session = aiohttp.ClientSession()
-            
-            timeout = aiohttp.ClientTimeout(total=300)  # 5 минут для LLM
-            async with self.session.post(
-                f"{self.base_url}/v1/chat/completions", json=payload, timeout=timeout
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    # LM Studio возвращает OpenAI-совместимый формат:
-                    # {"choices": [{"message": {"content": "..."}}]}
-                    if "choices" in data and len(data["choices"]) > 0:
-                        return data["choices"][0]["message"]["content"].strip()
+        # Повторные попытки для генерации саммари (до 2 попыток)
+        for attempt in range(2):
+            try:
+                if not self.session:
+                    connector = aiohttp.TCPConnector(
+                        limit=HTTP_CONNECTOR_LIMIT,
+                        limit_per_host=HTTP_CONNECTOR_LIMIT_PER_HOST,
+                        ttl_dns_cache=300,
+                        use_dns_cache=True,
+                        enable_cleanup_closed=True,
+                        force_close=True,
+                        ssl=False,
+                    )
+                    timeout = aiohttp.ClientTimeout(
+                        total=300,  # 5 минут для LLM
+                        connect=DEFAULT_TIMEOUT_CONNECT,
+                    )
+                    self.session = aiohttp.ClientSession(
+                        connector=connector,
+                        timeout=timeout,
+                        headers={"Connection": "close"},
+                    )
+                
+                async with self.session.post(
+                    f"{self.base_url}/v1/chat/completions", json=payload
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        # LM Studio возвращает OpenAI-совместимый формат:
+                        # {"choices": [{"message": {"content": "..."}}]}
+                        if "choices" in data and len(data["choices"]) > 0:
+                            return data["choices"][0]["message"]["content"].strip()
+                        else:
+                            logger.error("LM Studio вернул неожиданный формат данных")
+                            return "Ошибка генерации: неожиданный формат ответа"
                     else:
-                        logger.error("LM Studio вернул неожиданный формат данных")
-                        return "Ошибка генерации: неожиданный формат ответа"
+                        error_text = await response.text()
+                        logger.error(f"Ошибка API LM Studio: {response.status} - {error_text}")
+                        if attempt < 1:
+                            await asyncio.sleep(3 + random.uniform(0, 1))
+                            continue
+                        return f"Ошибка генерации: HTTP {response.status}"
+            except aiohttp.ClientError as e:
+                error_str = str(e)
+                is_connection_reset = "Connection reset" in error_str or "Errno 54" in error_str
+                
+                if is_connection_reset:
+                    logger.warning(
+                        f"Соединение с LM Studio разорвано при генерации саммари (попытка {attempt + 1}/2). "
+                        f"Ошибка: {e}"
+                    )
+                    # Пересоздаем сессию при Connection reset
+                    if attempt < 1:
+                        try:
+                            if self.session:
+                                await self.session.close()
+                        except Exception:
+                            pass
+                        # Создаем новую сессию
+                        connector = aiohttp.TCPConnector(
+                            limit=HTTP_CONNECTOR_LIMIT,
+                            limit_per_host=HTTP_CONNECTOR_LIMIT_PER_HOST,
+                            ttl_dns_cache=300,
+                            use_dns_cache=True,
+                            enable_cleanup_closed=True,
+                            force_close=True,
+                            ssl=False,
+                        )
+                        timeout = aiohttp.ClientTimeout(
+                            total=300,
+                            connect=DEFAULT_TIMEOUT_CONNECT,
+                        )
+                        self.session = aiohttp.ClientSession(
+                            connector=connector,
+                            timeout=timeout,
+                            headers={"Connection": "close"},
+                        )
+                        # Задержка перед повторной попыткой
+                        delay = 5 + random.uniform(0, 2)
+                        logger.debug(f"Ожидание {delay:.2f} секунд перед повторной попыткой генерации...")
+                        await asyncio.sleep(delay)
+                        continue
                 else:
-                    error_text = await response.text()
-                    logger.error(f"Ошибка API LM Studio: {response.status} - {error_text}")
-                    return f"Ошибка генерации: HTTP {response.status}"
-        except aiohttp.InvalidURL as e:
-            logger.error(f"Некорректный URL в запросе к LM Studio: {e}")
-            return "Ошибка генерации: некорректный URL"
-        except Exception as e:
-            logger.error(f"Ошибка при генерации саммаризации: {e}")
-            return f"Ошибка генерации: {str(e)}"
+                    logger.error(f"Ошибка соединения с LM Studio при генерации саммари: {e}")
+                    if attempt < 1:
+                        delay = 3 + random.uniform(0, 1)
+                        await asyncio.sleep(delay)
+                        continue
+                return f"Ошибка генерации: {str(e)}"
+            except aiohttp.InvalidURL as e:
+                logger.error(f"Некорректный URL в запросе к LM Studio: {e}")
+                return "Ошибка генерации: некорректный URL"
+            except asyncio.TimeoutError:
+                logger.error(f"Таймаут при генерации саммари (попытка {attempt + 1}/2)")
+                if attempt < 1:
+                    delay = 5 + random.uniform(0, 1)
+                    await asyncio.sleep(delay)
+                    continue
+                return "Ошибка генерации: таймаут запроса"
+            except Exception as e:
+                logger.error(f"Ошибка при генерации саммаризации: {e}")
+                if attempt < 1:
+                    delay = 3 + random.uniform(0, 1)
+                    await asyncio.sleep(delay)
+                    continue
+                return f"Ошибка генерации: {str(e)}"
+        
+        return "Ошибка генерации: не удалось выполнить запрос после повторных попыток"
 

@@ -1441,8 +1441,15 @@ class TwoLevelIndexer:
                                 
                                 # Сохраняем эмбеддинги в граф
                                 for record, embedding in records_to_ingest:
-                                    if embedding:
+                                    # Проверяем, что эмбеддинг существует и не пустой
+                                    if embedding is not None and len(embedding) > 0:
                                         try:
+                                            # Преобразуем numpy массив в список, если нужно
+                                            if hasattr(embedding, 'tolist'):
+                                                embedding = embedding.tolist()
+                                            elif not isinstance(embedding, list):
+                                                embedding = list(embedding)
+                                            
                                             self.graph.update_node(
                                                 record.record_id,
                                                 embedding=embedding,

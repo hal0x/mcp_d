@@ -114,8 +114,8 @@ class TypedGraphMemory:
         """Загрузка графа из БД в память (NetworkX)"""
         cursor = self.conn.cursor()
 
-        # Загружаем узлы
-        cursor.execute("SELECT id, type, label, properties FROM nodes")
+        # Загружаем узлы (включая эмбеддинги)
+        cursor.execute("SELECT id, type, label, properties, embedding FROM nodes")
         for row in cursor.fetchall():
             props = json.loads(row["properties"]) if row["properties"] else {}
             node_attrs = {
@@ -124,6 +124,14 @@ class TypedGraphMemory:
                 "properties": props,
                 **props,
             }
+            # Загружаем эмбеддинг, если есть
+            if row["embedding"]:
+                try:
+                    embedding = json.loads(row["embedding"].decode())
+                    node_attrs["embedding"] = embedding
+                except Exception:
+                    # Если не удалось распарсить, пропускаем
+                    pass
             self.graph.add_node(row["id"], **node_attrs)
 
         # Загружаем рёбра

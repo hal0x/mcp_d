@@ -373,7 +373,7 @@ def ingest_telegram(chats_dir: Path, db_path: Path, selected_chats: tuple[str, .
 
 @cli.command()
 @click.option(
-    "--embedding-model", default=None, help="Модель для эмбеддингов (по умолчанию из настроек)"
+    "--embedding-model", default="text-embedding-qwen3-embedding-0.6b", help="Модель для эмбеддингов"
 )
 def check(embedding_model):
     """🔧 Проверка системы и подключений"""
@@ -576,8 +576,8 @@ def check(embedding_model):
 )
 @click.option(
     "--embedding-model", 
-    default=None, 
-    help="Модель для эмбеддингов (по умолчанию из настроек)"
+    default="text-embedding-qwen3-embedding-0.6b", 
+    help="Модель для эмбеддингов"
 )
 def index(
     scope,
@@ -629,24 +629,6 @@ def index(
             base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
         )
         chroma_path = os.getenv("MEMORY_MCP_CHROMA_PATH") or settings.chroma_path
-        
-        # Инициализация графа памяти для синхронизации
-        db_path = settings.db_path
-        if not os.path.isabs(db_path):
-            # Разрешаем относительный путь от корня проекта
-            current_dir = Path(__file__).parent
-            project_root = current_dir
-            while project_root.parent != project_root:
-                if (project_root / "pyproject.toml").exists():
-                    break
-                project_root = project_root.parent
-            if not (project_root / "pyproject.toml").exists():
-                project_root = Path.cwd()
-            db_path = str(project_root / db_path)
-        
-        graph = TypedGraphMemory(db_path=db_path)
-        logger.info(f"Граф памяти инициализирован: {db_path}")
-        
         indexer = TwoLevelIndexer(
             chroma_path=chroma_path,
             artifacts_path=settings.artifacts_path,
@@ -667,7 +649,6 @@ def index(
             recent_window_days=recent_window_days,
             strategy_threshold=strategy_threshold,
             force=force,
-            graph=graph,  # Передаём граф для синхронизации записей
         )
         click.echo("✅ Индексатор готов")
         click.echo()
@@ -754,7 +735,6 @@ def index(
             click.echo("   - Markdown отчёты: ./artifacts/reports/")
             click.echo("   - Векторная база: ./chroma_db/")
             click.echo("   - Коллекции: chat_sessions, chat_messages, chat_tasks")
-            click.echo("   - Граф памяти: ./data/memory_graph.db")
             click.echo()
 
         except Exception as e:
@@ -767,13 +747,6 @@ def index(
             import traceback
 
             traceback.print_exc()
-        finally:
-            # Закрываем граф после индексации
-            try:
-                graph.conn.close()
-                logger.info("Граф памяти закрыт")
-            except Exception:
-                pass
 
     asyncio.run(_index())
 
@@ -974,8 +947,8 @@ def _bm25_scores(
 )
 @click.option(
     "--embedding-model", 
-    default=None, 
-    help="Модель для эмбеддингов (по умолчанию из настроек)"
+    default="text-embedding-qwen3-embedding-0.6b", 
+    help="Модель для эмбеддингов"
 )
 def search(query, limit, collection, chat, highlight, embedding_model):
     """🔍 Поиск по индексированным данным
@@ -2060,6 +2033,19 @@ def sync_chromadb(db_path: Path, chroma_path: Path, chat: Optional[str], dry_run
     graph = TypedGraphMemory(db_path=str(db_path))
     ingestor = MemoryIngestor(graph)
     
+    # Инициализация сервисов для эмбеддингов и Qdrant
+    from ..memory.embeddings import build_embedding_service_from_env
+    from ..memory.vector_store import build_vector_store_from_env
+    
+    embedding_service = build_embedding_service_from_env()
+    vector_store = build_vector_store_from_env()
+    
+    if vector_store and embedding_service and embedding_service.dimension:
+        vector_store.ensure_collection(embedding_service.dimension)
+        logger.info("✅ Векторное хранилище инициализировано")
+    else:
+        logger.warning("⚠️  Векторное хранилище недоступно, эмбеддинги не будут сохранены в Qdrant")
+    
     # Инициализация ChromaDB
     chroma_client = chromadb.PersistentClient(path=str(chroma_path))
     
@@ -2169,11 +2155,38 @@ def sync_chromadb(db_path: Path, chroma_path: Path, chat: Optional[str], dry_run
                             records_only = [r for r, _ in records_to_ingest]
                             ingestor.ingest(records_only)
                             
-                            # Сохраняем эмбеддинги
+                            # Сохраняем эмбеддинги в граф и Qdrant
                             for record, embedding in records_to_ingest:
-                                if embedding:
+                                # Проверяем, что эмбеддинг существует и не пустой
+                                if embedding is not None and len(embedding) > 0:
                                     try:
+                                        # Преобразуем numpy массив в список, если нужно
+                                        if hasattr(embedding, 'tolist'):
+                                            embedding = embedding.tolist()
+                                        elif not isinstance(embedding, list):
+                                            embedding = list(embedding)
+                                        
+                                        # Сохраняем эмбеддинг в граф
                                         graph.update_node(record.record_id, embedding=embedding)
+                                        
+                                        # Сохраняем эмбеддинг в Qdrant
+                                        if vector_store:
+                                            payload_data = {
+                                                "record_id": record.record_id,
+                                                "source": record.source,
+                                                "tags": record.tags,
+                                                "timestamp": record.timestamp.timestamp(),
+                                                "timestamp_iso": record.timestamp.isoformat(),
+                                                "content_preview": record.content[:200],
+                                            }
+                                            chat_name = record.metadata.get("chat")
+                                            if isinstance(chat_name, str):
+                                                payload_data["chat"] = chat_name
+                                            
+                                            try:
+                                                vector_store.upsert(record.record_id, embedding, payload_data)
+                                            except Exception as e:
+                                                logger.debug(f"Ошибка при сохранении эмбеддинга в Qdrant для {record.record_id}: {e}")
                                     except Exception as e:
                                         logger.debug(f"Ошибка при сохранении эмбеддинга для {record.record_id}: {e}")
                             
@@ -2207,8 +2220,14 @@ def sync_chromadb(db_path: Path, chroma_path: Path, chat: Optional[str], dry_run
         logger.info(f"🔍 Режим тестирования: было бы синхронизировано {total_synced} записей")
     else:
         logger.info(f"✅ Синхронизация завершена: {total_synced} записей, {total_errors} ошибок")
+        if vector_store:
+            logger.info("✅ Эмбеддинги сохранены в Qdrant")
     
     graph.conn.close()
+    if vector_store:
+        vector_store.close()
+    if embedding_service:
+        embedding_service.close()
 
 
 @cli.command("stop-indexing")

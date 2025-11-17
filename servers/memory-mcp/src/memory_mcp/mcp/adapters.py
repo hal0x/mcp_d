@@ -366,6 +366,16 @@ class MemoryServiceAdapter:
             if row["node_id"] in self.graph.graph:
                 node_data = self.graph.graph.nodes[row["node_id"]]
                 embedding = node_data.get("embedding")
+                # Преобразуем numpy массив в список, если нужно
+                if embedding is not None:
+                    if hasattr(embedding, 'tolist'):
+                        embedding = embedding.tolist()
+                    elif not isinstance(embedding, list):
+                        try:
+                            embedding = list(embedding)
+                        except (TypeError, ValueError):
+                            embedding = None
+                
                 # Если эмбеддинг не в графе, пытаемся получить из БД
                 if embedding is None:
                     try:
@@ -440,9 +450,38 @@ class MemoryServiceAdapter:
             score = match.score * 0.7  # Вес для ChromaDB результатов
             existing = combined.get(record_id)
             if existing:
+                # Обновляем score, но сохраняем эмбеддинг из графа, если он есть
                 existing.score = max(existing.score, score)
+                # Если в ChromaDB результате нет эмбеддинга, но есть в существующем, сохраняем его
+                if existing.embedding and not match.embedding:
+                    pass  # Оставляем существующий эмбеддинг
                 continue
             # Создаем новый элемент из ChromaDB результата
+            # Но пытаемся получить эмбеддинг из графа, если его нет в ChromaDB результате
+            if not match.embedding and record_id in self.graph.graph:
+                node_data = self.graph.graph.nodes[record_id]
+                emb_from_graph = node_data.get("embedding")
+                if emb_from_graph is not None:
+                    # Преобразуем numpy массив в список, если нужно
+                    if hasattr(emb_from_graph, 'tolist'):
+                        emb_from_graph = emb_from_graph.tolist()
+                    elif not isinstance(emb_from_graph, list):
+                        try:
+                            emb_from_graph = list(emb_from_graph)
+                        except (TypeError, ValueError):
+                            emb_from_graph = None
+                    if emb_from_graph:
+                        # Создаем новый SearchResultItem с эмбеддингом из графа
+                        match = SearchResultItem(
+                            record_id=match.record_id,
+                            score=match.score,
+                            content=match.content,
+                            source=match.source,
+                            timestamp=match.timestamp,
+                            author=match.author,
+                            metadata=match.metadata,
+                            embedding=emb_from_graph,
+                        )
             combined[record_id] = match
 
         total_combined = max(total_fts, len(combined))
@@ -1472,23 +1511,27 @@ class MemoryServiceAdapter:
         """Get timeline of records sorted by timestamp."""
         cursor = self.graph.conn.cursor()
         
+        # Получаем все узлы с properties, фильтруем в Python для более гибкого поиска
         query = "SELECT id, properties FROM nodes WHERE properties IS NOT NULL"
-        params = []
-        
-        if request.source:
-            query += " AND properties LIKE ?"
-            params.append(f'%"source": "{request.source}"%')
         
         query += " ORDER BY json_extract(properties, '$.timestamp') DESC"
         if request.limit:
-            query += f" LIMIT {request.limit}"
+            # Берем больше записей для фильтрации
+            query += f" LIMIT {request.limit * 10 if request.source else request.limit}"
         
-        cursor.execute(query, params)
+        cursor.execute(query)
         
         items = []
         for row in cursor.fetchall():
             if row["properties"]:
                 props = json.loads(row["properties"])
+                # Используем source из properties, или chat, или "unknown"
+                source = props.get("source") or props.get("chat", "unknown")
+                
+                # Дополнительная фильтрация по source, если указан
+                if request.source and source != request.source:
+                    continue
+                
                 timestamp_str = props.get("timestamp") or props.get("created_at")
                 if not timestamp_str:
                     continue
@@ -1513,7 +1556,6 @@ class MemoryServiceAdapter:
                 if request.date_to and timestamp > request.date_to:
                     continue
                 
-                source = props.get("source", "unknown")
                 content = props.get("content", "")
                 content_preview = content[:200] if content else ""
                 
@@ -2217,6 +2259,23 @@ class MemoryServiceAdapter:
                             if date_to and timestamp > date_to:
                                 continue
                         
+                        # Пытаемся получить эмбеддинг из графа, если запись там есть
+                        embedding = None
+                        if doc_id in self.graph.graph:
+                            node_data = self.graph.graph.nodes[doc_id]
+                            emb_from_graph = node_data.get("embedding")
+                            if emb_from_graph is not None:
+                                # Преобразуем numpy массив в список, если нужно
+                                if hasattr(emb_from_graph, 'tolist'):
+                                    embedding = emb_from_graph.tolist()
+                                elif not isinstance(emb_from_graph, list):
+                                    try:
+                                        embedding = list(emb_from_graph)
+                                    except (TypeError, ValueError):
+                                        embedding = None
+                                else:
+                                    embedding = emb_from_graph
+                        
                         result = SearchResultItem(
                             record_id=doc_id,
                             score=similarity,
@@ -2229,7 +2288,7 @@ class MemoryServiceAdapter:
                                 "chat": chat_name,
                                 **metadata,
                             },
-                            embedding=None,
+                            embedding=embedding,
                         )
                         results.append(result)
                         
@@ -2352,6 +2411,16 @@ class MemoryServiceAdapter:
                     embedding = json.loads(db_row["embedding"].decode())
             except Exception:
                 pass
+        
+        # Преобразуем numpy массив в список, если нужно
+        if embedding is not None:
+            if hasattr(embedding, 'tolist'):
+                embedding = embedding.tolist()
+            elif not isinstance(embedding, list):
+                try:
+                    embedding = list(embedding)
+                except (TypeError, ValueError):
+                    embedding = None
         
         return SearchResultItem(
             record_id=record_id,
