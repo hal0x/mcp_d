@@ -1127,12 +1127,36 @@ class TwoLevelIndexer:
         }
 
         # Добавляем в коллекцию
-        self.sessions_collection.upsert(
-            ids=[session_id],
-            documents=[embedding_text],
-            embeddings=[embedding],
-            metadatas=[metadata],
-        )
+        try:
+            self.sessions_collection.upsert(
+                ids=[session_id],
+                documents=[embedding_text],
+                embeddings=[embedding],
+                metadatas=[metadata],
+            )
+        except Exception as e:
+            error_msg = str(e)
+            if "embedding with dimension" in error_msg or "dimension" in error_msg.lower():
+                logger.warning(
+                    f"Ошибка размерности эмбеддингов в коллекции chat_sessions: {error_msg}. "
+                    "Пересоздаём коллекцию..."
+                )
+                # Пересоздаём коллекцию
+                self.chroma_client.delete_collection("chat_sessions")
+                self.sessions_collection = self.chroma_client.create_collection(
+                    name="chat_sessions",
+                    metadata={"description": "Саммаризации сессий для векторного поиска (L1)"},
+                )
+                # Повторяем попытку
+                self.sessions_collection.upsert(
+                    ids=[session_id],
+                    documents=[embedding_text],
+                    embeddings=[embedding],
+                    metadatas=[metadata],
+                )
+                logger.info("Коллекция chat_sessions пересоздана и запись добавлена")
+            else:
+                raise
 
         # Синхронизация с графом памяти
         if self.ingestor and self.graph:
@@ -1326,12 +1350,36 @@ class TwoLevelIndexer:
                     documents = [msg["msg_text"] for msg in messages_to_index]
                     metadatas = [msg["metadata"] for msg in messages_to_index]
                     
-                    self.messages_collection.upsert(
-                        ids=ids,
-                        documents=documents,
-                        embeddings=embeddings,
-                        metadatas=metadatas,
-                    )
+                    try:
+                        self.messages_collection.upsert(
+                            ids=ids,
+                            documents=documents,
+                            embeddings=embeddings,
+                            metadatas=metadatas,
+                        )
+                    except Exception as e:
+                        error_msg = str(e)
+                        if "embedding with dimension" in error_msg or "dimension" in error_msg.lower():
+                            logger.warning(
+                                f"Ошибка размерности эмбеддингов в коллекции chat_messages: {error_msg}. "
+                                "Пересоздаём коллекцию..."
+                            )
+                            # Пересоздаём коллекцию
+                            self.chroma_client.delete_collection("chat_messages")
+                            self.messages_collection = self.chroma_client.create_collection(
+                                name="chat_messages",
+                                metadata={"description": "Сообщения с контекстом для уточняющего поиска (L2)"},
+                            )
+                            # Повторяем попытку
+                            self.messages_collection.upsert(
+                                ids=ids,
+                                documents=documents,
+                                embeddings=embeddings,
+                                metadatas=metadatas,
+                            )
+                            logger.info("Коллекция chat_messages пересоздана и записи добавлены")
+                        else:
+                            raise
                     
                     # Синхронизация с графом памяти
                     if self.ingestor and self.graph:
