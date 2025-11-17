@@ -373,7 +373,7 @@ def ingest_telegram(chats_dir: Path, db_path: Path, selected_chats: tuple[str, .
 
 @cli.command()
 @click.option(
-    "--embedding-model", default="hf.co/lmstudio-community/Magistral-Small-2509-GGUF:Q4_K_M", help="Модель для эмбеддингов"
+    "--embedding-model", default=None, help="Модель для эмбеддингов (по умолчанию из настроек)"
 )
 def check(embedding_model):
     """🔧 Проверка системы и подключений"""
@@ -576,8 +576,8 @@ def check(embedding_model):
 )
 @click.option(
     "--embedding-model", 
-    default="hf.co/lmstudio-community/Magistral-Small-2509-GGUF:Q4_K_M", 
-    help="Модель для эмбеддингов"
+    default=None, 
+    help="Модель для эмбеддингов (по умолчанию из настроек)"
 )
 def index(
     scope,
@@ -629,6 +629,24 @@ def index(
             base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
         )
         chroma_path = os.getenv("MEMORY_MCP_CHROMA_PATH") or settings.chroma_path
+        
+        # Инициализация графа памяти для синхронизации
+        db_path = settings.db_path
+        if not os.path.isabs(db_path):
+            # Разрешаем относительный путь от корня проекта
+            current_dir = Path(__file__).parent
+            project_root = current_dir
+            while project_root.parent != project_root:
+                if (project_root / "pyproject.toml").exists():
+                    break
+                project_root = project_root.parent
+            if not (project_root / "pyproject.toml").exists():
+                project_root = Path.cwd()
+            db_path = str(project_root / db_path)
+        
+        graph = TypedGraphMemory(db_path=db_path)
+        logger.info(f"Граф памяти инициализирован: {db_path}")
+        
         indexer = TwoLevelIndexer(
             chroma_path=chroma_path,
             artifacts_path=settings.artifacts_path,
@@ -649,6 +667,7 @@ def index(
             recent_window_days=recent_window_days,
             strategy_threshold=strategy_threshold,
             force=force,
+            graph=graph,  # Передаём граф для синхронизации записей
         )
         click.echo("✅ Индексатор готов")
         click.echo()
@@ -735,6 +754,7 @@ def index(
             click.echo("   - Markdown отчёты: ./artifacts/reports/")
             click.echo("   - Векторная база: ./chroma_db/")
             click.echo("   - Коллекции: chat_sessions, chat_messages, chat_tasks")
+            click.echo("   - Граф памяти: ./data/memory_graph.db")
             click.echo()
 
         except Exception as e:
@@ -747,6 +767,13 @@ def index(
             import traceback
 
             traceback.print_exc()
+        finally:
+            # Закрываем граф после индексации
+            try:
+                graph.conn.close()
+                logger.info("Граф памяти закрыт")
+            except Exception:
+                pass
 
     asyncio.run(_index())
 
@@ -947,8 +974,8 @@ def _bm25_scores(
 )
 @click.option(
     "--embedding-model", 
-    default="hf.co/lmstudio-community/Magistral-Small-2509-GGUF:Q4_K_M", 
-    help="Модель для эмбеддингов"
+    default=None, 
+    help="Модель для эмбеддингов (по умолчанию из настроек)"
 )
 def search(query, limit, collection, chat, highlight, embedding_model):
     """🔍 Поиск по индексированным данным
