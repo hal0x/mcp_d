@@ -70,8 +70,8 @@ class LMStudioEmbeddingClient:
             self._embedding_dimension = len(embeddings[0])
         return embeddings[0] if embeddings else [0.0] * (self._embedding_dimension or 1024)
 
-    async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Генерация эмбеддингов для списка текстов с поддержкой длинных текстов"""
+    async def generate_embeddings(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
+        """Генерация эмбеддингов для списка текстов с батчевой обработкой"""
         if not texts:
             return []
 
@@ -81,52 +81,48 @@ class LMStudioEmbeddingClient:
             default_dim = self._embedding_dimension or 1024
             return [[0.0] * default_dim] * len(texts)
 
-        embeddings = []
-
-        # Обрабатываем тексты параллельно для лучшей производительности
         if len(texts) == 1:
-            # Для одного текста логируем только если это не повторная обработка
+            # Для одного текста используем старый метод
             text_preview = texts[0][:30] + "..." if len(texts[0]) > 30 else texts[0]
             logger.debug(f"🔤 Создание эмбеддинга: {text_preview}")
-        else:
-            logger.info(f"🔤 Создание эмбеддингов для {len(texts)} текстов параллельно...")
+            embedding = await self._process_single_text_async(texts[0], 0, 1)
+            return [embedding] if embedding else [[0.0] * (self._embedding_dimension or 1024)]
 
-        # Создаем задачи для параллельной обработки
-        tasks = []
-        for i, text in enumerate(texts):
-            text_preview = text[:30] + "..." if len(text) > 30 else text
-            # Логируем только каждое 10-е сообщение для экономии логов (только для множественных текстов)
-            if len(texts) > 1 and ((i + 1) % 10 == 0 or i == 0):
-                logger.info(
-                    f"🔤 Подготовка эмбеддинга [{i+1}/{len(texts)}]: {text_preview}"
-                )
-            task = self._process_single_text_async(text, i, len(texts))
-            tasks.append(task)
+        logger.info(f"🔤 Создание эмбеддингов для {len(texts)} текстов батчами по {batch_size}...")
 
-        # Выполняем задачи с ограничением на количество параллельных запросов
-        # Ограничиваем до 10 параллельных запросов для лучшей производительности
-        semaphore = asyncio.Semaphore(10)
+        # Разбиваем тексты на батчи
+        batches = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            batches.append((i, batch))
 
-        async def limited_task(task):
-            async with semaphore:
-                return await task
-
-        limited_tasks = [limited_task(task) for task in tasks]
-        results = await asyncio.gather(*limited_tasks, return_exceptions=True)
-
-        # Обрабатываем результаты
+        all_embeddings = []
         default_dim = self._embedding_dimension or 1024
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"Ошибка при создании эмбеддинга {i+1}: {result}")
-                embeddings.append([0.0] * default_dim)
-            else:
-                embeddings.append(result)
-                # Обновляем размерность при первом успешном результате
-                if self._embedding_dimension is None and result:
-                    self._embedding_dimension = len(result)
 
-        return embeddings
+        # Обрабатываем каждый батч
+        for batch_idx, (start_idx, batch_texts) in enumerate(batches):
+            try:
+                logger.debug(f"🔤 Обработка батча {batch_idx + 1}/{len(batches)} ({len(batch_texts)} текстов)")
+                
+                # Отправляем батч на сервер
+                batch_embeddings = await self._generate_batch_embeddings(batch_texts)
+                
+                if batch_embeddings:
+                    all_embeddings.extend(batch_embeddings)
+                    # Обновляем размерность при первом успешном результате
+                    if self._embedding_dimension is None and batch_embeddings[0]:
+                        self._embedding_dimension = len(batch_embeddings[0])
+                else:
+                    # Если батч не удался, создаем пустые эмбеддинги
+                    logger.warning(f"Батч {batch_idx + 1} не удался, создаем пустые эмбеддинги")
+                    all_embeddings.extend([[0.0] * default_dim] * len(batch_texts))
+                    
+            except Exception as e:
+                logger.error(f"Ошибка при обработке батча {batch_idx + 1}: {e}")
+                # Создаем пустые эмбеддинги для этого батча
+                all_embeddings.extend([[0.0] * default_dim] * len(batch_texts))
+
+        return all_embeddings
 
     async def _process_single_text_async(
         self, text: str, index: int, total: int

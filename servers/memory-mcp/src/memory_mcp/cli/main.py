@@ -340,7 +340,7 @@ def cli(verbose, quiet):
 )
 @click.option(
     "--db-path",
-    default="memory_graph.db",
+    default="data/memory_graph.db",
     type=click.Path(dir_okay=False, path_type=Path),
     help="Путь к SQLite базе типизированной памяти",
 )

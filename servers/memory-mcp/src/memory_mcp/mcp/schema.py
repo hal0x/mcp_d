@@ -324,6 +324,10 @@ class IndexingProgressItem(BaseModel):
     last_indexing_time: Optional[str] = Field(None, description="Время последней индексации")
     total_messages: int = Field(0, description="Всего проиндексированных сообщений")
     total_sessions: int = Field(0, description="Всего созданных сессий")
+    job_id: Optional[str] = Field(None, description="Идентификатор активной задачи индексации")
+    status: Optional[str] = Field(None, description="Статус индексации: 'running', 'completed', 'failed'")
+    started_at: Optional[str] = Field(None, description="Время начала индексации (ISO format)")
+    current_stage: Optional[str] = Field(None, description="Текущий этап индексации")
 
 
 class GetIndexingProgressResponse(BaseModel):
@@ -660,3 +664,87 @@ class BuildInsightGraphResponse(BaseModel):
     insights: list[InsightItem] = Field(default_factory=list, description="Список инсайтов")
     metrics: dict[str, Any] = Field(default_factory=dict, description="Метрики графа")
     message: str = Field(..., description="Сообщение о результате")
+
+
+# --------------------------- Indexing schemas ---------------------------
+
+
+class IndexChatRequest(BaseModel):
+    """Request for indexing a specific chat."""
+
+    chat: str = Field(..., description="Название чата для индексации")
+    force_full: bool = Field(default=False, description="Полная пересборка индекса")
+    recent_days: int = Field(default=7, description="Пересаммаризировать последние N дней")
+    progress: bool = Field(default=False, description="Показать прогресс-бар")
+
+
+class IndexChatResponse(BaseModel):
+    """Response after indexing a chat."""
+
+    job_id: str = Field(..., description="Идентификатор задачи индексации")
+    status: str = Field(..., description="Статус: 'started', 'running', 'completed', 'failed'")
+    chat: str = Field(..., description="Название чата")
+    message: str = Field(..., description="Сообщение о результате")
+
+
+class ChatInfo(BaseModel):
+    """Information about an available chat."""
+
+    name: str = Field(..., description="Название чата")
+    path: str = Field(..., description="Путь к директории чата")
+    message_count: int = Field(default=0, description="Количество сообщений (если доступно)")
+    last_modified: Optional[str] = Field(None, description="Дата последнего изменения (ISO format)")
+
+
+class GetAvailableChatsRequest(BaseModel):
+    """Request for getting available chats."""
+
+    include_stats: bool = Field(default=False, description="Включить статистику (количество сообщений, дата изменения)")
+
+
+class GetAvailableChatsResponse(BaseModel):
+    """Response with available chats."""
+
+    chats: list[ChatInfo] = Field(default_factory=list, description="Список доступных чатов")
+    total_count: int = Field(default=0, description="Общее количество чатов")
+    message: str = Field(..., description="Сообщение о результате")
+
+
+# --------------------------- Background indexing schemas ---------------------------
+
+
+class StartBackgroundIndexingRequest(BaseModel):
+    """Request to start background indexing."""
+
+
+class StartBackgroundIndexingResponse(BaseModel):
+    """Response after starting background indexing."""
+
+    success: bool = Field(..., description="Успешность запуска")
+    message: str = Field(..., description="Сообщение о результате")
+
+
+class StopBackgroundIndexingRequest(BaseModel):
+    """Request to stop background indexing."""
+
+
+class StopBackgroundIndexingResponse(BaseModel):
+    """Response after stopping background indexing."""
+
+    success: bool = Field(..., description="Успешность остановки")
+    message: str = Field(..., description="Сообщение о результате")
+
+
+class GetBackgroundIndexingStatusRequest(BaseModel):
+    """Request for background indexing status."""
+
+
+class GetBackgroundIndexingStatusResponse(BaseModel):
+    """Response with background indexing status."""
+
+    running: bool = Field(..., description="Запущен ли фоновый процесс")
+    check_interval: int = Field(..., description="Интервал проверки в секундах")
+    last_check_time: Optional[str] = Field(None, description="Время последней проверки (ISO format)")
+    input_path: str = Field(..., description="Путь к input директории")
+    chats_path: str = Field(..., description="Путь к chats директории")
+    message: str = Field(..., description="Сообщение о статусе")

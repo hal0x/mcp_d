@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     chroma_path: str = Field("./chroma_db", description="Путь к базе ChromaDB")
     chats_path: str = Field("./chats", description="Путь к директории с чатами")
     artifacts_path: str = Field("./artifacts", description="Путь к артефактам")
+    input_path: str = Field("input", description="Путь к директории input с новыми сообщениями")
+    background_indexing_enabled: bool = Field(False, description="Включить фоновую индексацию при старте")
+    background_indexing_interval: int = Field(60, description="Интервал проверки input директории в секундах")
 
     host: str = Field(
         "127.0.0.1", description="HTTP хост для streamable-http транспорта"

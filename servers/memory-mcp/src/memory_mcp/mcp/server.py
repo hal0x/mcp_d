@@ -9,6 +9,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+import asyncio
+import uuid
 
 from mcp.server import Server
 from mcp.types import Tool, TextContent
@@ -18,6 +20,12 @@ from ..quality_analyzer.utils.error_handler import format_error_message
 
 from .adapters import MemoryServiceAdapter
 from .schema import (
+    StartBackgroundIndexingRequest,
+    StartBackgroundIndexingResponse,
+    StopBackgroundIndexingRequest,
+    StopBackgroundIndexingResponse,
+    GetBackgroundIndexingStatusRequest,
+    GetBackgroundIndexingStatusResponse,
     AnalyzeEntitiesRequest,
     AnalyzeEntitiesResponse,
     BatchUpdateRecordsRequest,
@@ -40,6 +48,10 @@ from .schema import (
     GetIndexingProgressResponse,
     GetRelatedRecordsRequest,
     GetRelatedRecordsResponse,
+    IndexChatRequest,
+    IndexChatResponse,
+    GetAvailableChatsRequest,
+    GetAvailableChatsResponse,
     GetSignalPerformanceRequest,
     GetSignalPerformanceResponse,
     GetStatisticsResponse,
@@ -87,12 +99,18 @@ ToolResponse = Tuple[List[TextContent], Dict[str, Any]]
 
 _adapter: MemoryServiceAdapter | None = None
 
+# Глобальный словарь для хранения активных задач индексации
+_active_indexing_jobs: Dict[str, Dict[str, Any]] = {}
+
+# Глобальный сервис фоновой индексации
+_background_indexing_service = None
+
 
 def _get_adapter() -> MemoryServiceAdapter:
     """Получить или создать адаптер памяти."""
     global _adapter
     if _adapter is None:
-        db_path = os.getenv("MEMORY_DB_PATH", "memory_graph.db")
+        db_path = os.getenv("MEMORY_DB_PATH", "data/memory_graph.db")
         if not os.path.isabs(db_path):
             current_dir = Path(__file__).parent
             project_root = current_dir
@@ -829,6 +847,77 @@ async def list_tools() -> List[Tool]:
                 "required": [],
             },
         ),
+        Tool(
+            name="index_chat",
+            description="Index a specific Telegram chat with two-level indexing (L1: sessions, L2: messages, L3: tasks). Индексация выполняется в фоновом режиме и не блокирует вызов. Используйте get_indexing_progress для отслеживания прогресса.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "chat": {
+                        "type": "string",
+                        "description": "Название чата для индексации (как папка в /app/chats/)",
+                    },
+                    "force_full": {
+                        "type": "boolean",
+                        "description": "Полная пересборка индекса",
+                        "default": False,
+                    },
+                    "recent_days": {
+                        "type": "integer",
+                        "description": "Пересаммаризировать последние N дней",
+                        "default": 7,
+                    },
+                    "progress": {
+                        "type": "boolean",
+                        "description": "Показать прогресс-бар (не используется, индексация всегда в фоне)",
+                        "default": False,
+                    },
+                },
+                "required": ["chat"],
+            },
+        ),
+        Tool(
+            name="get_available_chats",
+            description="Get list of all available Telegram chats for indexing.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "include_stats": {
+                        "type": "boolean",
+                        "description": "Включить статистику (количество сообщений, дата изменения)",
+                        "default": False,
+                    },
+                },
+                "required": [],
+            },
+        ),
+        Tool(
+            name="start_background_indexing",
+            description="Start background indexing service that periodically checks input directory for new messages and indexes them.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        ),
+        Tool(
+            name="stop_background_indexing",
+            description="Stop background indexing service.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        ),
+        Tool(
+            name="get_background_indexing_status",
+            description="Get status of background indexing service.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        ),
     ]
     logger.info(f"Зарегистрировано {len(tools)} инструментов: {[t.name for t in tools]}")
     return tools
@@ -1020,6 +1109,31 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
             result = await adapter.build_insight_graph(request)
             return _format_tool_response(result.model_dump())
 
+        elif name == "index_chat":
+            request = IndexChatRequest(**arguments)
+            result = await _start_indexing_job(request, adapter)
+            return _format_tool_response(result.model_dump())
+
+        elif name == "get_available_chats":
+            request = GetAvailableChatsRequest(**arguments)
+            result = adapter.get_available_chats(request)
+            return _format_tool_response(result.model_dump())
+
+        elif name == "start_background_indexing":
+            request = StartBackgroundIndexingRequest(**arguments)
+            result = await _start_background_indexing(adapter)
+            return _format_tool_response(result.model_dump())
+
+        elif name == "stop_background_indexing":
+            request = StopBackgroundIndexingRequest(**arguments)
+            result = await _stop_background_indexing()
+            return _format_tool_response(result.model_dump())
+
+        elif name == "get_background_indexing_status":
+            request = GetBackgroundIndexingStatusRequest(**arguments)
+            result = _get_background_indexing_status()
+            return _format_tool_response(result.model_dump())
+
         else:
             raise ValueError(f"Неизвестный инструмент: {name}")
 
@@ -1029,6 +1143,137 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
     except Exception as exc:
         logger.exception(f"Ошибка при выполнении инструмента {name}: {exc}")
         raise RuntimeError(format_error_message(exc)) from exc
+
+
+async def _run_indexing_job(
+    job_id: str,
+    chat: str,
+    force_full: bool,
+    recent_days: int,
+    adapter: MemoryServiceAdapter,
+) -> None:
+    """Запуск индексации в фоновом режиме."""
+    global _active_indexing_jobs
+    
+    from ..core.indexer import TwoLevelIndexer
+    from ..config import get_settings
+    from ..core.lmstudio_client import LMStudioEmbeddingClient
+    from datetime import timezone
+    
+    try:
+        # Обновляем статус на "running"
+        _active_indexing_jobs[job_id] = {
+            "status": "running",
+            "chat": chat,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "current_stage": "Инициализация",
+        }
+        
+        settings = get_settings()
+        
+        # Инициализируем embedding client
+        embedding_client = LMStudioEmbeddingClient(
+            model_name=settings.lmstudio_model,
+            base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
+        )
+        
+        # Инициализируем индексатор
+        indexer = TwoLevelIndexer(
+            chroma_path=settings.chroma_path,
+            artifacts_path=settings.artifacts_path,
+            embedding_client=embedding_client,
+            enable_smart_aggregation=True,
+            aggregation_strategy="smart",
+        )
+        
+        # Обновляем статус
+        _active_indexing_jobs[job_id]["current_stage"] = "Загрузка сообщений"
+        
+        # Запускаем индексацию
+        stats = await indexer.build_index(
+            scope="chat",
+            chat=chat,
+            force_full=force_full,
+            recent_days=recent_days,
+        )
+        
+        # Обновляем статус на "completed"
+        _active_indexing_jobs[job_id] = {
+            "status": "completed",
+            "chat": chat,
+            "started_at": _active_indexing_jobs[job_id].get("started_at"),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "sessions_indexed": stats.get("sessions_indexed", 0),
+            "messages_indexed": stats.get("messages_indexed", 0),
+            "tasks_indexed": stats.get("tasks_indexed", 0),
+        }
+        
+        logger.info(f"Индексация чата '{chat}' завершена успешно (job_id: {job_id})")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при индексации чата '{chat}' (job_id: {job_id}): {e}", exc_info=True)
+        # Обновляем статус на "failed"
+        _active_indexing_jobs[job_id] = {
+            "status": "failed",
+            "chat": chat,
+            "started_at": _active_indexing_jobs.get(job_id, {}).get("started_at"),
+            "failed_at": datetime.now(timezone.utc).isoformat(),
+            "error": str(e),
+        }
+    finally:
+        # Удаляем задачу через 1 час после завершения (чтобы можно было посмотреть результат)
+        # В реальности можно использовать более сложную логику очистки
+        pass
+
+
+async def _start_indexing_job(
+    request: "IndexChatRequest",
+    adapter: MemoryServiceAdapter,
+) -> "IndexChatResponse":
+    """Запустить задачу индексации в фоновом режиме."""
+    global _active_indexing_jobs
+    
+    from datetime import timezone
+    
+    # Генерируем уникальный ID задачи
+    job_id = f"index_{uuid.uuid4().hex[:12]}"
+    
+    # Проверяем, не запущена ли уже индексация для этого чата
+    for existing_job_id, job_info in _active_indexing_jobs.items():
+        if job_info.get("chat") == request.chat and job_info.get("status") == "running":
+            return IndexChatResponse(
+                job_id=existing_job_id,
+                status="running",
+                chat=request.chat,
+                message=f"Индексация чата '{request.chat}' уже выполняется (job_id: {existing_job_id})",
+            )
+    
+    # Создаем задачу
+    _active_indexing_jobs[job_id] = {
+        "status": "started",
+        "chat": request.chat,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "force_full": request.force_full,
+        "recent_days": request.recent_days,
+    }
+    
+    # Запускаем индексацию в фоне
+    asyncio.create_task(
+        _run_indexing_job(
+            job_id=job_id,
+            chat=request.chat,
+            force_full=request.force_full,
+            recent_days=request.recent_days,
+            adapter=adapter,
+        )
+    )
+    
+    return IndexChatResponse(
+        job_id=job_id,
+        status="started",
+        chat=request.chat,
+        message=f"Индексация чата '{request.chat}' запущена в фоновом режиме. Используйте get_indexing_progress для отслеживания прогресса.",
+    )
 
 
 def get_health_payload() -> Dict[str, Any]:
@@ -1105,6 +1350,11 @@ def get_version_payload() -> Dict[str, Any]:
         "update_summaries",
         "review_summaries",
         "build_insight_graph",
+        "index_chat",
+        "get_available_chats",
+        "start_background_indexing",
+        "stop_background_indexing",
+        "get_background_indexing_status",
     ]
 
     return {
@@ -1112,6 +1362,55 @@ def get_version_payload() -> Dict[str, Any]:
         "version": version,
         "features": features,
     }
+
+
+def _start_background_indexing_if_enabled():
+    """Запустить фоновую индексацию если она включена в конфигурации."""
+    global _background_indexing_service
+    
+    try:
+        from ..config import get_settings
+        settings = get_settings()
+        
+        if settings.background_indexing_enabled:
+            logger.info("Автозапуск фоновой индексации (настроено в конфигурации)")
+            
+            # Инициализируем сервис синхронно
+            from ..core.background_indexing import BackgroundIndexingService
+            
+            if not _background_indexing_service:
+                _background_indexing_service = BackgroundIndexingService(
+                    input_path=settings.input_path,
+                    chats_path=settings.chats_path,
+                    chroma_path=settings.chroma_path,
+                    check_interval=settings.background_indexing_interval,
+                )
+                
+                # Устанавливаем callback для запуска индексации
+                adapter = _get_adapter()
+                
+                async def index_chat_callback(request: "IndexChatRequest"):
+                    return await _start_indexing_job(request, adapter)
+                
+                _background_indexing_service.set_index_chat_callback(index_chat_callback)
+            
+            # Запускаем сервис
+            _background_indexing_service.start()
+            logger.info("Фоновая индексация запущена при старте сервера")
+    except Exception as e:
+        logger.warning(f"Не удалось запустить фоновую индексацию при старте: {e}")
+
+
+async def _stop_background_indexing_on_shutdown():
+    """Остановить фоновую индексацию при завершении сервера."""
+    global _background_indexing_service
+    
+    if _background_indexing_service and _background_indexing_service.is_running():
+        logger.info("Остановка фоновой индексации при завершении сервера...")
+        try:
+            await _stop_background_indexing()
+        except Exception as e:
+            logger.error(f"Ошибка при остановке фоновой индексации: {e}")
 
 
 def configure_logging() -> None:

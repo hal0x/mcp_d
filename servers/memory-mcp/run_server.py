@@ -42,6 +42,28 @@ SERVER_NAME = "memory-mcp"
 
 def create_app() -> FastAPI:
     """Создает и настраивает FastAPI приложение с MCP интеграцией."""
+    # Импортируем функцию для запуска фоновой индексации
+    from memory_mcp.mcp.server import _start_background_indexing_if_enabled, _stop_background_indexing_on_shutdown
+    import asyncio
+    
+    # Запускаем фоновую индексацию если включена
+    try:
+        _start_background_indexing_if_enabled()
+    except Exception as e:
+        logger.warning(f"Не удалось запустить фоновую индексацию при старте: {e}")
+    
+    # Регистрируем обработчик завершения
+    import atexit
+    def stop_on_exit():
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(_stop_background_indexing_on_shutdown())
+            else:
+                asyncio.run(_stop_background_indexing_on_shutdown())
+        except Exception as e:
+            logger.error(f"Ошибка при остановке фоновой индексации: {e}")
+    atexit.register(stop_on_exit)
     app = FastAPI(
         title="Memory MCP",
         version="1.0.0",
@@ -108,10 +130,12 @@ def create_app() -> FastAPI:
     async def shutdown():
         """Cleanup при остановке сервера."""
         try:
-            from memory_mcp.mcp.server import _adapter
+            from memory_mcp.mcp.server import _adapter, _stop_background_indexing_on_shutdown
             if _adapter is not None:
                 _adapter.close()
                 logger.info("Memory adapter закрыт")
+            # Останавливаем фоновую индексацию
+            await _stop_background_indexing_on_shutdown()
         except Exception as e:
             logger.error(f"Ошибка при закрытии adapter: {e}")
 

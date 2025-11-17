@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class TypedGraphMemory:
     """Типизированный граф знаний с персистентным хранилищем"""
 
-    def __init__(self, db_path: str = "./memory_graph.db"):
+    def __init__(self, db_path: str = "./data/memory_graph.db"):
         """
         Инициализация графа
 

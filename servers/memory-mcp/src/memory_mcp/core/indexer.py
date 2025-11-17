@@ -174,7 +174,7 @@ class TwoLevelIndexer:
                 use_hdbscan=False,  # Используем threshold-based для детерминизма
             )
             self.cluster_summarizer = ClusterSummarizer(
-                ollama_client=self.embedding_client
+                embedding_client=self.embedding_client
             )
 
         # Инициализируем умный агрегатор
@@ -1052,6 +1052,7 @@ class TwoLevelIndexer:
         chat = session["chat"]
 
         indexed_count = 0
+        messages_to_index = []
 
         # Определим тип чата для подстройки контекста
         chat_mode = self._detect_chat_mode(messages)
@@ -1122,48 +1123,64 @@ class TwoLevelIndexer:
                         f"В сообщении {i+1} сессии {session_id} заменены некорректные URL: {replaced_urls}"
                     )
 
-                # Генерируем эмбеддинг
-                async with self.embedding_client:
-                    embeddings = await self.embedding_client.generate_embeddings(
-                        [embedding_text]
-                    )
-                    embedding = embeddings[0]
-
-                # Подготавливаем метаданные
-                metadata = {
+                # Сохраняем данные для батчевой обработки
+                messages_to_index.append({
                     "msg_id": msg_id,
-                    "session_id": session_id,
-                    "chat": chat,
-                    "date_utc": msg.get("date_utc") or msg.get("date", ""),
-                    "has_context": len(context_text) > 0,
-                    "context_length": len(context_text),
-                    "chat_mode": chat_mode,
-                    "replaced_urls": ",".join(replaced_urls)
-                    if replaced_urls
-                    else "",  # Сохраняем замененные URL как строку
-                }
-
-                # Добавляем в коллекцию
-                self.messages_collection.upsert(
-                    ids=[msg_id],
-                    documents=[msg_text],
-                    embeddings=[embedding],
-                    metadatas=[metadata],
-                )
-
-                indexed_count += 1
+                    "msg_text": msg_text,
+                    "embedding_text": embedding_text,
+                    "metadata": {
+                        "msg_id": msg_id,
+                        "session_id": session_id,
+                        "chat": chat,
+                        "date_utc": msg.get("date_utc") or msg.get("date", ""),
+                        "has_context": len(context_text) > 0,
+                        "context_length": len(context_text),
+                        "chat_mode": chat_mode,
+                        "replaced_urls": ",".join(replaced_urls)
+                        if replaced_urls
+                        else "",  # Сохраняем замененные URL как строку
+                    }
+                })
 
             except Exception as e:
                 logger.error(
-                    f"Ошибка при индексации сообщения {i} в сессии {session_id}: {e}"
+                    f"Ошибка при подготовке сообщения {i} в сессии {session_id} для индексации: {e}"
                 )
                 # Логируем дополнительную информацию для отладки
                 if "Invalid IPv6 URL" in str(e):
                     logger.error(
                         f"Обнаружена ошибка IPv6 URL в сообщении {i} сессии {session_id}. "
-                        f"Текст сообщения: {msg_text[:100]}..."
+                        f"Текст сообщения: {msg.get('text', '')[:100]}..."
                     )
                 continue
+
+        # Генерируем эмбеддинги батчами
+        if messages_to_index:
+            try:
+                async with self.embedding_client:
+                    # Собираем тексты для батча
+                    batch_texts = [msg["embedding_text"] for msg in messages_to_index]
+                    
+                    # Генерируем эмбеддинги батчем
+                    embeddings = await self.embedding_client.generate_embeddings(batch_texts, batch_size=32)
+                    
+                    # Добавляем в коллекцию батчем
+                    ids = [msg["msg_id"] for msg in messages_to_index]
+                    documents = [msg["msg_text"] for msg in messages_to_index]
+                    metadatas = [msg["metadata"] for msg in messages_to_index]
+                    
+                    self.messages_collection.upsert(
+                        ids=ids,
+                        documents=documents,
+                        embeddings=embeddings,
+                        metadatas=metadatas,
+                    )
+                    
+                    indexed_count += len(messages_to_index)
+            except Exception as e:
+                logger.error(
+                    f"Ошибка при индексации сообщений в сессии {session_id}: {e}"
+                )
 
         logger.info(
             f"L2: Проиндексировано {indexed_count} сообщений из сессии {session_id}"

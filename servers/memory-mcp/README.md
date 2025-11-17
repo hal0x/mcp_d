@@ -114,7 +114,7 @@ LMSTUDIO_MODEL=text-embedding-qwen3-embedding-0.6b  # модель для эмб
 
 ```bash
 # База данных
-MEMORY_DB_PATH=memory_graph.db        # путь к SQLite базе данных (по умолчанию memory_graph.db)
+MEMORY_DB_PATH=data/memory_graph.db   # путь к SQLite базе данных (по умолчанию data/memory_graph.db)
 
 # Векторное хранилище (опционально)
 QDRANT_URL=http://qdrant:6333         # URL векторного хранилища Qdrant

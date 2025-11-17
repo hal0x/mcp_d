@@ -45,6 +45,11 @@ from .schema import (
     GetIndexingProgressResponse,
     GetRelatedRecordsRequest,
     GetRelatedRecordsResponse,
+    IndexChatRequest,
+    IndexChatResponse,
+    GetAvailableChatsRequest,
+    GetAvailableChatsResponse,
+    ChatInfo,
     GetSignalPerformanceRequest,
     GetSignalPerformanceResponse,
     GetStatisticsResponse,
@@ -157,7 +162,7 @@ def _node_to_payload(
 class MemoryServiceAdapter:
     """High-level wrapper exposing ingest/search/fetch for MCP tools."""
 
-    def __init__(self, db_path: str = "memory_graph.db") -> None:
+    def __init__(self, db_path: str = "data/memory_graph.db") -> None:
         self.graph = TypedGraphMemory(db_path=db_path)
         self.ingestor = MemoryIngestor(self.graph)
         self.embedding_service = build_embedding_service_from_env()
@@ -593,11 +598,13 @@ class MemoryServiceAdapter:
     def get_indexing_progress(
         self, request: GetIndexingProgressRequest
     ) -> GetIndexingProgressResponse:
-        """Get indexing progress from ChromaDB.
+        """Get indexing progress from ChromaDB and active jobs.
         
         ВАЖНО: ChromaDB может паниковать (Rust panic), что убьет процесс Python.
         При ошибках инициализации возвращаем ошибку без попытки восстановления.
         """
+        # Импортируем глобальный словарь активных задач
+        from ..mcp.server import _active_indexing_jobs
         try:
             import chromadb
         except ImportError:
@@ -675,24 +682,58 @@ class MemoryServiceAdapter:
                 message="Indexing progress collection not found. Run indexing first.",
             )
 
+        # Импортируем глобальный словарь активных задач
+        from ..mcp.server import _active_indexing_jobs
+        
+        # Получаем активные задачи для запрошенного чата
+        active_jobs_for_chat = []
+        if request.chat:
+            # Фильтруем активные задачи по запрошенному чату
+            for job_id, job_info in _active_indexing_jobs.items():
+                if job_info.get("chat") == request.chat:
+                    active_jobs_for_chat.append((job_id, job_info))
+        else:
+            # Если чат не указан, берем все активные задачи
+            active_jobs_for_chat = list(_active_indexing_jobs.items())
+
         if request.chat:
             progress_id = f"progress_{slugify(request.chat)}"
             try:
                 result = progress_collection.get(
                     ids=[progress_id], include=["metadatas"]
                 )
+                progress_item = None
                 if result.get("ids") and len(result["ids"]) > 0:
                     metadata = result["metadatas"][0] if result.get("metadatas") else {}
+                    progress_item = IndexingProgressItem(
+                        chat_name=metadata.get("chat_name", request.chat),
+                        last_indexed_date=metadata.get("last_indexed_date"),
+                        last_indexing_time=metadata.get("last_indexing_time"),
+                        total_messages=metadata.get("total_messages", 0),
+                        total_sessions=metadata.get("total_sessions", 0),
+                    )
+                
+                # Добавляем информацию об активной задаче, если есть
+                if active_jobs_for_chat:
+                    job_id, job_info = active_jobs_for_chat[0]  # Берем первую активную задачу
+                    if progress_item:
+                        progress_item.job_id = job_id
+                        progress_item.status = job_info.get("status")
+                        progress_item.started_at = job_info.get("started_at")
+                        progress_item.current_stage = job_info.get("current_stage")
+                    else:
+                        # Создаем новый элемент прогресса из активной задачи
+                        progress_item = IndexingProgressItem(
+                            chat_name=request.chat,
+                            job_id=job_id,
+                            status=job_info.get("status"),
+                            started_at=job_info.get("started_at"),
+                            current_stage=job_info.get("current_stage"),
+                        )
+                
+                if progress_item:
                     return GetIndexingProgressResponse(
-                        progress=[
-                            IndexingProgressItem(
-                                chat_name=metadata.get("chat_name", request.chat),
-                                last_indexed_date=metadata.get("last_indexed_date"),
-                                last_indexing_time=metadata.get("last_indexing_time"),
-                                total_messages=metadata.get("total_messages", 0),
-                                total_sessions=metadata.get("total_sessions", 0),
-                            )
-                        ],
+                        progress=[progress_item],
                         message=None,
                     )
                 else:
@@ -711,20 +752,42 @@ class MemoryServiceAdapter:
                 result = progress_collection.get(include=["metadatas"])
                 progress_items = []
                 metadatas = result.get("metadatas", [])
+                
+                # Создаем словарь прогресса по чатам
+                progress_by_chat = {}
                 for metadata in metadatas:
                     if not isinstance(metadata, dict):
                         continue
-                    progress_items.append(
-                        IndexingProgressItem(
-                            chat_name=metadata.get("chat_name", "Unknown"),
-                            last_indexed_date=metadata.get("last_indexed_date"),
-                            last_indexing_time=metadata.get("last_indexing_time"),
-                            total_messages=metadata.get("total_messages", 0),
-                            total_sessions=metadata.get("total_sessions", 0),
-                        )
+                    chat_name = metadata.get("chat_name", "Unknown")
+                    progress_by_chat[chat_name] = IndexingProgressItem(
+                        chat_name=chat_name,
+                        last_indexed_date=metadata.get("last_indexed_date"),
+                        last_indexing_time=metadata.get("last_indexing_time"),
+                        total_messages=metadata.get("total_messages", 0),
+                        total_sessions=metadata.get("total_sessions", 0),
                     )
+                
+                # Добавляем активные задачи
+                for job_id, job_info in active_jobs_for_chat:
+                    chat_name = job_info.get("chat", "Unknown")
+                    if chat_name in progress_by_chat:
+                        # Обновляем существующий прогресс
+                        progress_by_chat[chat_name].job_id = job_id
+                        progress_by_chat[chat_name].status = job_info.get("status")
+                        progress_by_chat[chat_name].started_at = job_info.get("started_at")
+                        progress_by_chat[chat_name].current_stage = job_info.get("current_stage")
+                    else:
+                        # Создаем новый элемент для активной задачи
+                        progress_by_chat[chat_name] = IndexingProgressItem(
+                            chat_name=chat_name,
+                            job_id=job_id,
+                            status=job_info.get("status"),
+                            started_at=job_info.get("started_at"),
+                            current_stage=job_info.get("current_stage"),
+                        )
+                
                 return GetIndexingProgressResponse(
-                    progress=progress_items,
+                    progress=list(progress_by_chat.values()),
                     message=None,
                 )
             except Exception as e:
@@ -1535,6 +1598,110 @@ class MemoryServiceAdapter:
                 metrics={},
                 message=f"Ошибка при построении графа: {str(e)}",
             )
+
+    # Indexing
+    async def index_chat(self, request: "IndexChatRequest") -> "IndexChatResponse":
+        """Index a specific Telegram chat with two-level indexing."""
+        from ..core.indexer import TwoLevelIndexer
+        from ..config import get_settings
+        from ..core.lmstudio_client import LMStudioEmbeddingClient
+        from pathlib import Path
+
+        settings = get_settings()
+        
+        # Инициализируем embedding client
+        embedding_client = LMStudioEmbeddingClient(
+            model_name=settings.lmstudio_model,
+            base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
+        )
+        
+        # Инициализируем индексатор
+        indexer = TwoLevelIndexer(
+            chroma_path=settings.chroma_path,
+            artifacts_path=settings.artifacts_path,
+            embedding_client=embedding_client,
+            enable_smart_aggregation=True,
+            aggregation_strategy="smart",
+        )
+        
+        try:
+            # Запускаем индексацию
+            stats = await indexer.build_index(
+                scope="chat",
+                chat=request.chat,
+                force_full=request.force_full,
+                recent_days=request.recent_days,
+            )
+            
+            return IndexChatResponse(
+                success=True,
+                indexed_chats=stats.get("indexed_chats", []),
+                sessions_indexed=stats.get("sessions_indexed", 0),
+                messages_indexed=stats.get("messages_indexed", 0),
+                tasks_indexed=stats.get("tasks_indexed", 0),
+                message=f"Индексация чата '{request.chat}' завершена успешно. "
+                       f"Сессий: {stats.get('sessions_indexed', 0)}, "
+                       f"Сообщений: {stats.get('messages_indexed', 0)}, "
+                       f"Задач: {stats.get('tasks_indexed', 0)}",
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при индексации чата '{request.chat}': {e}", exc_info=True)
+            return IndexChatResponse(
+                success=False,
+                indexed_chats=[],
+                sessions_indexed=0,
+                messages_indexed=0,
+                tasks_indexed=0,
+                message=f"Ошибка при индексации чата '{request.chat}': {str(e)}",
+            )
+
+    def get_available_chats(self, request: GetAvailableChatsRequest) -> GetAvailableChatsResponse:
+        """Get list of all available Telegram chats for indexing."""
+        from ..config import get_settings
+        from datetime import datetime
+
+        settings = get_settings()
+        chats_path = Path(settings.chats_path).expanduser()
+
+        if not chats_path.exists():
+            return GetAvailableChatsResponse(
+                chats=[],
+                total_count=0,
+                message=f"Директория с чатами не найдена: {chats_path}",
+            )
+
+        chats = []
+        for chat_dir in sorted(chats_path.iterdir()):
+            if not chat_dir.is_dir():
+                continue
+
+            chat_info = ChatInfo(
+                name=chat_dir.name,
+                path=str(chat_dir),
+                message_count=0,
+                last_modified=None,
+            )
+
+            if request.include_stats:
+                # Подсчитываем количество JSON файлов с сообщениями
+                json_files = list(chat_dir.rglob("*.json"))
+                chat_info.message_count = len(json_files)
+
+                # Получаем дату последнего изменения
+                if json_files:
+                    latest_file = max(json_files, key=lambda p: p.stat().st_mtime)
+                    last_modified = datetime.fromtimestamp(latest_file.stat().st_mtime)
+                    chat_info.last_modified = last_modified.isoformat()
+
+            chats.append(chat_info)
+
+        return GetAvailableChatsResponse(
+            chats=chats,
+            total_count=len(chats),
+            message=f"Найдено {len(chats)} доступных чатов" + (
+                f" в {chats_path}" if chats else ""
+            ),
+        )
 
     # Utils
     def _build_item_from_graph(
