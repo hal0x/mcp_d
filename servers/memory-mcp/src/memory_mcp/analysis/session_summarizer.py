@@ -142,7 +142,15 @@ class SessionSummarizer:
             enable_iterative_refinement: Включить итеративное улучшение
             min_quality_score: Минимальный приемлемый балл качества
         """
-        self.embedding_client = embedding_client or LMStudioEmbeddingClient()
+        if embedding_client is None:
+            from ..config import get_settings
+            settings = get_settings()
+            embedding_client = LMStudioEmbeddingClient(
+                model_name=settings.lmstudio_model,
+                llm_model_name=settings.lmstudio_llm_model,
+                base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
+            )
+        self.embedding_client = embedding_client
         self.entity_extractor = EntityExtractor()
         self.session_segmenter = SessionSegmenter()
         self.context_manager = ContextManager(summaries_dir)
@@ -217,14 +225,35 @@ class SessionSummarizer:
         )
 
         # Генерируем саммаризацию через LLM
-        async with self.embedding_client:
-            summary_text = await self.embedding_client.generate_summary(
-                prompt=prompt,
-                temperature=0.3,
-                max_tokens=8000,
-                top_p=0.93,
-                presence_penalty=0.05,
+        # Если llm_model_name не указан в LM Studio, используем Ollama
+        if hasattr(self.embedding_client, 'llm_model_name') and not self.embedding_client.llm_model_name:
+            # Используем Ollama для генерации текста
+            from ..core.ollama_client import OllamaEmbeddingClient
+            from ..config import get_quality_analysis_settings
+            
+            qa_settings = get_quality_analysis_settings()
+            ollama_client = OllamaEmbeddingClient(
+                llm_model_name=qa_settings.ollama_model,
+                base_url=qa_settings.ollama_base_url
             )
+            async with ollama_client:
+                summary_text = await ollama_client.generate_summary(
+                    prompt=prompt,
+                    temperature=0.3,
+                    max_tokens=8000,
+                    top_p=0.93,
+                    presence_penalty=0.05,
+                )
+        else:
+            # Используем LM Studio для генерации текста
+            async with self.embedding_client:
+                summary_text = await self.embedding_client.generate_summary(
+                    prompt=prompt,
+                    temperature=0.3,
+                    max_tokens=8000,
+                    top_p=0.93,
+                    presence_penalty=0.05,
+                )
 
         # Парсим структурированную саммаризацию и дополняем пропуски при необходимости
         summary_structure = self._parse_summary_structure(summary_text)

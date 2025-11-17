@@ -391,6 +391,7 @@ def check(embedding_model):
             settings = get_settings()
             lmstudio_client = LMStudioEmbeddingClient(
                 model_name=embedding_model or settings.lmstudio_model,
+                llm_model_name=settings.lmstudio_llm_model,
                 base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
             )
             async with lmstudio_client:
@@ -624,6 +625,7 @@ def index(
         settings = get_settings()
         embedding_client = LMStudioEmbeddingClient(
             model_name=embedding_model or settings.lmstudio_model,
+            llm_model_name=settings.lmstudio_llm_model,
             base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
         )
         chroma_path = os.getenv("MEMORY_MCP_CHROMA_PATH") or settings.chroma_path

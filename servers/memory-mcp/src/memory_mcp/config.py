@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     lmstudio_model: str = Field(
         "text-embedding-qwen3-embedding-0.6b", description="Модель для эмбеддингов в LM Studio"
     )
+    lmstudio_llm_model: str | None = Field(
+        None, description="Модель LLM для генерации текста в LM Studio (если None, используется Ollama)"
+    )
     
     # Дополнительные настройки
     db_path: str = Field("data/memory_graph.db", description="Путь к SQLite базе данных")

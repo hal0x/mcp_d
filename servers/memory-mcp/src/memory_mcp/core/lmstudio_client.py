@@ -20,15 +20,23 @@ logger = logging.getLogger(__name__)
 
 
 class LMStudioEmbeddingClient:
-    """Клиент для генерации эмбеддингов через LM Studio Server"""
+    """Клиент для генерации эмбеддингов через LM Studio Server
+    
+    ВАЖНО: 
+    - model_name используется ТОЛЬКО для эмбеддингов (endpoint /v1/embeddings)
+    - llm_model_name используется для генерации текста (endpoint /v1/chat/completions)
+    - Не используйте модель эмбеддингов для генерации текста!
+    """
 
     def __init__(
         self,
         model_name: str = "text-embedding-qwen3-embedding-0.6b",
+        llm_model_name: Optional[str] = None,  # Модель для LLM генерации текста
         base_url: str = "http://127.0.0.1:1234",
-        max_text_length: int = 32768,  # 8192 токенов * 4 символа/токен для безопасного лимита
+        max_text_length: int = 16384,  # 4096 токенов * 4 символа/токен для безопасного лимита
     ):
-        self.model_name = model_name
+        self.model_name = model_name  # Модель для эмбеддингов
+        self.llm_model_name = llm_model_name  # Модель для LLM генерации (если None, используется model_name, что неправильно)
         self.base_url = base_url.rstrip("/")
         self.max_text_length = max_text_length
         self.session = None
@@ -45,21 +53,57 @@ class LMStudioEmbeddingClient:
             await self.session.close()
 
     async def check_model_availability(self) -> bool:
-        """Проверка доступности модели"""
+        """Проверка доступности модели эмбеддингов через реальный запрос"""
         try:
             if not self.session:
                 self.session = aiohttp.ClientSession()
             
-            # LM Studio использует /v1/models для получения списка моделей
+            # Сначала проверяем список моделей
             async with self.session.get(f"{self.base_url}/v1/models") as response:
                 if response.status == 200:
                     data = await response.json()
-                    # LM Studio возвращает {"data": [{"id": "...", ...}]}
                     models = [model.get("id", "") for model in data.get("data", [])]
-                    return self.model_name in models
+                    if self.model_name not in models:
+                        logger.warning(
+                            f"Модель '{self.model_name}' не найдена в списке доступных моделей. "
+                            f"Доступные модели: {', '.join(models[:5])}"
+                        )
+                        # Продолжаем проверку через реальный запрос, так как модель может быть доступна
+                        # даже если не в списке (например, если она загружена как embedding модель)
+            
+            # Проверяем реальную доступность через тестовый запрос к /v1/embeddings
+            # Это более надежный способ, так как модели эмбеддингов могут не отображаться
+            # в /v1/models, но работать через /v1/embeddings
+            test_payload = {"model": self.model_name, "input": "test"}
+            async with self.session.post(
+                f"{self.base_url}/v1/embeddings",
+                json=test_payload,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if "data" in data and len(data.get("data", [])) > 0:
+                        embedding = data["data"][0].get("embedding")
+                        if embedding and isinstance(embedding, list):
+                            # Сохраняем размерность при первой успешной проверке
+                            if self._embedding_dimension is None:
+                                self._embedding_dimension = len(embedding)
+                            return True
+                
+                # Если получили ошибку, логируем её для диагностики
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.warning(
+                        f"Модель '{self.model_name}' недоступна для эмбеддингов. "
+                        f"HTTP {response.status}: {error_text[:200]}"
+                    )
                 return False
+                
+        except asyncio.TimeoutError:
+            logger.warning(f"Таймаут при проверке модели '{self.model_name}'")
+            return False
         except Exception as e:
-            logger.error(f"Ошибка при проверке модели: {e}")
+            logger.warning(f"Ошибка при проверке модели '{self.model_name}': {e}")
             return False
 
     async def get_embedding(self, text: str) -> List[float]:
@@ -390,6 +434,7 @@ class LMStudioEmbeddingClient:
             "model_available": False,
             "model_name": self.model_name,
             "base_url": self.base_url,
+            "error": None,
         }
 
         try:
@@ -398,17 +443,37 @@ class LMStudioEmbeddingClient:
                 self.session = aiohttp.ClientSession()
 
             # Проверяем доступность LM Studio Server
-            async with self.session.get(f"{self.base_url}/v1/models") as response:
-                if response.status == 200:
-                    result["lmstudio_available"] = True
-                    data = await response.json()
-                    # Получаем информацию о моделях
-                    models = data.get("data", [])
-                    result["available_models"] = [m.get("id", "") for m in models]
+            try:
+                async with self.session.get(
+                    f"{self.base_url}/v1/models",
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as response:
+                    if response.status == 200:
+                        result["lmstudio_available"] = True
+                        data = await response.json()
+                        # Получаем информацию о моделях
+                        models = data.get("data", [])
+                        result["available_models"] = [m.get("id", "") for m in models]
+                    else:
+                        result["error"] = f"HTTP {response.status}: {await response.text()}"
+            except asyncio.TimeoutError:
+                result["error"] = "Таймаут при подключении к LM Studio Server"
+                return result
+            except Exception as e:
+                result["error"] = f"Ошибка подключения: {str(e)}"
+                return result
 
-            # Проверяем доступность модели эмбеддингов
+            # Проверяем доступность модели эмбеддингов через реальный запрос
+            # Это более надежно, чем просто проверка списка моделей
             if result["lmstudio_available"]:
                 result["model_available"] = await self.check_model_availability()
+                if not result["model_available"]:
+                    # Добавляем более детальную информацию об ошибке
+                    if not result.get("error"):
+                        result["error"] = (
+                            f"Модель '{self.model_name}' недоступна для эмбеддингов. "
+                            f"Убедитесь, что модель загружена в LM Studio и доступна через /v1/embeddings endpoint."
+                        )
 
         except Exception as e:
             logger.error(f"Ошибка при тестировании подключения: {e}")
@@ -554,10 +619,25 @@ class LMStudioEmbeddingClient:
         top_p: float,
         presence_penalty: float,
     ) -> str:
-        """Генерация саммаризации для одного промпта через LM Studio Server"""
+        """Генерация саммаризации для одного промпта через LM Studio Server
+        
+        ВАЖНО: Использует llm_model_name для генерации текста, а не model_name (модель эмбеддингов).
+        Если llm_model_name не установлен, выдает предупреждение и возвращает ошибку.
+        """
+        # Проверяем, что установлена LLM модель (не модель эмбеддингов)
+        llm_model = self.llm_model_name
+        if not llm_model:
+            error_msg = (
+                f"ОШИБКА: Для генерации текста нужна LLM модель, а не модель эмбеддингов. "
+                f"Текущая модель эмбеддингов: '{self.model_name}'. "
+                f"Установите llm_model_name при создании LMStudioEmbeddingClient или используйте Ollama для генерации текста."
+            )
+            logger.error(error_msg)
+            return f"Ошибка: {error_msg}"
+        
         # LM Studio использует OpenAI-совместимый API для chat completions
         payload = {
-            "model": self.model_name,
+            "model": llm_model,  # Используем LLM модель, а не модель эмбеддингов
             "messages": [
                 {
                     "role": "system",
