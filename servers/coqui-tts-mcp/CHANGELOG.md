@@ -22,3 +22,4 @@ All notable changes to the Coqui TTS MCP server will be documented in this file.
 - Health check and device info endpoints
 
 
+

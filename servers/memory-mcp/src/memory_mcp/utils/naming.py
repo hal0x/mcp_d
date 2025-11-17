@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
+
+logger = logging.getLogger(__name__)
 
 _CYRILLIC_TRANSLIT = str.maketrans(
     {
@@ -90,7 +93,15 @@ def slugify(value: str | None, *, default: str = "unnamed") -> str:
     lowered = ascii_only.lower()
     compact = re.sub(r"[^a-z0-9]+", "_", lowered)
     compact = re.sub(r"_+", "_", compact).strip("_")
-    return compact or default
+    
+    if not compact:
+        logger.warning(
+            f"Входная строка '{value}' была приведена к пустому slug. "
+            f"Используется значение по умолчанию: '{default}'"
+        )
+        return default
+    
+    return compact
 
 
 __all__ = ["slugify"]

@@ -675,7 +675,6 @@ class IndexChatRequest(BaseModel):
     chat: str = Field(..., description="Название чата для индексации")
     force_full: bool = Field(default=False, description="Полная пересборка индекса")
     recent_days: int = Field(default=7, description="Пересаммаризировать последние N дней")
-    progress: bool = Field(default=False, description="Показать прогресс-бар (не используется, индексация всегда в фоне)")
     
     # Параметры качества и улучшения
     enable_quality_check: Optional[bool] = Field(default=True, description="Включить проверку качества саммаризации")

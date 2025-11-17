@@ -8,3 +8,4 @@ from memory_mcp.mcp.server import server  # noqa: F401
 # Экспортируем server для использования в run_server.py
 __all__ = ["server"]
 
+

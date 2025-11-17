@@ -27,7 +27,7 @@ class OllamaEmbeddingClient:
         model_name: str = "hf.co/lmstudio-community/Magistral-Small-2509-GGUF:Q4_K_M",
         llm_model_name: str = "hf.co/lmstudio-community/Magistral-Small-2509-GGUF:Q4_K_M",
         base_url: str = "http://localhost:11434",
-        max_text_length: int = 32768,  # 8192 токенов * 4 символа/токен для безопасного лимита
+        max_text_length: int = 16384,  # 4096 токенов * 4 символа/токен для безопасного лимита
         llm_thinking_level: str | None = None,
     ):
         self.model_name = model_name
@@ -582,7 +582,7 @@ class OllamaEmbeddingClientSync:
         self,
         model_name: str = "hf.co/lmstudio-community/Magistral-Small-2509-GGUF:Q4_K_M",
         base_url: str = "http://localhost:11434",
-        max_text_length: int = 32768,  # 8192 токенов * 4 символа/токен для безопасного лимита
+        max_text_length: int = 16384,  # 4096 токенов * 4 символа/токен для безопасного лимита
     ):
         self.model_name = model_name
         self.base_url = base_url

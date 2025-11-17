@@ -19,15 +19,34 @@ logger = logging.getLogger(__name__)
 class MarkdownRenderer:
     """Класс для рендеринга Markdown отчётов"""
 
-    def __init__(self, output_dir: Path = Path("artifacts/reports")):
+    def __init__(
+        self,
+        output_dir: Path = Path("artifacts/reports"),
+        chat_links_path: Optional[Path] = None,
+    ):
         """
         Инициализация рендерера
 
         Args:
             output_dir: Директория для сохранения отчётов
+            chat_links_path: Путь к файлу chat_links.json (по умолчанию config/chat_links.json)
         """
         self.output_dir = output_dir
         self.output_dir.mkdir(exist_ok=True)
+        
+        # Загружаем конфигурацию chat_links
+        if chat_links_path is None:
+            # Пытаемся найти корень проекта (где находится pyproject.toml)
+            current_dir = Path(__file__).parent
+            project_root = current_dir
+            while project_root.parent != project_root:
+                if (project_root / "pyproject.toml").exists():
+                    break
+                project_root = project_root.parent
+            if not (project_root / "pyproject.toml").exists():
+                project_root = Path.cwd()
+            chat_links_path = project_root / "config" / "chat_links.json"
+        self.chat_links = self._load_chat_links(chat_links_path)
 
     def render_session_summary(
         self,
@@ -73,10 +92,13 @@ class MarkdownRenderer:
             logger.error(f"Ошибка прав доступа при сохранении {json_path}: {e}")
             raise
 
+        # Используем переданные chat_links или загруженные по умолчанию
+        effective_chat_links = chat_links if chat_links is not None else self.chat_links
+        
         if profile == "broadcast":
             content = self._render_broadcast_markdown(summary)
         else:
-            content = self._render_group_markdown(summary, chat_links)
+            content = self._render_group_markdown(summary, effective_chat_links)
 
         if quality_status == "needs_review":
             banner = "> ⚠️ **Этот отчёт помечен как needs_review.** Проверить данные вручную перед использованием.\n\n"
@@ -620,6 +642,32 @@ class MarkdownRenderer:
     def _safe_name(self, name: str) -> str:
         """Создаёт безопасный slug для директорий/файлов."""
         return slugify(name)
+
+    def _load_chat_links(self, chat_links_path: Path) -> Optional[Dict[str, Any]]:
+        """
+        Загружает конфигурацию chat_links из JSON файла.
+
+        Args:
+            chat_links_path: Путь к файлу chat_links.json
+
+        Returns:
+            Словарь с конфигурацией или None, если файл не найден
+        """
+        if not chat_links_path.exists():
+            logger.debug(f"Файл chat_links не найден: {chat_links_path}")
+            return None
+
+        try:
+            with open(chat_links_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                logger.debug(f"Загружена конфигурация chat_links из {chat_links_path}")
+                return data
+        except json.JSONDecodeError as e:
+            logger.warning(f"Ошибка парсинга chat_links.json: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"Ошибка загрузки chat_links.json: {e}")
+            return None
 
     def render_cumulative_context(
         self, chat: str, sessions: List[Dict[str, Any]], force: bool = False
