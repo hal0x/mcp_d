@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Iterable, List, Optional
+from urllib.parse import urlparse, urlunparse
 
 from ..config import get_settings
 
@@ -17,6 +18,30 @@ except Exception:  # pragma: no cover - fallback when qdrant is not installed
     qmodels = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+
+def _mask_url_in_log(url: str) -> str:
+    """Маскирует учетные данные в URL для безопасного логирования."""
+    try:
+        parsed = urlparse(url)
+        if parsed.username or parsed.password:
+            # Маскируем username и password
+            masked_netloc = f"{parsed.hostname or ''}"
+            if parsed.port:
+                masked_netloc += f":{parsed.port}"
+            masked = urlunparse((
+                parsed.scheme,
+                masked_netloc,
+                parsed.path,
+                parsed.params,
+                parsed.query,
+                parsed.fragment
+            ))
+            return masked
+        return url
+    except Exception:
+        # Если не удалось распарсить, возвращаем как есть (но это не должно происходить)
+        return url
 
 
 @dataclass
@@ -45,9 +70,9 @@ class VectorStore:
         if url and QdrantClient is not None:
             try:
                 self.client = QdrantClient(url=url)
-                logger.info("Vector store connected to %s", url)
+                logger.info("Vector store connected to %s", _mask_url_in_log(url))
             except Exception as exc:  # pragma: no cover
-                logger.warning("Failed to connect to Qdrant at %s: %s", url, exc)
+                logger.warning("Failed to connect to Qdrant at %s: %s", _mask_url_in_log(url), exc)
                 self.client = None
         elif url:
             logger.warning("qdrant-client package not available; vector store disabled.")
@@ -275,7 +300,7 @@ class VectorStore:
 
 def build_vector_store_from_env() -> VectorStore | None:
     settings = get_settings()
-    url = settings.qdrant_url
+    url = settings.get_qdrant_url()
     if not url:
         return None
     store = VectorStore(url=url)

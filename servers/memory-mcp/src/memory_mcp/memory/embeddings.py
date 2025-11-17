@@ -114,7 +114,7 @@ def build_embedding_service_from_env() -> EmbeddingService | None:
     settings = get_settings()
     
     # Priority 1: embeddings_url
-    url = settings.embeddings_url
+    url = settings.get_embeddings_url()
     model_name = None
     
     if url:

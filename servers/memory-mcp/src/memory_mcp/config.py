@@ -8,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -43,8 +43,8 @@ class Settings(BaseSettings):
     
     # Дополнительные настройки
     db_path: str = Field("data/memory_graph.db", description="Путь к SQLite базе данных")
-    embeddings_url: str | None = Field(None, description="URL сервиса эмбеддингов (приоритет над LM Studio)")
-    qdrant_url: str | None = Field(None, description="URL Qdrant векторной базы данных")
+    embeddings_url: SecretStr | None = Field(None, description="URL сервиса эмбеддингов (приоритет над LM Studio)")
+    qdrant_url: SecretStr | None = Field(None, description="URL Qdrant векторной базы данных")
 
     model_config = SettingsConfigDict(
         env_prefix="MEMORY_MCP_",
@@ -52,6 +52,18 @@ class Settings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
+    
+    def get_embeddings_url(self) -> str | None:
+        """Получить URL эмбеддингов как строку (безопасно)."""
+        if self.embeddings_url is None:
+            return None
+        return self.embeddings_url.get_secret_value()
+    
+    def get_qdrant_url(self) -> str | None:
+        """Получить URL Qdrant как строку (безопасно)."""
+        if self.qdrant_url is None:
+            return None
+        return self.qdrant_url.get_secret_value()
 
 
 class QualityAnalysisSettings(BaseSettings):
