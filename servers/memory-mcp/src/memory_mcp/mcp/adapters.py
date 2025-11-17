@@ -250,13 +250,67 @@ class MemoryServiceAdapter:
         return stats
 
     # Ingest
+    def _build_embedding_text(self, payload: MemoryRecordPayload) -> str:
+        """
+        Формирует расширенный текст для эмбеддингов, включая метаданные.
+        
+        Args:
+            payload: Запись памяти с метаданными
+            
+        Returns:
+            Расширенный текст с контентом и метаданными
+        """
+        parts = [payload.content]
+        metadata_parts = []
+        
+        # Добавляем username отправителя, если есть
+        sender_username = payload.metadata.get("sender_username")
+        if sender_username:
+            metadata_parts.append(f"Автор: @{sender_username}")
+        elif payload.author:
+            metadata_parts.append(f"Автор: {payload.author}")
+        
+        # Добавляем реакции, если есть
+        reactions = payload.metadata.get("reactions")
+        if reactions and isinstance(reactions, list) and len(reactions) > 0:
+            reaction_strs = []
+            for reaction in reactions:
+                if isinstance(reaction, dict):
+                    emoji = reaction.get("emoji", "")
+                    count = reaction.get("count", 0)
+                    if emoji and count > 0:
+                        # Извлекаем emoji из строки вида "ReactionEmoji(emoticon='👍')"
+                        if "emoticon=" in str(emoji):
+                            try:
+                                emoji_value = str(emoji).split("emoticon=")[1].split("'")[1]
+                                reaction_strs.append(f"{emoji_value} x{count}")
+                            except (IndexError, AttributeError):
+                                reaction_strs.append(f"{emoji} x{count}")
+                        else:
+                            reaction_strs.append(f"{emoji} x{count}")
+            if reaction_strs:
+                metadata_parts.append(f"Реакции: {', '.join(reaction_strs)}")
+        
+        # Добавляем информацию о редактировании, если есть
+        edited_utc = payload.metadata.get("edited_utc")
+        if edited_utc:
+            metadata_parts.append(f"Отредактировано: {edited_utc}")
+        
+        # Объединяем все части
+        if metadata_parts:
+            parts.append("\n[Метаданные]")
+            parts.extend(metadata_parts)
+        
+        return "\n".join(parts)
+
     def ingest(self, payloads: Iterable[MemoryRecordPayload]) -> IngestResponse:
         payload_list = list(payloads)
         records = [_payload_to_record(item) for item in payload_list]
         stats = self.ingestor.ingest(records)
         if self.embedding_service and self.vector_store and payload_list:
             for payload in payload_list:
-                vector = self.embedding_service.embed(payload.content)
+                embedding_text = self._build_embedding_text(payload)
+                vector = self.embedding_service.embed(embedding_text)
                 if not vector:
                     continue
                 payload_data: dict[str, object] = {

@@ -148,12 +148,14 @@ class TypedGraphMemory:
         # Обновляем FTS индекс из существующих данных
         for node_id, data in self.graph.nodes(data=True):
             if data.get("node_type") in (NodeType.DOC_CHUNK, NodeType.DOC_CHUNK.value):
+                props = data.get("properties", {})
                 self._fts_refresh_doc(
                     node_id=node_id,
                     content=data.get("content", ""),
                     source=data.get("source", ""),
-                    tags=data.get("tags", []),
-                    entities=data.get("entities", []),
+                    tags=props.get("tags", []),
+                    entities=props.get("entities", []),
+                    properties=props,
                 )
 
     def add_node(self, node: GraphNode) -> bool:
@@ -207,6 +209,7 @@ class TypedGraphMemory:
                     source=getattr(node, "source", ""),
                     tags=node.properties.get("tags", []),
                     entities=node.properties.get("entities", []),
+                    properties=node.properties,
                 )
 
             logger.info(f"Добавлен узел: {node.id} ({node.type})")
@@ -327,6 +330,7 @@ class TypedGraphMemory:
                     source=final_source,
                     tags=final_tags,
                     entities=final_entities,
+                    properties=updated_props,
                 )
 
             logger.info(f"Обновлён узел: {node_id}")
@@ -556,8 +560,55 @@ class TypedGraphMemory:
         source: str,
         tags: Iterable[str],
         entities: Iterable[str],
+        properties: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Insert or update document chunk entry in FTS index."""
+        """
+        Insert or update document chunk entry in FTS index.
+        Включает метаданные в поле content для полнотекстового поиска.
+        """
+        # Извлекаем метаданные из properties или из узла графа
+        metadata_parts = []
+        if properties is None and node_id in self.graph:
+            properties = self.graph.nodes[node_id].get("properties", {})
+        
+        if properties:
+            # Добавляем username отправителя, если есть
+            sender_username = properties.get("sender_username")
+            if sender_username:
+                metadata_parts.append(f"@{sender_username}")
+            elif properties.get("author"):
+                metadata_parts.append(properties.get("author"))
+            
+            # Добавляем реакции, если есть
+            reactions = properties.get("reactions")
+            if reactions and isinstance(reactions, list) and len(reactions) > 0:
+                reaction_strs = []
+                for reaction in reactions:
+                    if isinstance(reaction, dict):
+                        emoji = reaction.get("emoji", "")
+                        count = reaction.get("count", 0)
+                        if emoji and count > 0:
+                            # Извлекаем emoji из строки вида "ReactionEmoji(emoticon='👍')"
+                            if "emoticon=" in str(emoji):
+                                try:
+                                    emoji_value = str(emoji).split("emoticon=")[1].split("'")[1]
+                                    reaction_strs.append(f"{emoji_value} x{count}")
+                                except (IndexError, AttributeError):
+                                    reaction_strs.append(f"{emoji} x{count}")
+                            else:
+                                reaction_strs.append(f"{emoji} x{count}")
+                if reaction_strs:
+                    metadata_parts.append(f"Реакции: {', '.join(reaction_strs)}")
+            
+            # Добавляем информацию о редактировании, если есть
+            edited_utc = properties.get("edited_utc")
+            if edited_utc:
+                metadata_parts.append(f"Отредактировано: {edited_utc}")
+
+        # Формируем расширенный контент для FTS5
+        extended_content = content or ""
+        if metadata_parts:
+            extended_content = f"{extended_content}\n{' '.join(metadata_parts)}"
 
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM node_search WHERE node_id = ?", (node_id,))
@@ -568,7 +619,7 @@ class TypedGraphMemory:
         """,
             (
                 node_id,
-                content or "",
+                extended_content,
                 source or "",
                 " ".join(sorted({str(tag) for tag in tags if tag})),
                 " ".join(sorted({str(entity) for entity in entities if entity})),

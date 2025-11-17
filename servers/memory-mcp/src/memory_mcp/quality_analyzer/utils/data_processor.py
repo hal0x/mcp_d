@@ -40,17 +40,36 @@ def normalize_message(chat_name: str, raw: dict) -> dict | None:
         if not text.strip():
             return None
 
+        from_info = raw.get("from") or {}
+        if isinstance(from_info, dict):
+            sender_username = from_info.get("username")
+            sender_display = from_info.get("display")
+        else:
+            sender_username = None
+            sender_display = str(from_info) if from_info else None
+
         metadata = {
             "chat": chat_name,
             "message_id": raw.get("id"),
-            "sender": raw.get("from"),
+            "sender": sender_display or raw.get("from"),
             "sender_id": raw.get("from_id"),
+            "sender_username": sender_username,
             "reply_to": raw.get("reply_to_message_id"),
             "has_media": bool(raw.get("media")),
             "via_bot": raw.get("via_bot"),
             "forwarded_from": raw.get("forwarded_from"),
             "message_type": message_type,
         }
+
+        # Добавляем реакции, если есть
+        reactions = raw.get("reactions")
+        if reactions and isinstance(reactions, list):
+            metadata["reactions"] = reactions
+
+        # Добавляем дату редактирования, если есть
+        edited_utc = raw.get("edited_utc")
+        if edited_utc:
+            metadata["edited_utc"] = edited_utc
 
         return {
             "text": text,
@@ -79,14 +98,25 @@ def normalize_message(chat_name: str, raw: dict) -> dict | None:
         metadata = {
             "chat": raw.get("chat", chat_name),
             "message_id": raw.get("id"),
-            "sender": sender_info.get("display") or sender_info.get("username"),
-            "sender_id": sender_info.get("id"),
+            "sender": sender_info.get("display") or sender_info.get("username") if isinstance(sender_info, dict) else str(sender_info) if sender_info else None,
+            "sender_id": sender_info.get("id") if isinstance(sender_info, dict) else None,
+            "sender_username": sender_info.get("username") if isinstance(sender_info, dict) else None,
             "reply_to": raw.get("reply_to"),
             "has_media": bool(attachments),
             "forwarded_from": raw.get("forwarded_from"),
             "language": raw.get("language"),
             "message_type": message_type or "smart_export",
         }
+
+        # Добавляем реакции, если есть
+        reactions = raw.get("reactions")
+        if reactions and isinstance(reactions, list):
+            metadata["reactions"] = reactions
+
+        # Добавляем дату редактирования, если есть
+        edited_utc = raw.get("edited_utc")
+        if edited_utc:
+            metadata["edited_utc"] = edited_utc
 
         if attachments:
             metadata["attachments"] = attachments
