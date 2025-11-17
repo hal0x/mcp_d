@@ -9,6 +9,13 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
+from .constants import (
+    DEFAULT_TIMEOUT_CONNECT,
+    DEFAULT_TIMEOUT_MAX_RETRY,
+    HTTP_CONNECTOR_LIMIT,
+    HTTP_CONNECTOR_LIMIT_PER_HOST,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -272,94 +279,83 @@ class LMStudioEmbeddingClient:
         # LM Studio использует OpenAI-совместимый формат
         payload = {"model": self.model_name, "input": text}
 
+        # Инициализируем сессию один раз перед циклом retry, если не существует
+        if not self.session:
+            connector = aiohttp.TCPConnector(
+                limit=HTTP_CONNECTOR_LIMIT,
+                limit_per_host=HTTP_CONNECTOR_LIMIT_PER_HOST,
+                ttl_dns_cache=300,
+                use_dns_cache=True,
+                enable_cleanup_closed=True,
+                force_close=True,
+                ssl=False,
+            )
+            # Используем базовый таймаут для сессии, конкретные таймауты будут в запросах
+            timeout = aiohttp.ClientTimeout(
+                total=DEFAULT_TIMEOUT_MAX_RETRY,  # Максимальный таймаут для retry
+                connect=DEFAULT_TIMEOUT_CONNECT,
+                sock_read=DEFAULT_TIMEOUT_MAX_RETRY,
+                sock_connect=DEFAULT_TIMEOUT_CONNECT,
+            )
+            self.session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=timeout,
+                headers={"Connection": "close"},
+            )
+
         # Повторные попытки с разумными таймаутами
         for attempt in range(3):
             try:
                 # Увеличенные таймауты: 60, 90, 120 секунд
                 timeout_seconds = 60 + (attempt * 30)
 
-                # Создаем новое соединение для каждой попытки
-                connector = aiohttp.TCPConnector(
-                    limit=5,
-                    limit_per_host=2,
-                    ttl_dns_cache=300,
-                    use_dns_cache=True,
-                    enable_cleanup_closed=True,
-                    force_close=True,
-                    ssl=False,
-                )
-
-                timeout = aiohttp.ClientTimeout(
-                    total=timeout_seconds,
-                    connect=30,
-                    sock_read=timeout_seconds,
-                    sock_connect=30,
-                )
-
-                if not self.session:
-                    self.session = aiohttp.ClientSession(
-                        connector=connector,
-                        timeout=timeout,
-                        headers={"Connection": "close"},
-                    )
-
                 # Логируем только при повторных попытках
                 if attempt > 0:
                     logger.debug(f"Повторная попытка к LM Studio ({attempt + 1}/3)")
-                
-                try:
-                    # Добавляем таймаут для всего запроса
-                    async with asyncio.timeout(timeout_seconds):
-                        async with self.session.post(
-                            f"{self.base_url}/v1/embeddings", json=payload
-                        ) as response:
-                            if response.status == 200:
-                                data = await response.json()
-                                # LM Studio возвращает OpenAI-совместимый формат:
-                                # {"data": [{"embedding": [...], "index": 0, "object": "embedding"}]}
-                                if "data" in data and len(data["data"]) > 0:
-                                    embedding = data["data"][0].get("embedding")
-                                    if embedding:
-                                        # Сохраняем размерность при первом успешном запросе
-                                        if self._embedding_dimension is None:
-                                            self._embedding_dimension = len(embedding)
-                                        return embedding
-                                    else:
-                                        logger.error("LM Studio вернул пустой embedding")
-                                        if attempt < 2:
-                                            await asyncio.sleep(2 + attempt)
-                                            continue
-                                        return None
+
+                # Добавляем таймаут для всего запроса
+                async with asyncio.timeout(timeout_seconds):
+                    async with self.session.post(
+                        f"{self.base_url}/v1/embeddings", json=payload
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            # LM Studio возвращает OpenAI-совместимый формат:
+                            # {"data": [{"embedding": [...], "index": 0, "object": "embedding"}]}
+                            if "data" in data and len(data["data"]) > 0:
+                                embedding = data["data"][0].get("embedding")
+                                if embedding:
+                                    # Сохраняем размерность при первом успешном запросе
+                                    if self._embedding_dimension is None:
+                                        self._embedding_dimension = len(embedding)
+                                    return embedding
                                 else:
-                                    logger.error("LM Studio вернул неожиданный формат данных")
+                                    logger.error("LM Studio вернул пустой embedding")
                                     if attempt < 2:
                                         await asyncio.sleep(2 + attempt)
                                         continue
                                     return None
                             else:
-                                error_text = await response.text()
-                                logger.error(
-                                    f"Ошибка API LM Studio: {response.status} - {error_text}"
-                                )
-                                if attempt < 2:  # Не последняя попытка
-                                    await asyncio.sleep(2 + attempt)  # 2, 3 секунды
+                                logger.error("LM Studio вернул неожиданный формат данных")
+                                if attempt < 2:
+                                    await asyncio.sleep(2 + attempt)
                                     continue
                                 return None
-                except asyncio.TimeoutError:
-                    logger.error(
-                        f"Таймаут запроса к LM Studio (попытка {attempt + 1}/3)"
-                    )
-                    if attempt < 2:
-                        await asyncio.sleep(2 + attempt)
-                        continue
-                    return None
-
+                        else:
+                            error_text = await response.text()
+                            logger.error(
+                                f"Ошибка API LM Studio: {response.status} - {error_text}"
+                            )
+                            if attempt < 2:  # Не последняя попытка
+                                await asyncio.sleep(2 + attempt)  # 2, 3 секунды
+                                continue
+                            return None
             except asyncio.TimeoutError:
                 logger.error(
-                    f"Таймаут при генерации эмбеддинга (попытка {attempt + 1}/3)"
+                    f"Таймаут запроса к LM Studio (попытка {attempt + 1}/3)"
                 )
-                if attempt < 2:  # Не последняя попытка
-                    await asyncio.sleep(2**attempt)
+                if attempt < 2:
+                    await asyncio.sleep(2 + attempt)
                     continue
                 return None
             except aiohttp.ClientError as e:

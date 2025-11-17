@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, List, Optional
+from uuid import uuid4
 
 from ..indexing import Attachment, MemoryRecord
 from .graph_types import DocChunkNode, EdgeType, GraphEdge, NodeType
@@ -77,7 +78,8 @@ class MemoryIngestor:
     ) -> Optional[DocChunkNode]:
         if not attachment.uri and not attachment.text:
             return None
-        attachment_id = f"{record.record_id}-att-{abs(hash((attachment.type, attachment.uri, attachment.text)))}"
+        # Используем UUID для генерации уникального ID вложения
+        attachment_id = f"{record.record_id}-att-{uuid4().hex[:16]}"
         props = dict(attachment.metadata)
         props["type"] = attachment.type
         if attachment.uri:

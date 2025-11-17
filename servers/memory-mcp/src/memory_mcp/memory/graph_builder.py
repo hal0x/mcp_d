@@ -10,6 +10,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
+from ..core.constants import DEFAULT_GRAPH_QUERY_LIMIT
 from .graph_types import (
     DocChunkNode,
     EdgeType,
@@ -287,7 +288,7 @@ class GraphBuilder:
         logger.info("Добавление временных связей...")
 
         # Получаем все события
-        events = self.graph.get_nodes_by_type(NodeType.EVENT, limit=10000)
+        events = self.graph.get_nodes_by_type(NodeType.EVENT, limit=DEFAULT_GRAPH_QUERY_LIMIT)
 
         # Сортируем по времени
         events_with_time = []
@@ -299,8 +300,11 @@ class GraphBuilder:
 
                     timestamp = parse_datetime_utc(timestamp_str, use_zoneinfo=True)
                     events_with_time.append((event, timestamp))
-                except:
-                    pass
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.warning(
+                        f"Ошибка парсинга timestamp для события {event.id}: {e}"
+                    )
+                    # Пропускаем события с некорректными timestamp
 
         events_with_time.sort(key=lambda x: x[1])
 
