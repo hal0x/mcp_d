@@ -675,7 +675,34 @@ class IndexChatRequest(BaseModel):
     chat: str = Field(..., description="Название чата для индексации")
     force_full: bool = Field(default=False, description="Полная пересборка индекса")
     recent_days: int = Field(default=7, description="Пересаммаризировать последние N дней")
-    progress: bool = Field(default=False, description="Показать прогресс-бар")
+    progress: bool = Field(default=False, description="Показать прогресс-бар (не используется, индексация всегда в фоне)")
+    
+    # Параметры качества и улучшения
+    enable_quality_check: Optional[bool] = Field(default=True, description="Включить проверку качества саммаризации")
+    enable_iterative_refinement: Optional[bool] = Field(default=True, description="Включить автоматическое улучшение саммаризаций")
+    min_quality_score: Optional[float] = Field(default=80.0, description="Минимальный приемлемый балл качества")
+    
+    # Параметры кластеризации
+    enable_clustering: Optional[bool] = Field(default=True, description="Включить автоматическую кластеризацию сессий")
+    clustering_threshold: Optional[float] = Field(default=0.8, description="Порог сходства для кластеризации")
+    min_cluster_size: Optional[int] = Field(default=2, description="Минимальный размер кластера")
+    
+    # Параметры группировки
+    max_messages_per_group: Optional[int] = Field(default=100, description="Максимальное количество сообщений в группе")
+    max_session_hours: Optional[int] = Field(default=6, description="Максимальная длительность сессии в часах")
+    gap_minutes: Optional[int] = Field(default=60, description="Максимальный разрыв между сообщениями в минутах")
+    
+    # Параметры умной группировки
+    enable_smart_aggregation: Optional[bool] = Field(default=True, description="Включить умную группировку с скользящими окнами")
+    aggregation_strategy: Optional[str] = Field(default="smart", description="Стратегия группировки: 'smart', 'channel', 'legacy'")
+    now_window_hours: Optional[int] = Field(default=24, description="Размер NOW окна в часах")
+    fresh_window_days: Optional[int] = Field(default=14, description="Размер FRESH окна в днях")
+    recent_window_days: Optional[int] = Field(default=30, description="Размер RECENT окна в днях")
+    strategy_threshold: Optional[int] = Field(default=1000, description="Порог количества сообщений для перехода между стратегиями")
+    
+    # Дополнительные параметры
+    enable_entity_learning: Optional[bool] = Field(default=True, description="Включить автоматическое обучение словарей сущностей")
+    enable_time_analysis: Optional[bool] = Field(default=True, description="Включить анализ временных паттернов")
 
 
 class IndexChatResponse(BaseModel):

@@ -849,7 +849,7 @@ async def list_tools() -> List[Tool]:
         ),
         Tool(
             name="index_chat",
-            description="Index a specific Telegram chat with two-level indexing (L1: sessions, L2: messages, L3: tasks). Индексация выполняется в фоновом режиме и не блокирует вызов. Используйте get_indexing_progress для отслеживания прогресса.",
+            description="Index a specific Telegram chat with two-level indexing (L1: sessions, L2: messages, L3: tasks). Индексация выполняется в фоновом режиме и не блокирует вызов. Используйте get_indexing_progress для отслеживания прогресса. Поддерживает все параметры индексации: качество, кластеризация, группировка, умная агрегация и др.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -871,6 +871,92 @@ async def list_tools() -> List[Tool]:
                         "type": "boolean",
                         "description": "Показать прогресс-бар (не используется, индексация всегда в фоне)",
                         "default": False,
+                    },
+                    "enable_quality_check": {
+                        "type": "boolean",
+                        "description": "Включить проверку качества саммаризации",
+                        "default": True,
+                    },
+                    "enable_iterative_refinement": {
+                        "type": "boolean",
+                        "description": "Включить автоматическое улучшение саммаризаций",
+                        "default": True,
+                    },
+                    "min_quality_score": {
+                        "type": "number",
+                        "description": "Минимальный приемлемый балл качества",
+                        "default": 80.0,
+                    },
+                    "enable_clustering": {
+                        "type": "boolean",
+                        "description": "Включить автоматическую кластеризацию сессий",
+                        "default": True,
+                    },
+                    "clustering_threshold": {
+                        "type": "number",
+                        "description": "Порог сходства для кластеризации",
+                        "default": 0.8,
+                    },
+                    "min_cluster_size": {
+                        "type": "integer",
+                        "description": "Минимальный размер кластера",
+                        "default": 2,
+                    },
+                    "max_messages_per_group": {
+                        "type": "integer",
+                        "description": "Максимальное количество сообщений в группе",
+                        "default": 100,
+                    },
+                    "max_session_hours": {
+                        "type": "integer",
+                        "description": "Максимальная длительность сессии в часах",
+                        "default": 6,
+                    },
+                    "gap_minutes": {
+                        "type": "integer",
+                        "description": "Максимальный разрыв между сообщениями в минутах",
+                        "default": 60,
+                    },
+                    "enable_smart_aggregation": {
+                        "type": "boolean",
+                        "description": "Включить умную группировку с скользящими окнами",
+                        "default": True,
+                    },
+                    "aggregation_strategy": {
+                        "type": "string",
+                        "description": "Стратегия группировки: 'smart', 'channel', 'legacy'",
+                        "default": "smart",
+                        "enum": ["smart", "channel", "legacy"],
+                    },
+                    "now_window_hours": {
+                        "type": "integer",
+                        "description": "Размер NOW окна в часах",
+                        "default": 24,
+                    },
+                    "fresh_window_days": {
+                        "type": "integer",
+                        "description": "Размер FRESH окна в днях",
+                        "default": 14,
+                    },
+                    "recent_window_days": {
+                        "type": "integer",
+                        "description": "Размер RECENT окна в днях",
+                        "default": 30,
+                    },
+                    "strategy_threshold": {
+                        "type": "integer",
+                        "description": "Порог количества сообщений для перехода между стратегиями",
+                        "default": 1000,
+                    },
+                    "enable_entity_learning": {
+                        "type": "boolean",
+                        "description": "Включить автоматическое обучение словарей сущностей",
+                        "default": True,
+                    },
+                    "enable_time_analysis": {
+                        "type": "boolean",
+                        "description": "Включить анализ временных паттернов",
+                        "default": True,
                     },
                 },
                 "required": ["chat"],
@@ -1147,9 +1233,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
 async def _run_indexing_job(
     job_id: str,
-    chat: str,
-    force_full: bool,
-    recent_days: int,
+    request: "IndexChatRequest",
     adapter: MemoryServiceAdapter,
 ) -> None:
     """Запуск индексации в фоновом режиме."""
@@ -1164,7 +1248,7 @@ async def _run_indexing_job(
         # Обновляем статус на "running"
         _active_indexing_jobs[job_id] = {
             "status": "running",
-            "chat": chat,
+            "chat": request.chat,
             "started_at": datetime.now(timezone.utc).isoformat(),
             "current_stage": "Инициализация",
         }
@@ -1177,13 +1261,29 @@ async def _run_indexing_job(
             base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
         )
         
-        # Инициализируем индексатор
+        # Инициализируем индексатор с параметрами из запроса
         indexer = TwoLevelIndexer(
             chroma_path=settings.chroma_path,
             artifacts_path=settings.artifacts_path,
             embedding_client=embedding_client,
-            enable_smart_aggregation=True,
-            aggregation_strategy="smart",
+            enable_quality_check=request.enable_quality_check if request.enable_quality_check is not None else True,
+            enable_iterative_refinement=request.enable_iterative_refinement if request.enable_iterative_refinement is not None else True,
+            min_quality_score=request.min_quality_score if request.min_quality_score is not None else 80.0,
+            enable_clustering=request.enable_clustering if request.enable_clustering is not None else True,
+            clustering_threshold=request.clustering_threshold if request.clustering_threshold is not None else 0.8,
+            min_cluster_size=request.min_cluster_size if request.min_cluster_size is not None else 2,
+            max_messages_per_group=request.max_messages_per_group if request.max_messages_per_group is not None else 100,
+            max_session_hours=request.max_session_hours if request.max_session_hours is not None else 6,
+            gap_minutes=request.gap_minutes if request.gap_minutes is not None else 60,
+            enable_smart_aggregation=request.enable_smart_aggregation if request.enable_smart_aggregation is not None else True,
+            aggregation_strategy=request.aggregation_strategy if request.aggregation_strategy is not None else "smart",
+            now_window_hours=request.now_window_hours if request.now_window_hours is not None else 24,
+            fresh_window_days=request.fresh_window_days if request.fresh_window_days is not None else 14,
+            recent_window_days=request.recent_window_days if request.recent_window_days is not None else 30,
+            strategy_threshold=request.strategy_threshold if request.strategy_threshold is not None else 1000,
+            force=request.force_full,
+            enable_entity_learning=request.enable_entity_learning if request.enable_entity_learning is not None else True,
+            enable_time_analysis=request.enable_time_analysis if request.enable_time_analysis is not None else True,
         )
         
         # Обновляем статус
@@ -1192,15 +1292,15 @@ async def _run_indexing_job(
         # Запускаем индексацию
         stats = await indexer.build_index(
             scope="chat",
-            chat=chat,
-            force_full=force_full,
-            recent_days=recent_days,
+            chat=request.chat,
+            force_full=request.force_full,
+            recent_days=request.recent_days,
         )
         
         # Обновляем статус на "completed"
         _active_indexing_jobs[job_id] = {
             "status": "completed",
-            "chat": chat,
+            "chat": request.chat,
             "started_at": _active_indexing_jobs[job_id].get("started_at"),
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "sessions_indexed": stats.get("sessions_indexed", 0),
@@ -1208,14 +1308,14 @@ async def _run_indexing_job(
             "tasks_indexed": stats.get("tasks_indexed", 0),
         }
         
-        logger.info(f"Индексация чата '{chat}' завершена успешно (job_id: {job_id})")
+        logger.info(f"Индексация чата '{request.chat}' завершена успешно (job_id: {job_id})")
         
     except Exception as e:
-        logger.error(f"Ошибка при индексации чата '{chat}' (job_id: {job_id}): {e}", exc_info=True)
+        logger.error(f"Ошибка при индексации чата '{request.chat}' (job_id: {job_id}): {e}", exc_info=True)
         # Обновляем статус на "failed"
         _active_indexing_jobs[job_id] = {
             "status": "failed",
-            "chat": chat,
+            "chat": request.chat,
             "started_at": _active_indexing_jobs.get(job_id, {}).get("started_at"),
             "failed_at": datetime.now(timezone.utc).isoformat(),
             "error": str(e),
@@ -1261,9 +1361,7 @@ async def _start_indexing_job(
     asyncio.create_task(
         _run_indexing_job(
             job_id=job_id,
-            chat=request.chat,
-            force_full=request.force_full,
-            recent_days=request.recent_days,
+            request=request,
             adapter=adapter,
         )
     )
