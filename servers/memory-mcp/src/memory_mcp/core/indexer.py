@@ -63,6 +63,7 @@ class TwoLevelIndexer:
         force: bool = False,
         enable_entity_learning: bool = True,
         enable_time_analysis: bool = True,
+        graph: Optional[Any] = None,  # TypedGraphMemory
     ):
         """
         Инициализация индексатора
@@ -89,6 +90,7 @@ class TwoLevelIndexer:
             force: Принудительно пересоздать существующие артефакты
             enable_entity_learning: Включить автоматическое обучение словарей сущностей
             enable_time_analysis: Включить анализ временных паттернов
+            graph: Граф памяти для синхронизации записей (опционально)
         """
         self.chroma_client = chromadb.PersistentClient(path=chroma_path)
         self.artifacts_path = Path(artifacts_path).expanduser()
@@ -185,6 +187,16 @@ class TwoLevelIndexer:
             )
         else:
             self.smart_aggregator = None
+
+        # Инициализация графа памяти для синхронизации
+        self.graph = graph
+        if self.graph:
+            from ..memory.ingest import MemoryIngestor
+            self.ingestor = MemoryIngestor(self.graph)
+            logger.info("TwoLevelIndexer: граф памяти подключен, записи будут синхронизироваться")
+        else:
+            self.ingestor = None
+            logger.debug("TwoLevelIndexer: граф памяти не подключен, записи будут только в ChromaDB")
 
     def _initialize_collections(self):
         """Инициализация коллекций ChromaDB"""
@@ -1054,6 +1066,62 @@ class TwoLevelIndexer:
             metadatas=[metadata],
         )
 
+        # Синхронизация с графом памяти
+        if self.ingestor and self.graph:
+            from ..indexing import MemoryRecord
+            from ..utils.datetime_utils import parse_datetime_utc
+            
+            try:
+                # Парсим timestamp из метаданных
+                start_time_utc = meta.get("start_time_utc", "")
+                timestamp = parse_datetime_utc(start_time_utc, default=None) if start_time_utc else None
+                if not timestamp:
+                    from datetime import datetime, timezone
+                    timestamp = datetime.now(timezone.utc)
+                
+                # Создаём MemoryRecord для сессии
+                record = MemoryRecord(
+                    record_id=session_id,
+                    source=meta.get("chat_name", "unknown"),
+                    content=embedding_text,
+                    timestamp=timestamp,
+                    author=None,  # Сессии не имеют автора
+                    tags=[],
+                    entities=summary.get("entities", []),
+                    attachments=[],
+                    metadata={
+                        "chat": meta.get("chat_name", ""),
+                        "profile": meta.get("profile", ""),
+                        "start_time_utc": start_time_utc,
+                        "end_time_utc": meta.get("end_time_utc", ""),
+                        "time_span": meta.get("time_span", ""),
+                        "message_count": meta.get("messages_total", 0),
+                        "dominant_language": meta.get("dominant_language", "unknown"),
+                        "chat_mode": meta.get("chat_mode", "group"),
+                        "topics_count": len(summary.get("topics", [])),
+                        "claims_count": len(summary.get("claims", [])),
+                        "quality_score": summary.get("quality", {}).get("score", 0),
+                        "session_type": "session_summary",  # Помечаем как саммари сессии
+                    },
+                )
+                
+                # Сохраняем в граф
+                self.ingestor.ingest([record])
+                
+                # Сохраняем эмбеддинг в граф
+                if embedding:
+                    try:
+                        self.graph.update_node(
+                            session_id,
+                            embedding=embedding,
+                        )
+                    except Exception as e:
+                        logger.debug(f"Ошибка при сохранении эмбеддинга сессии {session_id}: {e}")
+                
+                logger.debug(f"Синхронизирована сессия {session_id} с графом памяти")
+            except Exception as e:
+                logger.warning(f"Ошибка при синхронизации сессии {session_id} с графом: {e}")
+
         logger.info(f"L1: Проиндексирована сессия {session_id}")
 
     async def _index_messages_l2(self, session: Dict[str, Any]) -> int:
@@ -1147,6 +1215,8 @@ class TwoLevelIndexer:
                     "msg_id": msg_id,
                     "msg_text": msg_text,
                     "embedding_text": embedding_text,
+                    "msg_index": i,  # Сохраняем индекс для извлечения автора
+                    "msg": msg,  # Сохраняем исходное сообщение для извлечения автора
                     "metadata": {
                         "msg_id": msg_id,
                         "session_id": session_id,
@@ -1194,6 +1264,79 @@ class TwoLevelIndexer:
                         embeddings=embeddings,
                         metadatas=metadatas,
                     )
+                    
+                    # Синхронизация с графом памяти
+                    if self.ingestor and self.graph:
+                        from ..indexing import MemoryRecord, Attachment
+                        from ..utils.datetime_utils import parse_datetime_utc
+                        
+                        records_to_ingest = []
+                        for idx, msg_data in enumerate(messages_to_index):
+                            try:
+                                msg_id = msg_data["msg_id"]
+                                msg_text = msg_data["msg_text"]
+                                metadata = msg_data["metadata"]
+                                embedding = embeddings[idx] if idx < len(embeddings) else None
+                                
+                                # Парсим timestamp
+                                date_utc = metadata.get("date_utc", "")
+                                timestamp = parse_datetime_utc(date_utc, default=None) if date_utc else None
+                                if not timestamp:
+                                    # Используем текущее время как fallback
+                                    from datetime import datetime, timezone
+                                    timestamp = datetime.now(timezone.utc)
+                                
+                                # Извлекаем автора из исходного сообщения
+                                author = None
+                                msg_obj = msg_data.get("msg")
+                                if msg_obj:
+                                    from_data = msg_obj.get("from") or {}
+                                    author = from_data.get("username") or from_data.get("display") or from_data.get("id")
+                                
+                                # Создаём MemoryRecord
+                                record = MemoryRecord(
+                                    record_id=msg_id,
+                                    source=metadata.get("chat", "unknown"),
+                                    content=msg_text,
+                                    timestamp=timestamp,
+                                    author=author,
+                                    tags=[],
+                                    entities=[],
+                                    attachments=[],
+                                    metadata={
+                                        "chat": metadata.get("chat", ""),
+                                        "session_id": metadata.get("session_id", ""),
+                                        "has_context": metadata.get("has_context", False),
+                                        "context_length": metadata.get("context_length", 0),
+                                        "chat_mode": metadata.get("chat_mode", "group"),
+                                        "date_utc": date_utc,
+                                    },
+                                )
+                                records_to_ingest.append((record, embedding))
+                            except Exception as e:
+                                logger.warning(f"Ошибка при подготовке записи {msg_data.get('msg_id', 'unknown')} для графа: {e}")
+                                continue
+                        
+                        # Сохраняем записи в граф батчем
+                        if records_to_ingest:
+                            try:
+                                records_only = [r for r, _ in records_to_ingest]
+                                self.ingestor.ingest(records_only)
+                                
+                                # Сохраняем эмбеддинги в граф
+                                for record, embedding in records_to_ingest:
+                                    if embedding:
+                                        try:
+                                            self.graph.update_node(
+                                                record.record_id,
+                                                embedding=embedding,
+                                            )
+                                        except Exception as e:
+                                            logger.debug(f"Ошибка при сохранении эмбеддинга для {record.record_id}: {e}")
+                                
+                                logger.debug(f"Синхронизировано {len(records_to_ingest)} записей с графом памяти")
+                            except Exception as e:
+                                logger.warning(f"Ошибка при синхронизации записей с графом: {e}")
                     
                     indexed_count += len(messages_to_index)
             except Exception as e:

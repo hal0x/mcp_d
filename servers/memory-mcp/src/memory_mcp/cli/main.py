@@ -1989,6 +1989,201 @@ def deduplicate(chats_dir):
     asyncio.run(_deduplicate())
 
 
+@cli.command("sync-chromadb")
+@click.option(
+    "--db-path",
+    default="data/memory_graph.db",
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Путь к SQLite базе типизированной памяти",
+)
+@click.option(
+    "--chroma-path",
+    default="chroma_db",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Путь к ChromaDB",
+)
+@click.option(
+    "--chat",
+    help="Синхронизировать только указанный чат",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Режим тестирования без изменений",
+)
+def sync_chromadb(db_path: Path, chroma_path: Path, chat: Optional[str], dry_run: bool):
+    """Синхронизация записей из ChromaDB в граф памяти.
+    
+    Эта команда мигрирует существующие записи из ChromaDB коллекций
+    (chat_messages, chat_sessions, chat_tasks) в граф памяти TypedGraphMemory.
+    Эмбеддинги также синхронизируются.
+    """
+    import chromadb
+    from ..memory.ingest import MemoryIngestor
+    from ..indexing import MemoryRecord
+    from ..utils.datetime_utils import parse_datetime_utc
+    from datetime import datetime, timezone
+    
+    logger.info("🔄 Начало синхронизации ChromaDB → Граф памяти")
+    
+    if dry_run:
+        logger.info("🔍 Режим тестирования (dry-run), изменения не будут сохранены")
+    
+    # Инициализация графа
+    graph = TypedGraphMemory(db_path=str(db_path))
+    ingestor = MemoryIngestor(graph)
+    
+    # Инициализация ChromaDB
+    chroma_client = chromadb.PersistentClient(path=str(chroma_path))
+    
+    total_synced = 0
+    total_errors = 0
+    
+    collections_to_sync = ["chat_messages", "chat_sessions", "chat_tasks"]
+    
+    for collection_name in collections_to_sync:
+        try:
+            collection = chroma_client.get_collection(collection_name)
+            total_count = collection.count()
+            
+            if total_count == 0:
+                logger.info(f"  Коллекция {collection_name}: пуста, пропускаем")
+                continue
+            
+            logger.info(f"  Коллекция {collection_name}: {total_count} записей")
+            
+            # Получаем все записи батчами
+            offset = 0
+            batch_size = 100
+            synced_in_collection = 0
+            
+            while offset < total_count:
+                try:
+                    result = collection.get(
+                        limit=batch_size,
+                        offset=offset,
+                        include=["documents", "metadatas", "embeddings"]
+                    )
+                    
+                    ids = result.get("ids", [])
+                    if not ids:
+                        break
+                    
+                    documents = result.get("documents", [])
+                    metadatas = result.get("metadatas", [])
+                    embeddings = result.get("embeddings", [])
+                    
+                    records_to_ingest = []
+                    
+                    for idx, record_id in enumerate(ids):
+                        try:
+                            # Проверяем, существует ли уже запись в графе
+                            if record_id in graph.graph:
+                                continue
+                            
+                            # Фильтр по чату, если указан
+                            metadata = metadatas[idx] if idx < len(metadatas) else {}
+                            if chat and metadata.get("chat") != chat:
+                                continue
+                            
+                            doc = documents[idx] if idx < len(documents) else ""
+                            embedding = embeddings[idx] if idx < len(embeddings) else None
+                            
+                            # Парсим timestamp
+                            date_utc = metadata.get("date_utc") or metadata.get("start_time_utc") or metadata.get("end_time_utc")
+                            timestamp = None
+                            if date_utc:
+                                try:
+                                    timestamp = parse_datetime_utc(date_utc, use_zoneinfo=True)
+                                except Exception:
+                                    timestamp = datetime.now(timezone.utc)
+                            else:
+                                timestamp = datetime.now(timezone.utc)
+                            
+                            # Извлекаем автора
+                            author = metadata.get("sender") or metadata.get("author") or metadata.get("username")
+                            
+                            # Извлекаем теги и сущности
+                            tags = metadata.get("tags", [])
+                            if isinstance(tags, str):
+                                tags = [tags] if tags else []
+                            
+                            entities = metadata.get("entities", [])
+                            if isinstance(entities, str):
+                                entities = [entities] if entities else []
+                            
+                            # Создаём MemoryRecord
+                            record = MemoryRecord(
+                                record_id=record_id,
+                                source=metadata.get("chat", collection_name.replace("chat_", "")),
+                                content=doc,
+                                timestamp=timestamp,
+                                author=author,
+                                tags=tags if isinstance(tags, list) else [],
+                                entities=entities if isinstance(entities, list) else [],
+                                attachments=[],
+                                metadata={
+                                    "collection": collection_name,
+                                    "chat": metadata.get("chat", ""),
+                                    **metadata,
+                                },
+                            )
+                            
+                            records_to_ingest.append((record, embedding))
+                            
+                        except Exception as e:
+                            logger.warning(f"Ошибка при подготовке записи {record_id}: {e}")
+                            total_errors += 1
+                            continue
+                    
+                    # Сохраняем записи в граф
+                    if records_to_ingest and not dry_run:
+                        try:
+                            records_only = [r for r, _ in records_to_ingest]
+                            ingestor.ingest(records_only)
+                            
+                            # Сохраняем эмбеддинги
+                            for record, embedding in records_to_ingest:
+                                if embedding:
+                                    try:
+                                        graph.update_node(record.record_id, embedding=embedding)
+                                    except Exception as e:
+                                        logger.debug(f"Ошибка при сохранении эмбеддинга для {record.record_id}: {e}")
+                            
+                            synced_in_collection += len(records_to_ingest)
+                            total_synced += len(records_to_ingest)
+                            
+                        except Exception as e:
+                            logger.error(f"Ошибка при сохранении записей в граф: {e}")
+                            total_errors += len(records_to_ingest)
+                    elif records_to_ingest and dry_run:
+                        synced_in_collection += len(records_to_ingest)
+                        total_synced += len(records_to_ingest)
+                    
+                    offset += len(ids)
+                    if len(ids) < batch_size:
+                        break
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка при обработке батча (offset={offset}): {e}")
+                    total_errors += batch_size
+                    offset += batch_size
+            
+            if synced_in_collection > 0:
+                logger.info(f"  ✅ Синхронизировано {synced_in_collection} записей из {collection_name}")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при синхронизации коллекции {collection_name}: {e}")
+            total_errors += 1
+    
+    if dry_run:
+        logger.info(f"🔍 Режим тестирования: было бы синхронизировано {total_synced} записей")
+    else:
+        logger.info(f"✅ Синхронизация завершена: {total_synced} записей, {total_errors} ошибок")
+    
+    graph.conn.close()
+
+
 @cli.command("stop-indexing")
 def stop_indexing():
     """🛑 Остановка всех процессов индексации

@@ -487,7 +487,7 @@ class MemoryServiceAdapter:
                     for collection_name in ["chat_messages", "chat_sessions", "chat_tasks"]:
                         try:
                             collection = chroma_client.get_collection(collection_name)
-                            result = collection.get(ids=[request.record_id], include=["documents", "metadatas"])
+                            result = collection.get(ids=[request.record_id], include=["documents", "metadatas", "embeddings"])
                             
                             if result.get("ids") and len(result["ids"]) > 0:
                                 doc = result["documents"][0] if result.get("documents") else ""
@@ -495,7 +495,9 @@ class MemoryServiceAdapter:
                                 
                                 # Преобразуем ChromaDB запись в MemoryRecordPayload
                                 chat_name = metadata.get("chat", collection_name.replace("chat_", ""))
-                                date_utc = metadata.get("date_utc", "")
+                                
+                                # Парсим timestamp из разных полей
+                                date_utc = metadata.get("date_utc") or metadata.get("start_time_utc") or metadata.get("end_time_utc")
                                 timestamp = None
                                 if date_utc:
                                     try:
@@ -505,14 +507,31 @@ class MemoryServiceAdapter:
                                 else:
                                     timestamp = datetime.now(timezone.utc)
                                 
+                                # Извлекаем автора из разных полей
+                                author = metadata.get("sender") or metadata.get("author") or metadata.get("username")
+                                
+                                # Извлекаем теги и сущности
+                                tags = metadata.get("tags", [])
+                                if isinstance(tags, str):
+                                    tags = [tags] if tags else []
+                                
+                                entities = metadata.get("entities", [])
+                                if isinstance(entities, str):
+                                    entities = [entities] if entities else []
+                                
+                                # Получаем эмбеддинг, если доступен
+                                embedding = None
+                                if result.get("embeddings") and len(result["embeddings"]) > 0:
+                                    embedding = result["embeddings"][0]
+                                
                                 payload = MemoryRecordPayload(
                                     record_id=request.record_id,
                                     source=chat_name,
                                     content=doc,
                                     timestamp=timestamp,
-                                    author=metadata.get("sender"),
-                                    tags=metadata.get("tags", []),
-                                    entities=[],
+                                    author=author,
+                                    tags=tags if isinstance(tags, list) else [],
+                                    entities=entities if isinstance(entities, list) else [],
                                     attachments=[],
                                     metadata={
                                         "collection": collection_name,
@@ -520,6 +539,30 @@ class MemoryServiceAdapter:
                                         **metadata,
                                     },
                                 )
+                                
+                                # Если эмбеддинг есть, но записи нет в графе, синхронизируем
+                                if embedding and request.record_id not in self.graph.graph:
+                                    try:
+                                        # Создаём узел в графе для синхронизации
+                                        from ..indexing import MemoryRecord
+                                        record = MemoryRecord(
+                                            record_id=request.record_id,
+                                            source=chat_name,
+                                            content=doc,
+                                            timestamp=timestamp,
+                                            author=author,
+                                            tags=tags if isinstance(tags, list) else [],
+                                            entities=entities if isinstance(entities, list) else [],
+                                            attachments=[],
+                                            metadata=payload.metadata,
+                                        )
+                                        self.ingestor.ingest([record])
+                                        # Сохраняем эмбеддинг
+                                        self.graph.update_node(request.record_id, embedding=embedding)
+                                        logger.debug(f"Синхронизирована запись {request.record_id} из ChromaDB в граф")
+                                    except Exception as e:
+                                        logger.debug(f"Ошибка при синхронизации записи {request.record_id}: {e}")
+                                
                                 return FetchResponse(record=payload)
                         except Exception as e:
                             logger.debug(f"Failed to fetch from collection {collection_name}: {e}")
@@ -897,23 +940,55 @@ class MemoryServiceAdapter:
                 for collection_name in ["chat_messages", "chat_sessions", "chat_tasks"]:
                     try:
                         collection = chroma_client.get_collection(collection_name)
-                        result = collection.get(include=["metadatas"])
+                        # Используем count() для получения общего количества записей
+                        total_count = collection.count()
                         
-                        metadatas = result.get("metadatas", [])
-                        for metadata in metadatas:
+                        # Получаем все метаданные для подсчёта источников и тегов
+                        # Используем scroll для больших коллекций
+                        all_metadatas = []
+                        offset = 0
+                        batch_size = 1000
+                        
+                        while offset < total_count:
+                            try:
+                                result = collection.get(
+                                    limit=batch_size,
+                                    offset=offset,
+                                    include=["metadatas"]
+                                )
+                                batch_metadatas = result.get("metadatas", [])
+                                if not batch_metadatas:
+                                    break
+                                all_metadatas.extend(batch_metadatas)
+                                offset += len(batch_metadatas)
+                                if len(batch_metadatas) < batch_size:
+                                    break
+                            except Exception as e:
+                                logger.debug(f"Ошибка при получении метаданных из {collection_name} (offset={offset}): {e}")
+                                break
+                        
+                        # Подсчитываем источники и теги
+                        for metadata in all_metadatas:
                             if not isinstance(metadata, dict):
                                 continue
                             
                             # Подсчитываем источники (чаты)
-                            chat = metadata.get("chat", collection_name.replace("chat_", ""))
+                            chat = metadata.get("chat")
                             if chat:
                                 sources_count[chat] = sources_count.get(chat, 0) + 1
+                            else:
+                                # Если chat не указан, используем имя коллекции
+                                source_name = collection_name.replace("chat_", "")
+                                sources_count[source_name] = sources_count.get(source_name, 0) + 1
                             
                             # Подсчитываем теги
                             tags = metadata.get("tags", [])
+                            if isinstance(tags, str):
+                                tags = [tags] if tags else []
                             if isinstance(tags, list):
                                 for tag in tags:
-                                    tags_count[tag] = tags_count.get(tag, 0) + 1
+                                    if tag:  # Пропускаем пустые теги
+                                        tags_count[tag] = tags_count.get(tag, 0) + 1
                     except Exception as e:
                         logger.debug(f"Ошибка при подсчёте статистики из коллекции {collection_name}: {e}")
                         continue
@@ -1968,13 +2043,14 @@ class MemoryServiceAdapter:
             base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
         )
         
-        # Инициализируем индексатор
+        # Инициализируем индексатор с графом памяти
         indexer = TwoLevelIndexer(
             chroma_path=settings.chroma_path,
             artifacts_path=settings.artifacts_path,
             embedding_client=embedding_client,
             enable_smart_aggregation=True,
             aggregation_strategy="smart",
+            graph=self.graph,  # Передаём граф для синхронизации записей
         )
         
         try:
