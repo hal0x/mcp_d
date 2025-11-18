@@ -95,6 +95,29 @@ servers/memory-mcp/config/quality_analysis_history/
 # Backup конфигурационные файлы
 config/*-backup.json
 
+# Криптографические ключи и сертификаты
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+*.keystore
+*.p8
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# Конфигурационные файлы с потенциально чувствительными данными
+*credentials*.json
+*secrets*.json
+*secrets*.yaml
+*secrets*.yml
+*config*.local.*
+*config*.prod.*
+
 # Документация и TODO
 MCP_SERVERS_COMPLIANCE_CHECKLIST.md
 QUICK_TODO.md
