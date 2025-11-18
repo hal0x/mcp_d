@@ -164,13 +164,15 @@ class EntityExtractor:
                 logger.warning(f"Ошибка инициализации Natasha: {e}")
                 self.enable_natasha = False
 
-    def extract_entities(self, text: str, chat_name: str = "") -> Dict[str, List[str]]:
+    def extract_entities(self, text: str, chat_name: str = "", author_username: Optional[str] = None, author_display_name: Optional[str] = None) -> Dict[str, List[str]]:
         """
         Извлечение всех сущностей из текста
 
         Args:
             text: Текст для анализа
             chat_name: Название чата для обучения словарей
+            author_username: Никнейм автора сообщения (опционально, для связывания имен)
+            author_display_name: Отображаемое имя автора (опционально, для связывания имен)
 
         Returns:
             Словарь с категориями сущностей
@@ -221,7 +223,7 @@ class EntityExtractor:
 
         # Автоматическое обучение словарей
         if self.enable_learning and self.entity_dictionary and chat_name:
-            self._update_learned_dictionaries(text, chat_name, entities)
+            self._update_learned_dictionaries(text, chat_name, entities, author_username=author_username, author_display_name=author_display_name)
 
         return entities
 
@@ -492,7 +494,7 @@ class EntityExtractor:
         
         return result
 
-    def _update_learned_dictionaries(self, text: str, chat_name: str, entities: Dict[str, List[str]]) -> None:
+    def _update_learned_dictionaries(self, text: str, chat_name: str, entities: Dict[str, List[str]], author_username: Optional[str] = None, author_display_name: Optional[str] = None) -> None:
         """Обновление словарей на основе извлеченных сущностей"""
         if not self.entity_dictionary:
             return
@@ -511,12 +513,12 @@ class EntityExtractor:
         # Отслеживаем криптовалютные адреса
         crypto_addresses = entities.get("crypto_addresses", [])
         for addr_info in crypto_addresses:
-            self.entity_dictionary.track_entity("crypto_addresses", addr_info["address"], chat_name)
+            self.entity_dictionary.track_entity("crypto_addresses", addr_info["address"], chat_name, author_username=author_username, author_display_name=author_display_name)
 
         # Отслеживаем остальные сущности
         for entity_type, entity_list in entity_mappings.items():
             for entity_value in entity_list:
-                self.entity_dictionary.track_entity(entity_type, entity_value, chat_name)
+                self.entity_dictionary.track_entity(entity_type, entity_value, chat_name, author_username=author_username, author_display_name=author_display_name)
 
     def extract_from_messages(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -549,10 +551,20 @@ class EntityExtractor:
         for msg in messages:
             text = msg.get("text", "")
             chat_name = msg.get("chat", "")
+            
+            # Извлекаем информацию об авторе для связывания имен с никнеймами
+            author_username = None
+            author_display_name = None
+            from_data = msg.get("from") or {}
+            if isinstance(from_data, dict):
+                author_username = from_data.get("username")
+                author_display_name = from_data.get("display")
+            elif isinstance(from_data, str):
+                author_display_name = from_data
 
             # Извлекаем сущности из текста
             if text:
-                entities = self.extract_entities(text, chat_name)
+                entities = self.extract_entities(text, chat_name, author_username=author_username, author_display_name=author_display_name)
 
                 # Агрегируем mentions
                 for mention in entities["mentions"]:

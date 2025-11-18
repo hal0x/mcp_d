@@ -60,6 +60,16 @@ class EntityDictionary:
             lambda: defaultdict(lambda: defaultdict(int))
         )
         
+        # Связи имен и никнеймов внутри чатов: {chat_name: {username: [display_names]}}
+        self.username_to_names: Dict[str, Dict[str, Set[str]]] = defaultdict(
+            lambda: defaultdict(set)
+        )
+        
+        # Обратные связи: {chat_name: {display_name: [usernames]}}
+        self.name_to_usernames: Dict[str, Dict[str, Set[str]]] = defaultdict(
+            lambda: defaultdict(set)
+        )
+        
         # Загруженные словари
         self.learned_dictionaries: Dict[str, Set[str]] = {
             entity_type: set() for entity_type in ENTITY_TYPES
@@ -73,7 +83,41 @@ class EntityDictionary:
         # Загружаем существующие словари
         self.load_dictionaries()
 
-    def track_entity(self, entity_type: str, value: str, chat_name: str) -> bool:
+    def link_username_to_name(self, chat_name: str, username: str, display_name: str) -> None:
+        """
+        Связывание никнейма с именем пользователя внутри чата
+        
+        Args:
+            chat_name: Название чата
+            username: Никнейм пользователя (без @)
+            display_name: Отображаемое имя пользователя
+        """
+        if not username or not display_name:
+            return
+        
+        username_normalized = username.lower().strip().replace('@', '')
+        display_name_normalized = display_name.strip()
+        
+        if username_normalized and display_name_normalized:
+            self.username_to_names[chat_name][username_normalized].add(display_name_normalized)
+            self.name_to_usernames[chat_name][display_name_normalized].add(username_normalized)
+            logger.debug(f"Связан никнейм @{username_normalized} с именем '{display_name_normalized}' в чате '{chat_name}'")
+
+    def is_username_in_chat(self, chat_name: str, value: str) -> bool:
+        """
+        Проверка, является ли значение никнеймом пользователя из чата
+        
+        Args:
+            chat_name: Название чата
+            value: Проверяемое значение
+            
+        Returns:
+            True если это никнейм пользователя из чата
+        """
+        normalized_value = value.lower().strip().replace('@', '')
+        return normalized_value in self.username_to_names.get(chat_name, {})
+
+    def track_entity(self, entity_type: str, value: str, chat_name: str, author_username: Optional[str] = None, author_display_name: Optional[str] = None) -> bool:
         """
         Отслеживание появления сущности
 
@@ -81,6 +125,8 @@ class EntityDictionary:
             entity_type: Тип сущности
             value: Значение сущности
             chat_name: Название чата
+            author_username: Никнейм автора сообщения (опционально, для связывания)
+            author_display_name: Отображаемое имя автора (опционально, для связывания)
 
         Returns:
             True если сущность добавлена в словарь, False иначе
@@ -91,6 +137,10 @@ class EntityDictionary:
 
         if not value or not value.strip():
             return False
+
+        # Связываем имя автора с никнеймом, если доступны
+        if author_username and author_display_name:
+            self.link_username_to_name(chat_name, author_username, author_display_name)
 
         # Нормализуем значение
         normalized_value = self._normalize_entity_value(value)
@@ -108,7 +158,7 @@ class EntityDictionary:
         if total_count >= threshold and normalized_value not in self.learned_dictionaries[entity_type]:
             # Валидация через LLM перед добавлением в словарь
             if self.enable_llm_validation:
-                is_valid = self._validate_entity_with_llm(entity_type, normalized_value, value)
+                is_valid = self._validate_entity_with_llm(entity_type, normalized_value, value, chat_name)
                 if not is_valid:
                     logger.debug(
                         f"Сущность отклонена LLM: {entity_type}={normalized_value} "
@@ -366,7 +416,7 @@ class EntityDictionary:
         return self._llm_client
 
     async def _validate_entity_with_llm_async(
-        self, entity_type: str, normalized_value: str, original_value: str
+        self, entity_type: str, normalized_value: str, original_value: str, chat_name: Optional[str] = None
     ) -> bool:
         """
         Асинхронная валидация сущности через LLM
@@ -398,15 +448,42 @@ class EntityDictionary:
         
         type_name = entity_type_names.get(entity_type, entity_type)
         
+        # Проверяем, не является ли это никнеймом пользователя из чата
+        is_username = False
+        username_context = ""
+        if chat_name and entity_type in ("telegram_channels", "telegram_bots"):
+            is_username = self.is_username_in_chat(chat_name, normalized_value)
+            if is_username:
+                # Получаем связанные имена для контекста
+                usernames_in_chat = list(self.username_to_names.get(chat_name, {}).keys())
+                if usernames_in_chat:
+                    username_context = f"\n\nВАЖНО: В этом чате есть пользователи с никнеймами: {', '.join(usernames_in_chat[:10])}. Если '{normalized_value}' является никнеймом пользователя из этого чата, а не каналом/ботом - отклони."
+        
+        # Специальные инструкции для разных типов сущностей
+        type_specific_rules = ""
+        if entity_type == "locations":
+            type_specific_rules = """
+ВАЖНО для локаций:
+- Учитывай склонения и падежи русских названий мест (города, страны, регионы могут быть в разных падежах)
+- Если корень слова совпадает с известным географическим названием, но окончание изменено (склонение) - прими
+- Склонения и падежи не должны быть причиной отклонения, если это явно географическое название"""
+        elif entity_type == "persons":
+            type_specific_rules = """
+ВАЖНО для имен:
+- Учитывай уменьшительные, ласкательные и сокращенные формы имен
+- Короткие имена могут быть валидными уменьшительными формами
+- В русском языке широко используются уменьшительные формы имен с различными суффиксами
+- Не отклоняй имя только из-за его длины или звучания, если оно может быть формой реального имени"""
+        
         prompt = f"""Ты эксперт по анализу текста. Определи, является ли данное слово/фраза действительно {type_name}.
 
-Слово/фраза для проверки: "{original_value}" (нормализованное: "{normalized_value}")
+Слово/фраза для проверки: "{original_value}" (нормализованное: "{normalized_value}"){username_context}
 
 Правила:
 1. Для типа "{entity_type}": это должно быть действительно {type_name}, а не обычное слово, глагол, прилагательное или другое слово общего назначения.
 2. Исключи мат, грубые слова, времена года, дни недели, обычные глаголы и прилагательные.
 3. Если это сокращение или опечатка - отклони.
-4. Если это имя собственное (начинается с заглавной буквы) и соответствует типу - прими.
+4. Если это никнейм пользователя из чата (не канал/бот) - отклони.{type_specific_rules}
 
 Ответь ТОЛЬКО одним словом: "ДА" если это валидная {type_name}, или "НЕТ" если это не валидная {type_name}.
 Не добавляй никаких объяснений, только "ДА" или "НЕТ"."""
@@ -455,7 +532,7 @@ class EntityDictionary:
             ) from e
 
     def _validate_entity_with_llm(
-        self, entity_type: str, normalized_value: str, original_value: str
+        self, entity_type: str, normalized_value: str, original_value: str, chat_name: Optional[str] = None
     ) -> bool:
         """
         Синхронная обертка для асинхронной валидации через LLM
@@ -464,6 +541,7 @@ class EntityDictionary:
             entity_type: Тип сущности
             normalized_value: Нормализованное значение
             original_value: Оригинальное значение
+            chat_name: Название чата (опционально, для проверки никнеймов)
             
         Returns:
             True если сущность валидна, False иначе
@@ -478,18 +556,18 @@ class EntityDictionary:
                     with concurrent.futures.ThreadPoolExecutor() as executor:
                         future = executor.submit(
                             asyncio.run,
-                            self._validate_entity_with_llm_async(entity_type, normalized_value, original_value)
+                            self._validate_entity_with_llm_async(entity_type, normalized_value, original_value, chat_name)
                         )
                         return future.result(timeout=5.0)  # Таймаут 5 секунд
                 else:
                     # Если loop не запущен, используем его
                     return loop.run_until_complete(
-                        self._validate_entity_with_llm_async(entity_type, normalized_value, original_value)
+                        self._validate_entity_with_llm_async(entity_type, normalized_value, original_value, chat_name)
                     )
             except RuntimeError:
                 # Если нет event loop, создаем новый
                 return asyncio.run(
-                    self._validate_entity_with_llm_async(entity_type, normalized_value, original_value)
+                    self._validate_entity_with_llm_async(entity_type, normalized_value, original_value, chat_name)
                 )
         except Exception as e:
             logger.warning(f"Ошибка при синхронной валидации сущности: {e}. Разрешаем добавление.")
