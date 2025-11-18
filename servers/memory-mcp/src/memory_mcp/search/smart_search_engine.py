@@ -12,7 +12,6 @@ from ..config import get_settings, get_quality_analysis_settings
 from ..core.lmstudio_client import LMStudioEmbeddingClient
 from ..core.ollama_client import OllamaEmbeddingClient
 from ..memory.artifacts_reader import ArtifactsReader, ArtifactSearchResult
-from ..mcp.adapters import MemoryServiceAdapter
 from ..mcp.schema import (
     SearchRequest,
     SearchResultItem,
@@ -29,7 +28,7 @@ class SmartSearchEngine:
 
     def __init__(
         self,
-        adapter: MemoryServiceAdapter,
+        adapter: "MemoryServiceAdapter",  # Используем строковую аннотацию для избежания циклического импорта
         artifacts_reader: ArtifactsReader,
         session_store: SearchSessionStore,
         min_confidence: float = 0.5,

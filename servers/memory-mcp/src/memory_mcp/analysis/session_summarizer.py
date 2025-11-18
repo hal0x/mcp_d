@@ -13,14 +13,21 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from typing import TYPE_CHECKING
+
+from ..config import get_settings
 from ..core.lmstudio_client import LMStudioEmbeddingClient
 from ..utils.naming import slugify
+from .adaptive_message_grouper import AdaptiveMessageGrouper
 from .context_manager import ContextManager
 from .entity_extraction import EntityExtractor
 from .incremental_context_manager import IncrementalContextManager
 from .instruction_manager import InstructionManager
 from .quality_evaluator import IterativeRefiner, QualityEvaluator
 from .session_segmentation import SessionSegmenter
+
+if TYPE_CHECKING:
+    from .large_context_processor import LargeContextProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +150,6 @@ class SessionSummarizer:
             min_quality_score: Минимальный приемлемый балл качества
         """
         if embedding_client is None:
-            from ..config import get_settings
             settings = get_settings()
             embedding_client = LMStudioEmbeddingClient(
                 model_name=settings.lmstudio_model,
@@ -151,6 +157,7 @@ class SessionSummarizer:
                 base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
             )
         self.embedding_client = embedding_client
+        settings = get_settings()
         self.entity_extractor = EntityExtractor()
         self.session_segmenter = SessionSegmenter()
         self.context_manager = ContextManager(summaries_dir)
@@ -168,6 +175,19 @@ class SessionSummarizer:
             target_score=max(
                 85.0, min_quality_score - 2.0
             ),  # Целевой балл чуть ниже min_quality для margin
+        )
+
+        # Инициализация процессора больших контекстов (отложенный импорт для избежания циклических зависимостей)
+        from .large_context_processor import LargeContextProcessor
+        
+        settings = get_settings()
+        self.large_context_processor = LargeContextProcessor(
+            max_tokens=settings.large_context_max_tokens,
+            prompt_reserve_tokens=settings.large_context_prompt_reserve,
+            hierarchical_threshold=settings.large_context_hierarchical_threshold,
+            embedding_client=self.embedding_client,
+            enable_hierarchical=settings.large_context_enable_hierarchical,
+            enable_caching=True,
         )
 
     async def summarize_session(self, session: Dict[str, Any]) -> Dict[str, Any]:
@@ -210,50 +230,86 @@ class SessionSummarizer:
         # Извлекаем сущности из сессии
         entities = self.entity_extractor.extract_from_messages(messages)
 
-        # Подготавливаем текст разговора
-        conversation_text = self._prepare_conversation_text(messages)
+        # Проверяем, нужна ли обработка большим контекстом
+        # Используем большие контексты только для действительно больших сессий (>100K токенов)
+        # чтобы не замедлять обработку маленьких сессий
+        estimated_tokens = self.large_context_processor.estimate_messages_tokens(messages)
+        use_large_context = estimated_tokens > 100000  # Используем для сессий > 100K токенов
 
-        # Создаём промпт для саммаризации с контекстом
-        prompt = self._create_summarization_prompt(
-            conversation_text,
-            chat,
-            dominant_language,
-            session,
-            chat_mode,
-            previous_context,
-            extended_context,
-        )
-
-        # Генерируем саммаризацию через LLM
-        # Если llm_model_name не указан в LM Studio, используем Ollama
-        if hasattr(self.embedding_client, 'llm_model_name') and not self.embedding_client.llm_model_name:
-            # Используем Ollama для генерации текста
-            from ..core.ollama_client import OllamaEmbeddingClient
-            from ..config import get_quality_analysis_settings
-            
-            qa_settings = get_quality_analysis_settings()
-            ollama_client = OllamaEmbeddingClient(
-                llm_model_name=qa_settings.ollama_model,
-                base_url=qa_settings.ollama_base_url
+        if use_large_context:
+            logger.info(
+                f"Используется обработка большим контекстом для сессии {session_id} "
+                f"(~{estimated_tokens} токенов)"
             )
-            async with ollama_client:
-                summary_text = await ollama_client.generate_summary(
-                    prompt=prompt,
-                    temperature=0.3,
-                    max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
-                    top_p=0.93,
-                    presence_penalty=0.05,
-                )
+            # Используем LargeContextProcessor для больших сессий
+            # Создаем базовый промпт без conversation_text (он будет добавлен процессором)
+            base_prompt = self._create_summarization_prompt(
+                "",  # Пустой текст, так как процессор сам форматирует сообщения
+                chat,
+                dominant_language,
+                session,
+                chat_mode,
+                previous_context,
+                extended_context,
+            )
+            
+            large_context_result = await self.large_context_processor.process_large_context(
+                messages, chat, base_prompt
+            )
+            
+            # Используем саммаризацию из результата
+            summary_text = large_context_result.get("summary", "")
+            if not summary_text and large_context_result.get("detailed_summaries"):
+                # Объединяем детальные саммаризации
+                summary_text = "\n\n".join([
+                    s.get("summary", "") for s in large_context_result["detailed_summaries"]
+                ])
         else:
-            # Используем LM Studio для генерации текста
-            async with self.embedding_client:
-                summary_text = await self.embedding_client.generate_summary(
-                    prompt=prompt,
-                    temperature=0.3,
-                    max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
-                    top_p=0.93,
-                    presence_penalty=0.05,
+            # Стандартная обработка для небольших сессий
+            # Подготавливаем текст разговора
+            conversation_text = self._prepare_conversation_text(messages)
+
+            # Создаём промпт для саммаризации с контекстом
+            prompt = self._create_summarization_prompt(
+                conversation_text,
+                chat,
+                dominant_language,
+                session,
+                chat_mode,
+                previous_context,
+                extended_context,
+            )
+
+            # Генерируем саммаризацию через LLM
+            # Если llm_model_name не указан в LM Studio, используем Ollama
+            if hasattr(self.embedding_client, 'llm_model_name') and not self.embedding_client.llm_model_name:
+                # Используем Ollama для генерации текста
+                from ..core.ollama_client import OllamaEmbeddingClient
+                from ..config import get_quality_analysis_settings
+                
+                qa_settings = get_quality_analysis_settings()
+                ollama_client = OllamaEmbeddingClient(
+                    llm_model_name=qa_settings.ollama_model,
+                    base_url=qa_settings.ollama_base_url
                 )
+                async with ollama_client:
+                    summary_text = await ollama_client.generate_summary(
+                        prompt=prompt,
+                        temperature=0.3,
+                        max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
+                        top_p=0.93,
+                        presence_penalty=0.05,
+                    )
+            else:
+                # Используем LM Studio для генерации текста
+                async with self.embedding_client:
+                    summary_text = await self.embedding_client.generate_summary(
+                        prompt=prompt,
+                        temperature=0.3,
+                        max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
+                        top_p=0.93,
+                        presence_penalty=0.05,
+                    )
 
         # Парсим структурированную саммаризацию и дополняем пропуски при необходимости
         summary_structure = self._parse_summary_structure(summary_text)
@@ -631,9 +687,9 @@ class SessionSummarizer:
                 # Ограничиваем размер недавнего контекста
                 recent_context = previous_context["recent_context"]
                 if (
-                    len(recent_context) > 8000
-                ):  # Увеличиваем до 8000 символов (~2000 токенов)
-                    recent_context = recent_context[:8000] + "..."
+                    len(recent_context) > 100000
+                ):  # Увеличиваем до 100000 символов (~25000 токенов) для эффективного использования большого контекста
+                    recent_context = recent_context[:100000] + "..."
                 context_section += f"\nНедавний контекст: {recent_context}\n"
 
             if previous_context["ongoing_decisions"]:
@@ -663,8 +719,8 @@ class SessionSummarizer:
         if previous_context.get("chat_context"):
             chat_context = previous_context["chat_context"]
             # Ограничиваем размер контекста чата
-            if len(chat_context) > 4000:  # Увеличиваем до 4000 символов (~1000 токенов)
-                chat_context = chat_context[:4000] + "..."
+            if len(chat_context) > 50000:  # Увеличено до 50000 символов (~12500 токенов) для эффективного использования большого контекста
+                chat_context = chat_context[:50000] + "..."
             chat_context_section = f"""
 ## Образ чата
 {chat_context}
@@ -676,7 +732,7 @@ class SessionSummarizer:
         if extended_context and extended_context.get("previous_messages_count", 0) > 0:
             extended_context_text = (
                 self.incremental_context_manager.format_context_for_prompt(
-                    extended_context, max_context_length=8000
+                    extended_context, max_context_length=100000  # Увеличено для эффективного использования большого контекста
                 )
             )
             extended_context_section = f"""

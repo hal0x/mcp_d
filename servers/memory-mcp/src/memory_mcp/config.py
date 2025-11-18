@@ -48,6 +48,26 @@ class Settings(BaseSettings):
     db_path: str = Field("data/memory_graph.db", description="Путь к SQLite базе данных")
     embeddings_url: SecretStr | None = Field(None, description="URL сервиса эмбеддингов (приоритет над LM Studio)")
     qdrant_url: SecretStr | None = Field(None, description="URL Qdrant векторной базы данных")
+    
+    # Настройки больших контекстов
+    large_context_max_tokens: int = Field(
+        131072, description="Максимальный контекст модели (токенов)"
+    )
+    large_context_prompt_reserve: int = Field(
+        5000, description="Резерв токенов для промпта"
+    )
+    large_context_hierarchical_threshold: int = Field(
+        100000, description="Порог для включения иерархической обработки (токенов)"
+    )
+    large_context_enable_hierarchical: bool = Field(
+        True, description="Включить иерархическую обработку"
+    )
+    large_context_use_smart_search: bool = Field(
+        True, description="Использовать smart_search для анализа контекста"
+    )
+    large_context_cache_size: int = Field(
+        100, description="Размер кэша для промежуточных результатов"
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="MEMORY_MCP_",
@@ -286,6 +306,9 @@ def _apply_env_aliases() -> None:
         "MEMORY_MCP_LMSTUDIO_MODEL": ["LMSTUDIO_MODEL"],
         "MEMORY_MCP_EMBEDDINGS_URL": ["EMBEDDINGS_URL"],
         "MEMORY_MCP_QDRANT_URL": ["QDRANT_URL"],
+        "MEMORY_MCP_LARGE_CONTEXT_MAX_TOKENS": ["LARGE_CONTEXT_MAX_TOKENS"],
+        "MEMORY_MCP_LARGE_CONTEXT_ENABLE_HIERARCHICAL": ["LARGE_CONTEXT_ENABLE_HIERARCHICAL"],
+        "MEMORY_MCP_LARGE_CONTEXT_USE_SMART_SEARCH": ["LARGE_CONTEXT_USE_SMART_SEARCH"],
     }
 
     for target, candidates in alias_map.items():

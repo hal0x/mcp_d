@@ -19,7 +19,9 @@ from typing import Any, Dict, List, Optional
 
 from ..utils.datetime_utils import format_datetime_display
 
+from ..config import get_settings
 from ..core.lmstudio_client import LMStudioEmbeddingClient
+from .adaptive_message_grouper import AdaptiveMessageGrouper
 from .context_manager import ContextManager
 from .session_segmentation import SessionSegmenter
 from .session_summarizer import SessionSummarizer
@@ -60,6 +62,7 @@ class SmartTimeWindow:
 
 
 # Умная стратегия с учетом связанности
+# Оптимизировано для баланса между качеством и производительностью
 SMART_STRATEGY = [
     SmartTimeWindow(
         "now", 0, 1, "session", keep_original=True, summarize=True, use_context=True
@@ -67,14 +70,14 @@ SMART_STRATEGY = [
     SmartTimeWindow(
         "fresh",
         1,
-        14,
+        7,  # Уменьшено с 14 до 7 дней для более быстрой обработки
         "session",
         keep_original=True,
         summarize=False,
         use_context=False,
     ),
     SmartTimeWindow(
-        "recent", 14, 30, "week", keep_original=False, summarize=True, use_context=False
+        "recent", 7, 30, "week", keep_original=False, summarize=True, use_context=False  # Начало сдвинуто с 14 на 7 дней
     ),
     SmartTimeWindow(
         "old",
@@ -93,10 +96,10 @@ CHANNEL_STRATEGY = [
         "now", 0, 1, "day", keep_original=True, summarize=True, use_context=True
     ),
     SmartTimeWindow(
-        "fresh", 1, 14, "day", keep_original=True, summarize=False, use_context=False
+        "fresh", 1, 7, "day", keep_original=True, summarize=False, use_context=False  # Уменьшено с 14 до 7 дней
     ),
     SmartTimeWindow(
-        "recent", 14, 30, "week", keep_original=False, summarize=True, use_context=False
+        "recent", 7, 30, "week", keep_original=False, summarize=True, use_context=False  # Начало сдвинуто с 14 на 7 дней
     ),
     SmartTimeWindow(
         "old",
@@ -184,14 +187,28 @@ class SmartRollingAggregator:
         self.use_smart_strategy = use_smart_strategy
 
         # Компоненты для умной обработки
+        # Оптимизированные настройки для баланса между связанностью и производительностью
         self.session_segmenter = SessionSegmenter(
-            gap_minutes=240,  # Увеличиваем разрыв до 4 часов для максимальной связанности
-            max_session_hours=24,  # Увеличиваем максимальную длительность до 24 часов
+            gap_minutes=180,  # 3 часа - баланс между связанностью и количеством сессий
+            max_session_hours=12,  # 12 часов - уменьшено для более эффективной обработки
         )
         self.context_manager = ContextManager(summaries_dir)
         self.session_summarizer = SessionSummarizer(
             embedding_client=self.embedding_client,
             summaries_dir=summaries_dir,
+        )
+
+        # Инициализация процессора больших контекстов (отложенный импорт для избежания циклических зависимостей)
+        from .large_context_processor import LargeContextProcessor
+        
+        settings = get_settings()
+        self.large_context_processor = LargeContextProcessor(
+            max_tokens=settings.large_context_max_tokens,
+            prompt_reserve_tokens=settings.large_context_prompt_reserve,
+            hierarchical_threshold=settings.large_context_hierarchical_threshold,
+            embedding_client=self.embedding_client,
+            enable_hierarchical=settings.large_context_enable_hierarchical,
+            enable_caching=True,
         )
 
         logger.info("Инициализирован SmartRollingAggregator")
@@ -650,36 +667,71 @@ class SmartRollingAggregator:
         """
         Саммаризация с учетом контекста
 
-        Для NOW окна использует контекст из предыдущих сообщений
+        Для NOW окна использует контекст из предыдущих сообщений.
+        Использует LargeContextProcessor для больших окон.
         """
         if not messages:
             return ""
 
-        # Формируем текст сообщений
-        text_parts = []
-        for msg in messages[:50]:  # Ограничиваем количество
-            date = msg.get("date_utc", "Unknown")
-            sender = msg.get("from", {})
-            sender_name = (
-                sender.get("display", "Unknown")
-                if isinstance(sender, dict)
-                else "Unknown"
+        # Проверяем размер контекста
+        # Используем большие контексты только для действительно больших окон (>100K токенов)
+        # чтобы не замедлять обработку маленьких окон
+        estimated_tokens = self.large_context_processor.estimate_messages_tokens(messages)
+        use_large_context = estimated_tokens > 100000  # Используем для окон > 100K токенов
+
+        if use_large_context:
+            logger.info(
+                f"Используется обработка большим контекстом для окна {window_name} "
+                f"(~{estimated_tokens} токенов)"
             )
-            text = msg.get("text", "")
+            # Создаем промпт с контекстом
+            context_part = ""
+            if previous_context:
+                context_part = (
+                    f"\n\nКонтекст из предыдущих сообщений:\n{previous_context}\n"
+                )
 
-            if text:
-                text_parts.append(f"[{date}] {sender_name}: {text[:200]}")
+            prompt = f"""Создай краткую саммаризацию следующих сообщений из чата "{chat_name}".
+{context_part}
+Укажи:
+1. Основные темы обсуждения
+2. Ключевые решения или события
+3. Важные упоминания (люди, проекты)
 
-        conversation_text = "\n".join(text_parts)
+Саммаризация (3-4 предложения):"""
 
-        # Создаем промпт с контекстом
-        context_part = ""
-        if previous_context:
-            context_part = (
-                f"\n\nКонтекст из предыдущих сообщений:\n{previous_context}\n"
+            # Используем LargeContextProcessor
+            result = await self.large_context_processor.process_large_context(
+                messages, chat_name, prompt
             )
+            return result.get("summary", "").strip()
+        else:
+            # Стандартная обработка для небольших окон
+            # Формируем текст сообщений
+            text_parts = []
+            for msg in messages[:50]:  # Ограничиваем количество
+                date = msg.get("date_utc", "Unknown")
+                sender = msg.get("from", {})
+                sender_name = (
+                    sender.get("display", "Unknown")
+                    if isinstance(sender, dict)
+                    else "Unknown"
+                )
+                text = msg.get("text", "")
 
-        prompt = f"""Создай краткую саммаризацию следующих сообщений из чата "{chat_name}".
+                if text:
+                    text_parts.append(f"[{date}] {sender_name}: {text[:200]}")
+
+            conversation_text = "\n".join(text_parts)
+
+            # Создаем промпт с контекстом
+            context_part = ""
+            if previous_context:
+                context_part = (
+                    f"\n\nКонтекст из предыдущих сообщений:\n{previous_context}\n"
+                )
+
+            prompt = f"""Создай краткую саммаризацию следующих сообщений из чата "{chat_name}".
 {context_part}
 Укажи:
 1. Основные темы обсуждения
@@ -691,17 +743,17 @@ class SmartRollingAggregator:
 
 Саммаризация (3-4 предложения):"""
 
-        try:
-            async with self.embedding_client:
-                summary = await self.embedding_client.generate_summary(
-                    prompt=prompt,
-                    temperature=0.3,
-                    max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
-                )
-            return summary.strip()
-        except Exception as e:
-            logger.error(f"Ошибка саммаризации: {e}")
-            return f"Блок из {len(messages)} сообщений в окне {window_name}"
+            try:
+                async with self.embedding_client:
+                    summary = await self.embedding_client.generate_summary(
+                        prompt=prompt,
+                        temperature=0.3,
+                        max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
+                    )
+                return summary.strip()
+            except Exception as e:
+                logger.error(f"Ошибка саммаризации: {e}")
+                return f"Блок из {len(messages)} сообщений в окне {window_name}"
 
     async def _process_now_window(
         self,
