@@ -188,9 +188,9 @@ class MemoryServiceAdapter:
             self.vector_store.ensure_collection(self.embedding_service.dimension)
         self.trading_memory = TradingMemory(self.graph)
         # Веса для гибридного поиска (FTS + векторный)
-        # Нормализуем веса так, чтобы их сумма была 1.0
-        _fts_weight_raw = 0.6
-        _vector_weight_raw = 0.8
+        # Увеличиваем приоритет FTS5 результатов для лучшего ранжирования
+        _fts_weight_raw = 0.8
+        _vector_weight_raw = 0.2
         _total_weight = _fts_weight_raw + _vector_weight_raw
         self._fts_weight = _fts_weight_raw / _total_weight
         self._vector_weight = _vector_weight_raw / _total_weight
@@ -460,12 +460,12 @@ class MemoryServiceAdapter:
         
         for match in chromadb_results:
             record_id = match.record_id
-            score = match.score * 0.3  # Низкий вес для ChromaDB результатов (дополнительный источник)
+            score = match.score * 0.05  # Очень низкий вес для ChromaDB результатов (дополнительный источник)
             existing = combined.get(record_id)
             if existing:
-                # Обновляем score только если ChromaDB результат значительно лучше
-                # Предпочитаем FTS5 результаты, так как они более точные
-                if score > existing.score * 1.5:  # Только если ChromaDB score в 1.5 раза лучше
+                # FTS5 результаты имеют приоритет - не перезаписываем их ChromaDB результатами
+                # Только если это не FTS5 результат (score < 0.2) и ChromaDB результат значительно лучше
+                if existing.score < 0.2 and score > existing.score * 2.0:
                     existing.score = score
                 # Если в ChromaDB результате нет эмбеддинга, но есть в существующем, сохраняем его
                 if existing.embedding and not match.embedding:

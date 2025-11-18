@@ -99,7 +99,12 @@ class EntityExtractor:
         "1INCH",
     }
 
-    def __init__(self, enable_learning: bool = True, enable_natasha: bool = True):
+    def __init__(
+        self, 
+        enable_learning: bool = True, 
+        enable_natasha: bool = True,
+        enable_llm_validation: bool = True,
+    ):
         """
         Инициализация экстрактора
         
@@ -132,7 +137,15 @@ class EntityExtractor:
         self.enable_natasha = enable_natasha and NATASHA_AVAILABLE
         
         # Словарь сущностей для автоматического обучения
-        self.entity_dictionary = get_entity_dictionary() if enable_learning else None
+        self.enable_llm_validation = enable_llm_validation
+        if enable_learning:
+            # Передаем флаг валидации в словарь
+            entity_dict = get_entity_dictionary()
+            if hasattr(entity_dict, 'enable_llm_validation'):
+                entity_dict.enable_llm_validation = enable_llm_validation
+            self.entity_dictionary = entity_dict
+        else:
+            self.entity_dictionary = None
         
         # Natasha компоненты для извлечения именованных сущностей
         self.natasha_components = None
@@ -333,9 +346,25 @@ class EntityExtractor:
         return list(dict.fromkeys(all_files))
 
     def _extract_persons(self, text: str) -> List[str]:
-        """Извлечение имен людей через Natasha"""
+        """Извлечение имен людей через Natasha с фильтрацией глаголов и обычных слов"""
         if not self.enable_natasha or not self.natasha_components:
             return []
+
+        # Стоп-слова, которые не должны попадать в словарь имен
+        # Включаем как нижний регистр (для проверки), так и с заглавной буквы
+        stop_words = {
+            'бля', 'блять', 'блядь', 'хуй', 'пизда', 'ебан', 'ебанутый',
+            'весна', 'лето', 'осень', 'зима', 'день', 'ночь', 'утро', 'вечер',
+            'походила', 'позвоню', 'сказал', 'сказала', 'говорил', 'говорила',
+            'делал', 'делала', 'ходил', 'ходила', 'пришел', 'пришла',
+            'саш', 'аллой', 'снежаны',  # Примеры из логов - явно не имена
+            # С заглавной буквы тоже
+            'Бля', 'Блять', 'Блядь', 'Хуй', 'Пизда', 'Ебан', 'Ебанутый',
+            'Весна', 'Лето', 'Осень', 'Зима', 'День', 'Ночь', 'Утро', 'Вечер',
+            'Походила', 'Позвоню', 'Сказал', 'Сказала', 'Говорил', 'Говорила',
+            'Делал', 'Делала', 'Ходил', 'Ходила', 'Пришел', 'Пришла',
+            'Саш', 'Аллой', 'Снежаны',
+        }
 
         try:
             doc = Doc(text)
@@ -347,8 +376,37 @@ class EntityExtractor:
             for span in doc.spans:
                 if span.type == 'PER':  # Person
                     person_name = span.text.strip()
-                    if len(person_name) > 2:  # Фильтруем слишком короткие имена
-                        persons.append(person_name)
+                    
+                    # Фильтруем слишком короткие имена
+                    if len(person_name) <= 2:
+                        continue
+                    
+                    # Фильтруем стоп-слова (проверяем и в нижнем регистре, и в оригинальном)
+                    person_lower = person_name.lower()
+                    if person_lower in stop_words or person_name in stop_words:
+                        continue
+                    
+                    # Проверяем, что это не глагол - проверяем морфологический разбор
+                    # Имена обычно имеют признаки NOUN или PROPN, а не VERB
+                    is_verb = False
+                    for token in span.tokens:
+                        if token.pos == 'VERB' or 'VERB' in str(token.feats):
+                            is_verb = True
+                            break
+                    
+                    if is_verb:
+                        continue
+                    
+                    # Проверяем, что имя начинается с заглавной буквы (имена обычно пишутся с заглавной)
+                    # Это важная проверка для фильтрации обычных слов
+                    if not person_name[0].isupper():
+                        continue
+                    
+                    # Проверяем, что имя содержит только буквы (без цифр и специальных символов)
+                    if not person_name.replace(' ', '').replace('-', '').isalpha():
+                        continue
+                    
+                    persons.append(person_name)
 
             return list(dict.fromkeys(persons))  # Убираем дубликаты
         except Exception as e:

@@ -145,6 +145,7 @@ class TwoLevelIndexer:
         self.entity_extractor = EntityExtractor(
             enable_learning=enable_entity_learning,
             enable_natasha=True,
+            enable_llm_validation=True,  # Включить LLM валидацию для лучшего качества
         )
         
         # Инициализация TimeProcessor для анализа временных паттернов

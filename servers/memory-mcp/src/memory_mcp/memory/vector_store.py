@@ -69,7 +69,7 @@ class VectorStore:
 
         if url and QdrantClient is not None:
             try:
-                self.client = QdrantClient(url=url)
+                self.client = QdrantClient(url=url, check_compatibility=False)
                 logger.info("Vector store connected to %s", _mask_url_in_log(url))
             except Exception as exc:  # pragma: no cover
                 logger.warning("Failed to connect to Qdrant at %s: %s", _mask_url_in_log(url), exc)
@@ -260,12 +260,20 @@ class VectorStore:
         flt = qmodels.Filter(must=must) if must else None
 
         try:
-            result = self.client.search(
-                collection_name=self.collection,
-                query_vector=vector,
-                limit=limit,
-                filter=flt,
-            )
+            # Qdrant API: используем query_filter для фильтров (не filter!)
+            if flt:
+                result = self.client.search(
+                    collection_name=self.collection,
+                    query_vector=vector,
+                    limit=limit,
+                    query_filter=flt,
+                )
+            else:
+                result = self.client.search(
+                    collection_name=self.collection,
+                    query_vector=vector,
+                    limit=limit,
+                )
         except Exception as exc:  # pragma: no cover
             logger.warning("Vector search failed: %s", exc)
             return []

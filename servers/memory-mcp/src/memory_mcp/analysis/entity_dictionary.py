@@ -2,8 +2,10 @@
 """
 Модуль для автоматического обучения словарей сущностей
 Отслеживает частоту появления терминов и автоматически добавляет их в словари
+Использует LLM для валидации сущностей перед добавлением в словарь
 """
 
+import asyncio
 import json
 import logging
 from collections import defaultdict
@@ -29,14 +31,23 @@ ENTITY_TYPES = list(ENTITY_THRESHOLDS.keys())
 
 
 class EntityDictionary:
-    """Класс для автоматического обучения словарей сущностей"""
+    """Класс для автоматического обучения словарей сущностей
+    Использует LLM для валидации сущностей перед добавлением в словарь
+    """
 
-    def __init__(self, storage_path: Path = Path("config/entity_dictionaries")):
+    def __init__(
+        self, 
+        storage_path: Path = Path("config/entity_dictionaries"),
+        enable_llm_validation: bool = True,
+        llm_client: Optional[Any] = None,  # LMStudioEmbeddingClient или OllamaEmbeddingClient
+    ):
         """
         Инициализация словаря сущностей
 
         Args:
             storage_path: Путь к директории для хранения словарей
+            enable_llm_validation: Включить валидацию через LLM
+            llm_client: Клиент для LLM (опционально, создается автоматически если не указан)
         """
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
@@ -53,6 +64,11 @@ class EntityDictionary:
         self.learned_dictionaries: Dict[str, Set[str]] = {
             entity_type: set() for entity_type in ENTITY_TYPES
         }
+        
+        # LLM для валидации
+        self.enable_llm_validation = enable_llm_validation
+        self._llm_client = llm_client
+        self._llm_client_initialized = False
         
         # Загружаем существующие словари
         self.load_dictionaries()
@@ -90,6 +106,16 @@ class EntityDictionary:
         total_count = self.entity_counts[entity_type][normalized_value]
 
         if total_count >= threshold and normalized_value not in self.learned_dictionaries[entity_type]:
+            # Валидация через LLM перед добавлением в словарь
+            if self.enable_llm_validation:
+                is_valid = self._validate_entity_with_llm(entity_type, normalized_value, value)
+                if not is_valid:
+                    logger.debug(
+                        f"Сущность отклонена LLM: {entity_type}={normalized_value} "
+                        f"(встречается {total_count} раз, но не прошла валидацию)"
+                    )
+                    return False
+            
             self.learned_dictionaries[entity_type].add(normalized_value)
             logger.info(f"Добавлена новая сущность в словарь: {entity_type}={normalized_value} (встречается {total_count} раз)")
             return True
@@ -261,7 +287,7 @@ class EntityDictionary:
 
     def _normalize_entity_value(self, value: str) -> Optional[str]:
         """
-        Нормализация значения сущности
+        Нормализация значения сущности с дополнительной фильтрацией
 
         Args:
             value: Исходное значение
@@ -286,7 +312,185 @@ class EntityDictionary:
         if not normalized or len(normalized) < 2:
             return None
 
+        # Дополнительная фильтрация для имен (persons)
+        # Исключаем явно не-имена: глаголы, мат, обычные слова
+        stop_words = {
+            'бля', 'блять', 'блядь', 'хуй', 'пизда', 'ебан', 'ебанутый',
+            'весна', 'лето', 'осень', 'зима', 'день', 'ночь', 'утро', 'вечер',
+            'походила', 'позвоню', 'сказал', 'сказала', 'говорил', 'говорила',
+            'делал', 'делала', 'ходил', 'ходила', 'пришел', 'пришла',
+            'саш', 'аллой', 'снежаны',  # Примеры из логов - явно не имена
+        }
+        
+        if normalized in stop_words:
+            return None
+
         return normalized
+
+    def _get_llm_client(self):
+        """Получение или создание LLM клиента для валидации"""
+        if self._llm_client is not None:
+            return self._llm_client
+        
+        if not self._llm_client_initialized:
+            try:
+                from ..config import get_settings, get_quality_analysis_settings
+                from ..core.lmstudio_client import LMStudioEmbeddingClient
+                from ..core.ollama_client import OllamaEmbeddingClient
+                
+                settings = get_settings()
+                
+                # Пытаемся использовать LM Studio, если указана LLM модель
+                if settings.lmstudio_llm_model:
+                    self._llm_client = LMStudioEmbeddingClient(
+                        model_name=settings.lmstudio_model,  # Для эмбеддингов (не используется здесь)
+                        llm_model_name=settings.lmstudio_llm_model,  # Для генерации текста
+                        base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
+                    )
+                    logger.debug("Используется LM Studio для валидации сущностей")
+                else:
+                    # Используем Ollama как fallback
+                    qa_settings = get_quality_analysis_settings()
+                    self._llm_client = OllamaEmbeddingClient(
+                        llm_model_name=qa_settings.ollama_model,
+                        base_url=qa_settings.ollama_base_url
+                    )
+                    logger.debug("Используется Ollama для валидации сущностей")
+                
+                self._llm_client_initialized = True
+            except Exception as e:
+                logger.warning(f"Не удалось инициализировать LLM клиент для валидации: {e}")
+                self._llm_client = None
+                self._llm_client_initialized = True
+        
+        return self._llm_client
+
+    async def _validate_entity_with_llm_async(
+        self, entity_type: str, normalized_value: str, original_value: str
+    ) -> bool:
+        """
+        Асинхронная валидация сущности через LLM
+        
+        Args:
+            entity_type: Тип сущности (persons, organizations, locations и т.д.)
+            normalized_value: Нормализованное значение
+            original_value: Оригинальное значение (для контекста)
+            
+        Returns:
+            True если сущность валидна, False иначе
+        """
+        llm_client = self._get_llm_client()
+        if not llm_client:
+            # Если LLM недоступен, пропускаем валидацию (разрешаем добавление)
+            return True
+        
+        # Промпт для валидации сущностей
+        entity_type_names = {
+            "persons": "имя человека",
+            "organizations": "название организации",
+            "locations": "название места/локации",
+            "crypto_tokens": "криптовалютный токен",
+            "telegram_channels": "Telegram канал",
+            "telegram_bots": "Telegram бот",
+            "crypto_addresses": "криптовалютный адрес",
+            "domains": "доменное имя",
+        }
+        
+        type_name = entity_type_names.get(entity_type, entity_type)
+        
+        prompt = f"""Ты эксперт по анализу текста. Определи, является ли данное слово/фраза действительно {type_name}.
+
+Слово/фраза для проверки: "{original_value}" (нормализованное: "{normalized_value}")
+
+Правила:
+1. Для типа "{entity_type}": это должно быть действительно {type_name}, а не обычное слово, глагол, прилагательное или другое слово общего назначения.
+2. Исключи мат, грубые слова, времена года, дни недели, обычные глаголы и прилагательные.
+3. Если это сокращение или опечатка - отклони.
+4. Если это имя собственное (начинается с заглавной буквы) и соответствует типу - прими.
+
+Ответь ТОЛЬКО одним словом: "ДА" если это валидная {type_name}, или "НЕТ" если это не валидная {type_name}.
+Не добавляй никаких объяснений, только "ДА" или "НЕТ"."""
+
+        try:
+            # Используем async контекстный менеджер
+            async with llm_client:
+                if hasattr(llm_client, 'generate_summary'):
+                    # LMStudioEmbeddingClient или OllamaEmbeddingClient
+                    # Для reasoning-моделей увеличиваем max_tokens, так как они генерируют reasoning перед ответом
+                    # Минимум 50 токенов для reasoning-моделей, 20 для обычных
+                    base_max_tokens = 20
+                    # Проверяем, является ли модель reasoning-моделью
+                    if hasattr(llm_client, '_is_reasoning_model') and hasattr(llm_client, 'llm_model_name'):
+                        if llm_client._is_reasoning_model(llm_client.llm_model_name or ""):
+                            base_max_tokens = 100  # Больше токенов для reasoning-моделей
+                    
+                    response = await llm_client.generate_summary(
+                        prompt=prompt,
+                        temperature=0.1,  # Низкая температура для более детерминированных ответов
+                        max_tokens=base_max_tokens,  # Увеличено для поддержки reasoning-моделей
+                        top_p=0.9,
+                        presence_penalty=0.0,
+                    )
+                else:
+                    # Fallback - если метод называется по-другому
+                    logger.warning("LLM клиент не поддерживает generate_summary, пропускаем валидацию")
+                    return True
+                
+                # Парсим ответ
+                response_clean = response.strip().upper()
+                if "ДА" in response_clean or "YES" in response_clean:
+                    return True
+                elif "НЕТ" in response_clean or "NO" in response_clean:
+                    return False
+                else:
+                    # Если ответ неоднозначный, логируем и разрешаем (консервативный подход)
+                    logger.debug(f"Неоднозначный ответ LLM для '{normalized_value}': '{response}'. Разрешаем добавление.")
+                    return True
+                    
+        except Exception as e:
+            logger.warning(f"Ошибка при валидации сущности '{normalized_value}' через LLM: {e}. Разрешаем добавление.")
+            return True  # При ошибке разрешаем добавление (консервативный подход)
+
+    def _validate_entity_with_llm(
+        self, entity_type: str, normalized_value: str, original_value: str
+    ) -> bool:
+        """
+        Синхронная обертка для асинхронной валидации через LLM
+        
+        Args:
+            entity_type: Тип сущности
+            normalized_value: Нормализованное значение
+            original_value: Оригинальное значение
+            
+        Returns:
+            True если сущность валидна, False иначе
+        """
+        try:
+            # Пытаемся получить существующий event loop
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Если loop уже запущен, создаем новый в отдельном потоке
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(
+                            asyncio.run,
+                            self._validate_entity_with_llm_async(entity_type, normalized_value, original_value)
+                        )
+                        return future.result(timeout=5.0)  # Таймаут 5 секунд
+                else:
+                    # Если loop не запущен, используем его
+                    return loop.run_until_complete(
+                        self._validate_entity_with_llm_async(entity_type, normalized_value, original_value)
+                    )
+            except RuntimeError:
+                # Если нет event loop, создаем новый
+                return asyncio.run(
+                    self._validate_entity_with_llm_async(entity_type, normalized_value, original_value)
+                )
+        except Exception as e:
+            logger.warning(f"Ошибка при синхронной валидации сущности: {e}. Разрешаем добавление.")
+            return True  # При ошибке разрешаем добавление
 
     def export_dictionary(self, entity_type: str, format: str = "json") -> Optional[str]:
         """
@@ -339,11 +543,19 @@ class EntityDictionary:
 _global_entity_dictionary: Optional[EntityDictionary] = None
 
 
-def get_entity_dictionary() -> EntityDictionary:
-    """Получение глобального экземпляра словаря сущностей"""
+def get_entity_dictionary(enable_llm_validation: bool = True) -> EntityDictionary:
+    """
+    Получение глобального экземпляра словаря сущностей
+    
+    Args:
+        enable_llm_validation: Включить валидацию через LLM (по умолчанию True)
+    """
     global _global_entity_dictionary
     if _global_entity_dictionary is None:
-        _global_entity_dictionary = EntityDictionary()
+        _global_entity_dictionary = EntityDictionary(enable_llm_validation=enable_llm_validation)
+    else:
+        # Обновляем флаг валидации, если словарь уже создан
+        _global_entity_dictionary.enable_llm_validation = enable_llm_validation
     return _global_entity_dictionary
 
 

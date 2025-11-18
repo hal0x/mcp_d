@@ -42,6 +42,15 @@ class LMStudioEmbeddingClient:
         self.max_text_length = max_text_length
         self.session = None
         self._embedding_dimension: Optional[int] = None
+        
+        # Список известных reasoning моделей (модели, которые генерируют reasoning перед ответом)
+        self._reasoning_models = {
+            "gpt-oss-20b",
+            "gpt-oss-20b:latest",
+            "gpt-oss",
+            "deepseek",
+            "deepseek-reasoner",
+        }
 
     async def __aenter__(self):
         """Асинхронный контекстный менеджер - вход"""
@@ -692,6 +701,34 @@ class LMStudioEmbeddingClient:
             logger.info(f"✅ Объединены {len(summaries)} частей саммаризации")
             return combined
 
+    def _is_reasoning_model(self, model_name: str) -> bool:
+        """Проверяет, является ли модель reasoning-моделью (генерирует reasoning перед ответом)"""
+        if not model_name:
+            return False
+        model_lower = model_name.lower()
+        # Проверяем точное совпадение или вхождение в название
+        for reasoning_model in self._reasoning_models:
+            if reasoning_model.lower() in model_lower:
+                return True
+        return False
+    
+    def _adjust_max_tokens_for_reasoning(self, model_name: str, max_tokens: int) -> int:
+        """Увеличивает max_tokens для reasoning-моделей, чтобы учесть токены на reasoning"""
+        if not self._is_reasoning_model(model_name):
+            return max_tokens
+        
+        # Для reasoning-моделей добавляем резерв для reasoning (обычно 200-500 токенов)
+        # Минимальный max_tokens для reasoning-моделей - 200
+        reasoning_reserve = 500
+        adjusted_max_tokens = max(max_tokens + reasoning_reserve, 200)
+        
+        logger.debug(
+            f"Обнаружена reasoning-модель '{model_name}'. "
+            f"Увеличиваем max_tokens с {max_tokens} до {adjusted_max_tokens} "
+            f"(резерв для reasoning: {reasoning_reserve} токенов)"
+        )
+        return adjusted_max_tokens
+
     async def _generate_single_summary(
         self,
         prompt: str,
@@ -716,6 +753,9 @@ class LMStudioEmbeddingClient:
             logger.error(error_msg)
             return f"Ошибка: {error_msg}"
         
+        # Увеличиваем max_tokens для reasoning-моделей
+        adjusted_max_tokens = self._adjust_max_tokens_for_reasoning(llm_model, max_tokens)
+        
         # LM Studio использует OpenAI-совместимый API для chat completions
         payload = {
             "model": llm_model,  # Используем LLM модель, а не модель эмбеддингов
@@ -727,7 +767,7 @@ class LMStudioEmbeddingClient:
                 {"role": "user", "content": prompt},
             ],
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_tokens": adjusted_max_tokens,  # Используем скорректированное значение
             "top_p": top_p,
             "presence_penalty": presence_penalty,
             "stream": False,
