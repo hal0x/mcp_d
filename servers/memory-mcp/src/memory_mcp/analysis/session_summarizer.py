@@ -1148,6 +1148,12 @@ class SessionSummarizer:
         ):
             return structure, False
 
+        if strict_mode:
+            raise RuntimeError(
+                f"LLM вернул пустую или неполную структуру саммаризации для чата '{chat}'. "
+                "Проверьте конфигурацию LLM клиента."
+            )
+
         fallback = self._build_fallback_structure(messages, chat, chat_mode)
         patched = dict(structure)
 
