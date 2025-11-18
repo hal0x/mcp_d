@@ -7,7 +7,7 @@ services:
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -25,7 +25,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./infra/postgres/initdb.d:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tradingview}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tradingview}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -36,12 +36,12 @@ services:
       context: .
       dockerfile: infra/Dockerfile.base
     image: mcp-base:latest
-    profiles: ["build-only"]  # Этот сервис только для сборки базового образа
+    profiles: [ "build-only" ] # Этот сервис только для сборки базового образа
 
   binance-mcp:
     build:
       context: ../servers/binance-mcp
-      dockerfile: Dockerfile  # Используем основной Dockerfile
+      dockerfile: Dockerfile # Используем основной Dockerfile
     image: binance-mcp:latest
     restart: unless-stopped
     working_dir: /app
@@ -81,7 +81,7 @@ services:
     ports:
       - "8000:8000"
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8000), 3).close()'"]
+      test: [ "CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8000), 3).close()'" ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -90,7 +90,7 @@ services:
   tradingview-mcp:
     build:
       context: ../servers/tradingview-mcp
-      dockerfile: Dockerfile  # Используем основной Dockerfile
+      dockerfile: Dockerfile # Используем основной Dockerfile
     image: tradingview-mcp:latest
     restart: unless-stopped
     working_dir: /app
@@ -124,7 +124,7 @@ services:
     ports:
       - "8060:8000"
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8000), 3).close()'"]
+      test: [ "CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8000), 3).close()'" ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -153,7 +153,7 @@ services:
     ports:
       - "8070:8070"
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8070), 3).close()'"]
+      test: [ "CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8070), 3).close()'" ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -170,11 +170,16 @@ services:
       PYTHONUNBUFFERED: "1"
       HOST: 0.0.0.0
       PORT: 8050
+      # Memory MCP настройки
+      MEMORY_MCP_HOST: 0.0.0.0
+      MEMORY_MCP_PORT: 8050
+      MEMORY_MCP_TRANSPORT: streamable-http
       TG_DUMP_HOST: 0.0.0.0
       TG_DUMP_PORT: 8050
       TG_DUMP_TRANSPORT: streamable-http
       # Используем локальный путь для БД (монтируется из хоста)
       MEMORY_DB_PATH: /app/data/memory_graph.db
+      MEMORY_MCP_DB_PATH: /app/data/memory_graph.db
       # Путь к ChromaDB (монтируется как volume)
       MEMORY_MCP_CHROMA_PATH: /app/chroma_db
       # Настройки эмбеддингов (LM Studio)
@@ -182,8 +187,12 @@ services:
       LMSTUDIO_HOST: ${LMSTUDIO_HOST:-host.docker.internal}
       LMSTUDIO_PORT: ${LMSTUDIO_PORT:-1234}
       LMSTUDIO_MODEL: ${LMSTUDIO_MODEL:-text-embedding-qwen3-embedding-0.6b}
+      MEMORY_MCP_LMSTUDIO_HOST: ${LMSTUDIO_HOST:-host.docker.internal}
+      MEMORY_MCP_LMSTUDIO_PORT: ${LMSTUDIO_PORT:-1234}
+      MEMORY_MCP_LMSTUDIO_MODEL: ${LMSTUDIO_MODEL:-text-embedding-qwen3-embedding-0.6b}
       # Qdrant для векторного поиска
       QDRANT_URL: ${QDRANT_URL:-http://memory-qdrant:6333}
+      MEMORY_MCP_QDRANT_URL: ${QDRANT_URL:-http://memory-qdrant:6333}
     volumes:
       # Локальная директория для БД (создается автоматически)
       - ../servers/memory-mcp/data:/app/data
@@ -203,7 +212,7 @@ services:
     #   start_period: 30s
 
   memory-postgres:
-    profiles: ["memory-full"]
+    profiles: [ "memory-full" ]
     image: pgvector/pgvector:0.7.3-pg16
     container_name: memory-postgres
     restart: unless-stopped
@@ -214,7 +223,7 @@ services:
     volumes:
       - memory-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U memory"]
+      test: [ "CMD-SHELL", "pg_isready -U memory" ]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -228,27 +237,27 @@ services:
     ports:
       - "6333:6333"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      test: [ "CMD", "curl", "-f", "http://localhost:6333/" ]
       interval: 10s
       timeout: 5s
       retries: 6
 
   memory-redis:
-    profiles: ["memory-full"]
+    profiles: [ "memory-full" ]
     image: redis:7-alpine
     container_name: memory-redis
     restart: unless-stopped
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    command: [ "redis-server", "--save", "", "--appendonly", "no" ]
     volumes:
       - memory-redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 3s
       retries: 5
 
   memory-embeddings:
-    profiles: ["memory-full"]
+    profiles: [ "memory-full" ]
     image: ghcr.io/huggingface/text-embeddings-inference:latest
     container_name: memory-embeddings
     restart: unless-stopped
@@ -257,13 +266,13 @@ services:
     ports:
       - "8085:80"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost/health" ]
       interval: 10s
       timeout: 5s
       retries: 6
 
   memory-core:
-    profiles: ["memory-full"]
+    profiles: [ "memory-full" ]
     build:
       context: ../servers/memory-mcp
       dockerfile: Dockerfile
@@ -291,7 +300,7 @@ services:
   supervisor-mcp:
     build:
       context: ../servers/supervisor-mcp
-      dockerfile: Dockerfile.new  # Используем оптимизированный Dockerfile с базовым образом
+      dockerfile: Dockerfile.new # Используем оптимизированный Dockerfile с базовым образом
     image: supervisor-mcp:latest
     restart: unless-stopped
     environment:
@@ -313,7 +322,7 @@ services:
     ports:
       - "8001:8001"
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8001), 3).close()'"]
+      test: [ "CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8001), 3).close()'" ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -322,7 +331,7 @@ services:
   learning-mcp:
     build:
       context: ../servers/learning-mcp
-      dockerfile: Dockerfile.new  # Используем оптимизированный Dockerfile с базовым образом
+      dockerfile: Dockerfile.new # Используем оптимизированный Dockerfile с базовым образом
     image: learning-mcp:latest
     restart: unless-stopped
     environment:
@@ -341,7 +350,7 @@ services:
     ports:
       - "8003:8003"
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8003), 3).close()'"]
+      test: [ "CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8003), 3).close()'" ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -367,7 +376,7 @@ services:
     ports:
       - "8004:8004"
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8004), 3).close()'"]
+      test: [ "CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8004), 3).close()'" ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -406,14 +415,14 @@ services:
     ports:
       - "8082:8082"
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8082), 3).close()'"]
+      test: [ "CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8082), 3).close()'" ]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 30s
 
   halv1:
-    profiles: ["halv1"]
+    profiles: [ "halv1" ]
     build:
       context: ./halv1
       dockerfile: scripts/Dockerfile
@@ -458,13 +467,13 @@ services:
       - /var/tmp
 
   halv1-dashboard:
-    profiles: ["halv1"]
+    profiles: [ "halv1" ]
     build:
       context: ./halv1
       dockerfile: scripts/Dockerfile
     image: halv1:latest
     restart: unless-stopped
-    command: ["uvicorn", "halv1.web.dashboard.server:app", "--host", "0.0.0.0", "--port", "8001"]
+    command: [ "uvicorn", "halv1.web.dashboard.server:app", "--host", "0.0.0.0", "--port", "8001" ]
     volumes:
       - ./halv1:/app
     environment:
