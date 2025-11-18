@@ -9,6 +9,7 @@ import os
 import re
 import signal
 import subprocess
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ os.environ["CHROMA_TELEMETRY_IMPL"] = ""
 from ..analysis.insight_graph import SummaryInsightAnalyzer
 from ..analysis.instruction_manager import InstructionManager
 from ..core.indexer import TwoLevelIndexer
+from ..core.indexing_tracker import IndexingJobTracker
 from ..indexing import TelegramIndexer
 from ..memory.ingest import MemoryIngestor
 from ..memory.typed_graph import TypedGraphMemory
@@ -629,17 +631,101 @@ def index(
             click.echo("❌ Для scope='chat' необходимо указать --chat")
             return
 
-        click.echo("📦 Инициализация индексатора...")
+        # Инициализация трекера задач индексации
         from ..core.lmstudio_client import LMStudioEmbeddingClient
         from ..config import get_settings
         
         settings = get_settings()
+        tracker = IndexingJobTracker(storage_path="data/indexing_jobs.json")
+        
+        # Создаем job_id для отслеживания прогресса
+        job_id = f"cli_{uuid.uuid4().hex[:12]}"
+        
+        # Определяем список чатов для scope="all"
+        chats_list = None
+        if scope == "all":
+            chats_path = Path("chats")
+            if chats_path.exists():
+                chats_list = [d.name for d in chats_path.iterdir() if d.is_dir()]
+        
+        # Создаем задачу в трекере
+        tracker.create_job(
+            job_id=job_id,
+            scope=scope,
+            chat=chat,
+            chats=chats_list,
+            force_full=force_full,
+            recent_days=recent_days,
+        )
+        
+        click.echo(f"📋 Задача индексации создана: {job_id}")
+        click.echo("📦 Инициализация индексатора...")
         embedding_client = LMStudioEmbeddingClient(
             model_name=embedding_model or settings.lmstudio_model,
             llm_model_name=settings.lmstudio_llm_model,
             base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
         )
         chroma_path = os.getenv("MEMORY_MCP_CHROMA_PATH") or settings.chroma_path
+        
+        # Определяем callback функцию для обновления прогресса
+        def progress_callback(job_id: str, event: str, data: Dict) -> None:
+            """Callback для обновления прогресса индексации."""
+            try:
+                if event == "chat_started":
+                    tracker.update_job(
+                        job_id=job_id,
+                        status="running",
+                        current_stage=f"Обработка чата '{data.get('chat')}'",
+                        current_chat=data.get("chat"),
+                        progress={
+                            "completed_chats": data.get("chat_index", 1) - 1,
+                        },
+                    )
+                elif event == "sessions_processing":
+                    tracker.update_job(
+                        job_id=job_id,
+                        current_stage=f"Обработка сессий чата '{data.get('chat')}' ({data.get('session_index')}/{data.get('total_sessions')})",
+                        current_chat=data.get("chat"),
+                        progress={
+                            "current_chat_sessions": data.get("sessions_count", 0),
+                            "current_chat_messages": data.get("messages_count", 0),
+                        },
+                    )
+                elif event == "chat_completed":
+                    chat_stats = data.get("stats", {})
+                    tracker.update_job(
+                        job_id=job_id,
+                        current_stage=f"Завершена обработка чата '{data.get('chat')}'",
+                        progress={
+                            "completed_chats": data.get("chat_index", 0),
+                        },
+                        stats={
+                            "sessions_indexed": chat_stats.get("sessions_indexed", 0),
+                            "messages_indexed": chat_stats.get("messages_indexed", 0),
+                            "tasks_indexed": chat_stats.get("tasks_indexed", 0),
+                        },
+                    )
+                elif event == "error":
+                    tracker.update_job(
+                        job_id=job_id,
+                        status="failed",
+                        error=f"Ошибка в чате '{data.get('chat')}': {data.get('error')}",
+                    )
+                elif event == "completed":
+                    final_stats = data.get("stats", {})
+                    tracker.update_job(
+                        job_id=job_id,
+                        status="completed",
+                        current_stage="Индексация завершена",
+                        stats={
+                            "sessions_indexed": final_stats.get("sessions_indexed", 0),
+                            "messages_indexed": final_stats.get("messages_indexed", 0),
+                            "tasks_indexed": final_stats.get("tasks_indexed", 0),
+                        },
+                    )
+            except Exception as e:
+                logger.warning(f"Ошибка при обновлении прогресса: {e}")
+        
         indexer = TwoLevelIndexer(
             chroma_path=chroma_path,
             artifacts_path=settings.artifacts_path,
@@ -660,6 +746,7 @@ def index(
             recent_window_days=recent_window_days,
             strategy_threshold=strategy_threshold,
             force=force,
+            progress_callback=progress_callback,
         )
         click.echo("✅ Индексатор готов")
         click.echo()
@@ -720,8 +807,11 @@ def index(
         click.echo()
 
         try:
+            # Обновляем статус задачи на "running"
+            tracker.update_job(job_id=job_id, status="running", current_stage="Начало индексации")
+            
             stats = await indexer.build_index(
-                scope=scope, chat=chat, force_full=force_full, recent_days=recent_days
+                scope=scope, chat=chat, force_full=force_full, recent_days=recent_days, job_id=job_id
             )
 
             click.echo()
@@ -749,6 +839,13 @@ def index(
             click.echo()
 
         except Exception as e:
+            # Обновляем статус задачи на "failed"
+            tracker.update_job(
+                job_id=job_id,
+                status="failed",
+                error=str(e),
+            )
+            
             click.echo()
             click.echo("=" * 80)
             click.echo("❌ Ошибка при индексации!")

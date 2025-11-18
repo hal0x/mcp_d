@@ -112,7 +112,7 @@ ToolResponse = Tuple[List[TextContent], Dict[str, Any]]
 
 _adapter: MemoryServiceAdapter | None = None
 _smart_search_engine: Any | None = None  # SmartSearchEngine (ленивый импорт)
-_active_indexing_jobs: Dict[str, Dict[str, Any]] = {}
+_indexing_tracker: Any | None = None  # IndexingJobTracker (ленивая инициализация)
 _background_indexing_service = None
 
 
@@ -137,6 +137,20 @@ def _get_adapter() -> MemoryServiceAdapter:
         logger.info(f"Используется путь к БД: {db_path}")
         _adapter = MemoryServiceAdapter(db_path=db_path)
     return _adapter
+
+
+def _get_indexing_tracker():
+    """Ленивая инициализация трекера задач индексации."""
+    global _indexing_tracker
+    if _indexing_tracker is None:
+        from ..core.indexing_tracker import IndexingJobTracker
+        from ..config import get_settings
+        
+        settings = get_settings()
+        # Используем путь относительно корня проекта
+        storage_path = "data/indexing_jobs.json"
+        _indexing_tracker = IndexingJobTracker(storage_path=storage_path)
+    return _indexing_tracker
 
 
 def _get_smart_search_engine():
@@ -1434,7 +1448,7 @@ async def _run_indexing_job(
     adapter: MemoryServiceAdapter,
 ) -> None:
     """Запуск индексации в фоновом режиме."""
-    global _active_indexing_jobs
+    tracker = _get_indexing_tracker()
     
     from ..core.indexer import TwoLevelIndexer
     from ..config import get_settings
@@ -1442,12 +1456,11 @@ async def _run_indexing_job(
     from datetime import timezone
     
     try:
-        _active_indexing_jobs[job_id] = {
-            "status": "running",
-            "chat": request.chat,
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "current_stage": "Инициализация",
-        }
+        tracker.update_job(
+            job_id=job_id,
+            status="running",
+            current_stage="Инициализация",
+        )
         
         settings = get_settings()
         
@@ -1481,7 +1494,7 @@ async def _run_indexing_job(
         )
         
         if request.force_full:
-            _active_indexing_jobs[job_id]["current_stage"] = "Очистка старых данных"
+            tracker.update_job(job_id=job_id, current_stage="Очистка старых данных")
             logger.info(f"🧹 Очистка старых данных чата '{request.chat}' перед переиндексацией...")
             try:
                 cleanup_stats = adapter.clear_chat_data(request.chat)
@@ -1491,7 +1504,7 @@ async def _run_indexing_job(
                     f"векторов={cleanup_stats.get('vectors_deleted', 0)}, "
                     f"ChromaDB={cleanup_stats.get('chromadb_deleted', 0)}"
                 )
-                _active_indexing_jobs[job_id]["cleanup_stats"] = cleanup_stats
+                tracker.update_job(job_id=job_id, cleanup_stats=cleanup_stats)
             except Exception as e:
                 logger.warning(
                     f"⚠️ Ошибка при очистке данных чата '{request.chat}': {e}. "
@@ -1499,7 +1512,63 @@ async def _run_indexing_job(
                     exc_info=True,
                 )
         
-        _active_indexing_jobs[job_id]["current_stage"] = "Загрузка сообщений"
+        tracker.update_job(job_id=job_id, current_stage="Загрузка сообщений")
+        
+        # Определяем callback функцию для обновления прогресса
+        def progress_callback(job_id: str, event: str, data: Dict[str, Any]) -> None:
+            """Callback для обновления прогресса индексации."""
+            try:
+                if event == "chat_started":
+                    tracker.update_job(
+                        job_id=job_id,
+                        status="running",
+                        current_stage=f"Обработка чата '{data.get('chat')}'",
+                        current_chat=data.get("chat"),
+                    )
+                elif event == "sessions_processing":
+                    tracker.update_job(
+                        job_id=job_id,
+                        current_stage=f"Обработка сессий чата '{data.get('chat')}' ({data.get('session_index')}/{data.get('total_sessions')})",
+                        current_chat=data.get("chat"),
+                        progress={
+                            "current_chat_sessions": data.get("sessions_count", 0),
+                            "current_chat_messages": data.get("messages_count", 0),
+                        },
+                    )
+                elif event == "chat_completed":
+                    chat_stats = data.get("stats", {})
+                    tracker.update_job(
+                        job_id=job_id,
+                        current_stage=f"Завершена обработка чата '{data.get('chat')}'",
+                        stats={
+                            "sessions_indexed": chat_stats.get("sessions_indexed", 0),
+                            "messages_indexed": chat_stats.get("messages_indexed", 0),
+                            "tasks_indexed": chat_stats.get("tasks_indexed", 0),
+                        },
+                    )
+                elif event == "error":
+                    tracker.update_job(
+                        job_id=job_id,
+                        status="failed",
+                        error=f"Ошибка в чате '{data.get('chat')}': {data.get('error')}",
+                    )
+                elif event == "completed":
+                    final_stats = data.get("stats", {})
+                    tracker.update_job(
+                        job_id=job_id,
+                        status="completed",
+                        current_stage="Индексация завершена",
+                        stats={
+                            "sessions_indexed": final_stats.get("sessions_indexed", 0),
+                            "messages_indexed": final_stats.get("messages_indexed", 0),
+                            "tasks_indexed": final_stats.get("tasks_indexed", 0),
+                        },
+                    )
+            except Exception as e:
+                logger.warning(f"Ошибка при обновлении прогресса: {e}")
+        
+        # Устанавливаем callback в индексатор
+        indexer.progress_callback = progress_callback
         
         stats = await indexer.build_index(
             scope="chat",
@@ -1507,17 +1576,8 @@ async def _run_indexing_job(
             force_full=request.force_full,
             recent_days=request.recent_days,
             adapter=adapter,
+            job_id=job_id,
         )
-        
-        _active_indexing_jobs[job_id] = {
-            "status": "completed",
-            "chat": request.chat,
-            "started_at": _active_indexing_jobs[job_id].get("started_at"),
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-            "sessions_indexed": stats.get("sessions_indexed", 0),
-            "messages_indexed": stats.get("messages_indexed", 0),
-            "tasks_indexed": stats.get("tasks_indexed", 0),
-        }
         
         logger.info(f"Индексация чата '{request.chat}' завершена успешно (job_id: {job_id})")
         
@@ -1525,7 +1585,7 @@ async def _run_indexing_job(
         run_optimizations = request.run_optimizations if request.run_optimizations is not None else True
         if run_optimizations:
             try:
-                _active_indexing_jobs[job_id]["current_stage"] = "Оптимизация базы данных"
+                tracker.update_job(job_id=job_id, current_stage="Оптимизация базы данных")
                 logger.info(f"⚡ Запуск оптимизаций после индексации чата '{request.chat}'...")
                 
                 optimization_results = {}
@@ -1535,7 +1595,7 @@ async def _run_indexing_job(
                 
                 # 1. Оптимизация базы данных
                 try:
-                    _active_indexing_jobs[job_id]["current_stage"] = "Оптимизация: VACUUM/ANALYZE"
+                    tracker.update_job(job_id=job_id, current_stage="Оптимизация: VACUUM/ANALYZE")
                     opt_result = _optimize_database(db_path)
                     optimization_results["optimize_database"] = opt_result
                     logger.info(f"✅ Оптимизация БД завершена: {opt_result}")
@@ -1545,7 +1605,7 @@ async def _run_indexing_job(
                 
                 # 2. Пересчёт важности записей
                 try:
-                    _active_indexing_jobs[job_id]["current_stage"] = "Обновление важности записей"
+                    tracker.update_job(job_id=job_id, current_stage="Обновление важности записей")
                     importance_result = _update_importance_scores(adapter.graph)
                     optimization_results["update_importance"] = importance_result
                     logger.info(f"✅ Пересчёт важности завершён: {importance_result}")
@@ -1555,7 +1615,7 @@ async def _run_indexing_job(
                 
                 # 3. Проверка целостности (опционально, только валидация)
                 try:
-                    _active_indexing_jobs[job_id]["current_stage"] = "Проверка целостности"
+                    tracker.update_job(job_id=job_id, current_stage="Проверка целостности")
                     validation_result = _validate_database(db_path)
                     optimization_results["validate_database"] = validation_result
                     if validation_result.get("valid"):
@@ -1568,7 +1628,7 @@ async def _run_indexing_job(
                 
                 # 4. Проверка необходимости очистки памяти
                 try:
-                    _active_indexing_jobs[job_id]["current_stage"] = "Проверка очистки памяти"
+                    tracker.update_job(job_id=job_id, current_stage="Проверка очистки памяти")
                     prune_result = _check_prune_memory(adapter.graph)
                     optimization_results["prune_check"] = prune_result
                     if prune_result.get("prune_needed"):
@@ -1579,22 +1639,23 @@ async def _run_indexing_job(
                     logger.warning(f"⚠️ Ошибка при проверке очистки памяти: {e}", exc_info=True)
                     optimization_results["prune_check"] = {"error": str(e)}
                 
-                _active_indexing_jobs[job_id]["optimization_results"] = optimization_results
+                tracker.update_job(job_id=job_id, optimization_results=optimization_results)
                 logger.info(f"✅ Все оптимизации завершены для чата '{request.chat}'")
                 
             except Exception as e:
                 logger.error(f"Ошибка при выполнении оптимизаций: {e}", exc_info=True)
-                _active_indexing_jobs[job_id]["optimization_error"] = str(e)
+                tracker.update_job(job_id=job_id, optimization_error=str(e))
         
     except Exception as e:
         logger.error(f"Ошибка при индексации чата '{request.chat}' (job_id: {job_id}): {e}", exc_info=True)
-        _active_indexing_jobs[job_id] = {
-            "status": "failed",
-            "chat": request.chat,
-            "started_at": _active_indexing_jobs.get(job_id, {}).get("started_at"),
-            "failed_at": datetime.now(timezone.utc).isoformat(),
-            "error": str(e),
-        }
+        job = tracker.get_job(job_id)
+        started_at = job.get("started_at") if job else None
+        tracker.update_job(
+            job_id=job_id,
+            status="failed",
+            failed_at=datetime.now(timezone.utc).isoformat(),
+            error=str(e),
+        )
 
 
 async def _start_indexing_job(
@@ -1602,28 +1663,31 @@ async def _start_indexing_job(
     adapter: MemoryServiceAdapter,
 ) -> "IndexChatResponse":
     """Запустить задачу индексации в фоновом режиме."""
-    global _active_indexing_jobs
+    tracker = _get_indexing_tracker()
     
     from datetime import timezone
     
     job_id = f"index_{uuid.uuid4().hex[:12]}"
     
-    for existing_job_id, job_info in _active_indexing_jobs.items():
-        if job_info.get("chat") == request.chat and job_info.get("status") == "running":
-            return IndexChatResponse(
-                job_id=existing_job_id,
-                status="running",
-                chat=request.chat,
-                message=f"Индексация чата '{request.chat}' уже выполняется (job_id: {existing_job_id})",
-            )
+    # Проверяем, нет ли уже запущенной задачи для этого чата
+    existing_jobs = tracker.get_all_jobs(status="running", chat=request.chat)
+    if existing_jobs:
+        existing_job = existing_jobs[0]
+        return IndexChatResponse(
+            job_id=existing_job["job_id"],
+            status="running",
+            chat=request.chat,
+            message=f"Индексация чата '{request.chat}' уже выполняется (job_id: {existing_job['job_id']})",
+        )
     
-    _active_indexing_jobs[job_id] = {
-        "status": "started",
-        "chat": request.chat,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "force_full": request.force_full,
-        "recent_days": request.recent_days,
-    }
+    # Создаем новую задачу
+    tracker.create_job(
+        job_id=job_id,
+        scope="chat",
+        chat=request.chat,
+        force_full=request.force_full,
+        recent_days=request.recent_days,
+    )
     
     asyncio.create_task(
         _run_indexing_job(

@@ -1184,14 +1184,35 @@ class MemoryServiceAdapter:
         ВАЖНО: ChromaDB может паниковать (Rust panic), что убьет процесс Python.
         При ошибках инициализации возвращаем ошибку без попытки восстановления.
         """
-        from ..mcp.server import _active_indexing_jobs
+        from ..mcp.server import _get_indexing_tracker
+        
+        # Получаем трекер задач
+        tracker = _get_indexing_tracker()
+        
+        # Получаем активные задачи из трекера
+        active_jobs = tracker.get_all_jobs(status="running", chat=request.chat) if request.chat else tracker.get_all_jobs(status="running")
+        
         try:
             import chromadb
         except ImportError:
             logger.warning("chromadb is not installed. Cannot get indexing progress.")
+            # Возвращаем только данные из трекера, если ChromaDB недоступен
+            progress_items = []
+            for job in active_jobs:
+                progress_items.append(
+                    IndexingProgressItem(
+                        chat_name=job.get("chat") or job.get("current_chat") or "Unknown",
+                        job_id=job.get("job_id"),
+                        status=job.get("status"),
+                        started_at=job.get("started_at"),
+                        current_stage=job.get("current_stage"),
+                        total_messages=job.get("stats", {}).get("messages_indexed", 0),
+                        total_sessions=job.get("stats", {}).get("sessions_indexed", 0),
+                    )
+                )
             return GetIndexingProgressResponse(
-                progress=[],
-                message="ChromaDB is not installed. Install it with: pip install chromadb",
+                progress=progress_items,
+                message="ChromaDB is not installed. Showing only active jobs from tracker.",
             )
         
         try:
@@ -1256,20 +1277,24 @@ class MemoryServiceAdapter:
             progress_collection = chroma_client.get_collection("indexing_progress")
         except Exception as e:
             logger.debug(f"Indexing progress collection not found: {e}")
+            # Возвращаем только данные из трекера, если коллекция не найдена
+            progress_items = []
+            for job in active_jobs:
+                progress_items.append(
+                    IndexingProgressItem(
+                        chat_name=job.get("chat") or job.get("current_chat") or "Unknown",
+                        job_id=job.get("job_id"),
+                        status=job.get("status"),
+                        started_at=job.get("started_at"),
+                        current_stage=job.get("current_stage"),
+                        total_messages=job.get("stats", {}).get("messages_indexed", 0),
+                        total_sessions=job.get("stats", {}).get("sessions_indexed", 0),
+                    )
+                )
             return GetIndexingProgressResponse(
-                progress=[],
-                message="Indexing progress collection not found. Run indexing first.",
+                progress=progress_items,
+                message="Indexing progress collection not found. Showing only active jobs from tracker.",
             )
-
-        from ..mcp.server import _active_indexing_jobs
-        
-        active_jobs_for_chat = []
-        if request.chat:
-            for job_id, job_info in _active_indexing_jobs.items():
-                if job_info.get("chat") == request.chat:
-                    active_jobs_for_chat.append((job_id, job_info))
-        else:
-            active_jobs_for_chat = list(_active_indexing_jobs.items())
 
         if request.chat:
             progress_id = f"progress_{slugify(request.chat)}"
@@ -1288,20 +1313,28 @@ class MemoryServiceAdapter:
                         total_sessions=metadata.get("total_sessions", 0),
                     )
                 
-                if active_jobs_for_chat:
-                    job_id, job_info = active_jobs_for_chat[0]
+                # Объединяем с данными из трекера
+                active_job = None
+                for job in active_jobs:
+                    if job.get("chat") == request.chat or job.get("current_chat") == request.chat:
+                        active_job = job
+                        break
+                
+                if active_job:
                     if progress_item:
-                        progress_item.job_id = job_id
-                        progress_item.status = job_info.get("status")
-                        progress_item.started_at = job_info.get("started_at")
-                        progress_item.current_stage = job_info.get("current_stage")
+                        progress_item.job_id = active_job.get("job_id")
+                        progress_item.status = active_job.get("status")
+                        progress_item.started_at = active_job.get("started_at")
+                        progress_item.current_stage = active_job.get("current_stage")
                     else:
                         progress_item = IndexingProgressItem(
                             chat_name=request.chat,
-                            job_id=job_id,
-                            status=job_info.get("status"),
-                            started_at=job_info.get("started_at"),
-                            current_stage=job_info.get("current_stage"),
+                            job_id=active_job.get("job_id"),
+                            status=active_job.get("status"),
+                            started_at=active_job.get("started_at"),
+                            current_stage=active_job.get("current_stage"),
+                            total_messages=active_job.get("stats", {}).get("messages_indexed", 0),
+                            total_sessions=active_job.get("stats", {}).get("sessions_indexed", 0),
                         )
                 
                 if progress_item:
@@ -1339,20 +1372,23 @@ class MemoryServiceAdapter:
                         total_sessions=metadata.get("total_sessions", 0),
                     )
                 
-                for job_id, job_info in active_jobs_for_chat:
-                    chat_name = job_info.get("chat", "Unknown")
+                # Объединяем с данными из трекера
+                for job in active_jobs:
+                    chat_name = job.get("chat") or job.get("current_chat") or "Unknown"
                     if chat_name in progress_by_chat:
-                        progress_by_chat[chat_name].job_id = job_id
-                        progress_by_chat[chat_name].status = job_info.get("status")
-                        progress_by_chat[chat_name].started_at = job_info.get("started_at")
-                        progress_by_chat[chat_name].current_stage = job_info.get("current_stage")
+                        progress_by_chat[chat_name].job_id = job.get("job_id")
+                        progress_by_chat[chat_name].status = job.get("status")
+                        progress_by_chat[chat_name].started_at = job.get("started_at")
+                        progress_by_chat[chat_name].current_stage = job.get("current_stage")
                     else:
                         progress_by_chat[chat_name] = IndexingProgressItem(
                             chat_name=chat_name,
-                            job_id=job_id,
-                            status=job_info.get("status"),
-                            started_at=job_info.get("started_at"),
-                            current_stage=job_info.get("current_stage"),
+                            job_id=job.get("job_id"),
+                            status=job.get("status"),
+                            started_at=job.get("started_at"),
+                            current_stage=job.get("current_stage"),
+                            total_messages=job.get("stats", {}).get("messages_indexed", 0),
+                            total_sessions=job.get("stats", {}).get("sessions_indexed", 0),
                         )
                 
                 return GetIndexingProgressResponse(

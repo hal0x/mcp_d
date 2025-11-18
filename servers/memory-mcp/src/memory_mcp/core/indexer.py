@@ -10,7 +10,7 @@ import logging
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 import chromadb
@@ -65,6 +65,7 @@ class TwoLevelIndexer:
         enable_entity_learning: bool = True,
         enable_time_analysis: bool = True,
         graph: Optional[Any] = None,  # TypedGraphMemory
+        progress_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
     ):
         """
         Инициализация индексатора
@@ -92,7 +93,9 @@ class TwoLevelIndexer:
             enable_entity_learning: Включить автоматическое обучение словарей сущностей
             enable_time_analysis: Включить анализ временных паттернов
             graph: Граф памяти для синхронизации записей (опционально)
+            progress_callback: Callback функция для отслеживания прогресса (job_id, event, data)
         """
+        self.progress_callback = progress_callback
         self.chroma_client = chromadb.PersistentClient(path=chroma_path)
         self.artifacts_path = Path(artifacts_path).expanduser()
         self.artifacts_path.mkdir(parents=True, exist_ok=True)
@@ -667,6 +670,16 @@ class TwoLevelIndexer:
         # Если ничего не найдено, возвращаем минимальную дату
         return datetime.min.replace(tzinfo=None)
 
+    def _call_progress_callback(
+        self, job_id: Optional[str], event: str, data: Dict[str, Any]
+    ) -> None:
+        """Вызвать callback прогресса, если он установлен."""
+        if self.progress_callback and job_id:
+            try:
+                self.progress_callback(job_id, event, data)
+            except Exception as e:
+                logger.warning(f"Ошибка при вызове progress_callback: {e}")
+
     async def build_index(
         self,
         scope: str = "all",
@@ -674,6 +687,7 @@ class TwoLevelIndexer:
         force_full: bool = False,
         recent_days: int = 7,
         adapter: Optional[Any] = None,  # MemoryServiceAdapter, но избегаем циклического импорта
+        job_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Построение индекса
@@ -683,6 +697,8 @@ class TwoLevelIndexer:
             chat: Название чата (для scope="chat")
             force_full: Полная пересборка
             recent_days: Пересаммаризировать последние N дней
+            adapter: Адаптер памяти для синхронизации
+            job_id: Идентификатор задачи для отслеживания прогресса
 
         Returns:
             Статистика индексации
@@ -727,6 +743,17 @@ class TwoLevelIndexer:
             try:
                 chat_name = chat_dir.name
                 logger.info(f"📁 Чат {chat_idx}/{total_chats}: {chat_name}")
+                
+                # Callback: начало обработки чата
+                self._call_progress_callback(
+                    job_id,
+                    "chat_started",
+                    {
+                        "chat": chat_name,
+                        "chat_index": chat_idx,
+                        "total_chats": total_chats,
+                    },
+                )
 
                 # Очистка старых данных при полной переиндексации
                 if force_full and adapter is not None:
@@ -921,6 +948,21 @@ class TwoLevelIndexer:
                             f"({progress_pct:.1f}%) | "
                             f"Сессия {session_idx}/{len(sessions)}: {session_id}"
                         )
+                        
+                        # Callback: обработка сессий
+                        self._call_progress_callback(
+                            job_id,
+                            "sessions_processing",
+                            {
+                                "chat": chat_name,
+                                "session_index": session_idx,
+                                "total_sessions": len(sessions),
+                                "sessions_count": len(processed_summaries),
+                                "messages_count": processed_messages_count,
+                                "total_messages": total_messages_in_chat,
+                                "progress_pct": progress_pct,
+                            },
+                        )
 
                         # Саммаризация
                         summary = await self.session_summarizer.summarize_session(
@@ -1038,6 +1080,22 @@ class TwoLevelIndexer:
                         messages_count=len(messages_to_index),
                         sessions_count=len(processed_summaries),
                     )
+                
+                # Callback: завершение обработки чата
+                self._call_progress_callback(
+                    job_id,
+                    "chat_completed",
+                    {
+                        "chat": chat_name,
+                        "chat_index": chat_idx,
+                        "total_chats": total_chats,
+                        "stats": {
+                            "sessions_indexed": len(processed_summaries),
+                            "messages_indexed": processed_messages_count,
+                            "tasks_indexed": stats.get("tasks_indexed", 0),
+                        },
+                    },
+                )
 
                 # Сохраняем словари сущностей если включено обучение
                 if self.entity_dictionary and self.enable_entity_learning:
@@ -1066,9 +1124,28 @@ class TwoLevelIndexer:
 
             except Exception as e:
                 logger.error(f"Ошибка при индексации чата {chat_dir.name}: {e}")
+                # Callback: ошибка при обработке чата
+                self._call_progress_callback(
+                    job_id,
+                    "error",
+                    {
+                        "chat": chat_dir.name,
+                        "error": str(e),
+                    },
+                )
                 continue
 
         logger.info(f"Индексация завершена: {stats}")
+        
+        # Callback: завершение всей индексации
+        self._call_progress_callback(
+            job_id,
+            "completed",
+            {
+                "stats": stats,
+            },
+        )
+        
         return stats
 
     async def _load_messages_from_chat(self, chat_dir: Path) -> List[Dict[str, Any]]:
