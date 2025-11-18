@@ -65,8 +65,10 @@ class ClusterSummarizer:
             return summary
         except Exception as e:
             logger.error(f"Ошибка генерации LLM сводки: {e}")
-            # Возвращаем базовую сводку
-            return self._fallback_summary(cluster)
+            raise RuntimeError(
+                f"Ошибка генерации LLM сводки для кластера: {e}. "
+                "Проверьте конфигурацию LLM клиента."
+            ) from e
 
     def _extract_cluster_content(
         self, sessions: List[Dict[str, Any]], cluster: Dict[str, Any]

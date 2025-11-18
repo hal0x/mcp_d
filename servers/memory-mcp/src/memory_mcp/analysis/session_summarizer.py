@@ -127,7 +127,11 @@ GEOPOLITICS_PATTERNS = [
 
 
 class SessionSummarizer:
-    """Класс для структурной саммаризации сессий"""
+    """Класс для структурной саммаризации сессий.
+    
+    Args:
+        strict_mode: Если True, выбрасывает исключения вместо использования fallback при ошибках LLM.
+                     По умолчанию False для обратной совместимости."""
 
     def __init__(
         self,
@@ -137,6 +141,7 @@ class SessionSummarizer:
         enable_quality_check: bool = True,
         enable_iterative_refinement: bool = True,
         min_quality_score: float = 80.0,
+        strict_mode: bool = False,
     ):
         """
         Инициализация саммаризатора
@@ -148,6 +153,7 @@ class SessionSummarizer:
             enable_quality_check: Включить проверку качества
             enable_iterative_refinement: Включить итеративное улучшение
             min_quality_score: Минимальный приемлемый балл качества
+            strict_mode: Если True, выбрасывает исключения вместо использования fallback при ошибках LLM
         """
         if embedding_client is None:
             settings = get_settings()
@@ -189,6 +195,8 @@ class SessionSummarizer:
             enable_hierarchical=settings.large_context_enable_hierarchical,
             enable_caching=True,
         )
+        
+        self.strict_mode = strict_mode
 
     async def summarize_session(self, session: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -314,7 +322,7 @@ class SessionSummarizer:
         # Парсим структурированную саммаризацию и дополняем пропуски при необходимости
         summary_structure = self._parse_summary_structure(summary_text)
         summary_structure, fallback_used = self._ensure_summary_completeness(
-            messages, chat, summary_structure
+            messages, chat, summary_structure, strict_mode=self.strict_mode
         )
 
         if fallback_used:
@@ -1086,7 +1094,7 @@ class SessionSummarizer:
         return structure
 
     def _ensure_summary_completeness(
-        self, messages: List[Dict[str, Any]], chat: str, structure: Dict[str, Any]
+        self, messages: List[Dict[str, Any]], chat: str, structure: Dict[str, Any], strict_mode: bool = False
     ) -> Tuple[Dict[str, Any], bool]:
         """
         Проверяет и при необходимости дополняет саммаризацию эвристическими данными.

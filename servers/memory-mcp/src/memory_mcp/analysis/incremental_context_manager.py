@@ -363,7 +363,7 @@ class IncrementalContextManager:
             return previous_sessions
 
         except Exception as e:
-            logger.warning(f"Ошибка при загрузке предыдущих сессий: {e}")
+            logger.error(f"Ошибка при загрузке предыдущих сессий: {e}")
             return []
 
     def _empty_context(self) -> Dict[str, Any]:

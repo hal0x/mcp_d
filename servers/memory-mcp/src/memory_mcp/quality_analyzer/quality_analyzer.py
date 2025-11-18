@@ -476,13 +476,17 @@ class QualityAnalyzer:
 
         search_engine = self._get_search_engine()
         if not search_engine:
-            logger.error("Поисковый движок недоступен")
-            return []
+            raise RuntimeError(
+                "Поисковый движок недоступен для анализа качества. "
+                "Проверьте конфигурацию search_engine."
+            )
 
         query_embedding = await self._generate_query_embedding(query_text)
         if query_embedding is None:
-            logger.error("Не удалось получить эмбеддинг для запроса")
-            return []
+            raise RuntimeError(
+                f"Не удалось получить эмбеддинг для запроса '{query_text}'. "
+                "Проверьте конфигурацию embedding_service."
+            )
 
         chat_name = query_data.get("chat_name") or query_data.get("chat")
         where_filter = {"chat": chat_name} if chat_name else None

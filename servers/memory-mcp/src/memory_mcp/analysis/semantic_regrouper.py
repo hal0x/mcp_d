@@ -264,8 +264,17 @@ class SemanticRegrouper:
         except json.JSONDecodeError as e:
             logger.error(f"Ошибка парсинга JSON ответа от LLM: {e}")
             logger.debug(f"Ответ LLM: {response[:500]}")
-            return original_sessions
+            raise RuntimeError(
+                f"Ошибка семантической перегруппировки: не удалось распарсить JSON ответ от LLM: {e}. "
+                f"Ответ LLM: {response[:500] if len(response) > 500 else response}. "
+                f"Проверьте конфигурацию LLM клиента."
+            ) from e
         except Exception as e:
             logger.error(f"Ошибка при обработке ответа LLM: {e}")
-            return original_sessions
+            response_preview = response[:500] if 'response' in locals() and response else 'N/A'
+            raise RuntimeError(
+                f"Ошибка семантической перегруппировки: {e}. "
+                f"Ответ LLM: {response_preview}. "
+                f"Проверьте конфигурацию LLM клиента."
+            ) from e
 

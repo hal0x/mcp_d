@@ -448,8 +448,11 @@ class EntityDictionary:
                     return True
                     
         except Exception as e:
-            logger.warning(f"Ошибка при валидации сущности '{normalized_value}' через LLM: {e}. Разрешаем добавление.")
-            return True  # При ошибке разрешаем добавление (консервативный подход)
+            logger.error(f"Ошибка при валидации сущности '{normalized_value}' через LLM: {e}")
+            raise RuntimeError(
+                f"Ошибка валидации сущности '{normalized_value}' (тип: {entity_type}) через LLM: {e}. "
+                "Проверьте конфигурацию LLM клиента."
+            ) from e
 
     def _validate_entity_with_llm(
         self, entity_type: str, normalized_value: str, original_value: str

@@ -138,7 +138,12 @@ class RelevanceAnalyzer:
 
         except Exception as exc:
             logger.error("Ошибка парсинга ответа Ollama: %s", exc)
-            return self._create_fallback_analysis(query_data, search_results)
+            response_preview = response[:500] if 'response' in locals() and response else 'N/A'
+            raise RuntimeError(
+                f"Ошибка парсинга ответа LLM для анализа релевантности: {exc}. "
+                f"Ответ: {response_preview}. "
+                f"Проверьте конфигурацию LLM клиента."
+            ) from exc
 
     def _validate_analysis_structure(self, analysis: dict[str, Any]) -> bool:
         required_fields = [
