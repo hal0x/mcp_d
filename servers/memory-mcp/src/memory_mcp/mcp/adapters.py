@@ -447,11 +447,13 @@ class MemoryServiceAdapter:
         
         for match in chromadb_results:
             record_id = match.record_id
-            score = match.score * 0.7  # Вес для ChromaDB результатов
+            score = match.score * 0.3  # Низкий вес для ChromaDB результатов (дополнительный источник)
             existing = combined.get(record_id)
             if existing:
-                # Обновляем score, но сохраняем эмбеддинг из графа, если он есть
-                existing.score = max(existing.score, score)
+                # Обновляем score только если ChromaDB результат значительно лучше
+                # Предпочитаем FTS5 результаты, так как они более точные
+                if score > existing.score * 1.5:  # Только если ChromaDB score в 1.5 раза лучше
+                    existing.score = score
                 # Если в ChromaDB результате нет эмбеддинга, но есть в существующем, сохраняем его
                 if existing.embedding and not match.embedding:
                     pass  # Оставляем существующий эмбеддинг

@@ -636,12 +636,19 @@ class TypedGraphMemory:
         self.conn.commit()
 
     def _prepare_match_expression(self, query: str) -> str:
+        """Подготовка выражения для FTS5 поиска.
+        
+        Использует AND для нескольких токенов, чтобы найти документы,
+        содержащие все слова из запроса (более строгий поиск).
+        """
         tokens = [token.strip() for token in query.replace('"', "").split() if token.strip()]
         if not tokens:
             return ""
         if len(tokens) == 1:
             return f'"{tokens[0]}"'
-        return " OR ".join(f'"{token}"' for token in tokens)
+        # Используем AND вместо OR для более релевантных результатов
+        # FTS5 поддерживает AND через пробел или явный оператор AND
+        return " AND ".join(f'"{token}"' for token in tokens)
 
     def _get_node_attrs(self, node_id: str) -> Dict[str, Any]:
         if node_id in self.graph:
@@ -742,13 +749,21 @@ class TypedGraphMemory:
             # BM25 обычно возвращает отрицательные значения, где более отрицательные = лучше
             bm25_score = row["score"] if row["score"] is not None else 0.0
             # Нормализуем BM25: если отрицательный, инвертируем и нормализуем к [0, 1]
+            # Используем более чувствительную нормализацию для сохранения различий
             if bm25_score < 0:
                 # Отрицательные значения BM25 означают лучшую релевантность
-                # Преобразуем: -10 -> 0.9, -1 -> 0.5, 0 -> 0.0
-                score = 1.0 / (1.0 + abs(bm25_score) / 10.0)
+                # Преобразуем с сохранением различий: -20 -> 0.95, -10 -> 0.85, -5 -> 0.7, -1 -> 0.5, 0 -> 0.0
+                # Используем экспоненциальную нормализацию для лучшего распределения
+                abs_score = abs(bm25_score)
+                # Масштабируем: чем больше abs_score, тем выше релевантность
+                # Используем формулу: 1 - exp(-abs_score / scale), где scale = 5
+                score = 1.0 - (1.0 / (1.0 + abs_score / 3.0))
+                # Ограничиваем снизу для очень слабых совпадений
+                if score < 0.1:
+                    score = 0.1
             else:
                 # Положительные значения (редко) обрабатываем как обычно
-                score = 1.0 / (1.0 + bm25_score)
+                score = 1.0 / (1.0 + bm25_score) if bm25_score > 0 else 0.0
 
             snippet = row["snippet"] or ""
             content = row["content"] or props.get("content") or attrs.get("content") or ""
