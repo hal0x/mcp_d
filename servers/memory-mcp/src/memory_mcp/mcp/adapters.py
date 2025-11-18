@@ -163,7 +163,11 @@ def _node_to_payload(
             try:
                 embedding = list(embedding)
             except (TypeError, ValueError):
+                logger.debug(f"Не удалось преобразовать эмбеддинг в список для узла {node_id}")
                 embedding = None
+    else:
+        # Логируем, если эмбеддинг отсутствует
+        logger.debug(f"Эмбеддинг отсутствует для узла {node_id}")
 
     return MemoryRecordPayload(
         record_id=node_id,
@@ -209,6 +213,119 @@ class MemoryServiceAdapter:
         from ..config import get_settings
         settings = get_settings()
         self.artifacts_reader = ArtifactsReader(artifacts_dir=settings.artifacts_path)
+    
+    def _find_node_id(self, record_id: str) -> Optional[str]:
+        """
+        Находит node_id в графе по разным форматам record_id.
+        
+        Поддерживает форматы:
+        - Точное совпадение: "telegram:Семья:257859"
+        - Формат индексатора: "Семья-S0006-M0068"
+        - Частичное совпадение
+        
+        Returns:
+            Найденный node_id или None
+        """
+        # Сначала пробуем точное совпадение
+        if record_id in self.graph.graph:
+            return record_id
+        
+        # Пробуем найти в БД
+        cursor = self.graph.conn.cursor()
+        
+        # Если record_id в формате "Семья-S0006-M0068", пробуем найти по формату "telegram:Семья:message_id"
+        if "-" in record_id and "M" in record_id:
+            parts = record_id.split("-")
+            if len(parts) >= 3:
+                chat_name = parts[0]
+                # Извлекаем номер сообщения из формата M####
+                msg_part = parts[-1]
+                if msg_part.startswith("M"):
+                    try:
+                        msg_num = int(msg_part[1:])
+                        # Ищем все узлы для этого чата, отсортированные по ID
+                        cursor.execute(
+                            "SELECT id FROM nodes WHERE id LIKE ? ORDER BY id",
+                            (f"telegram:{chat_name}:%",)
+                        )
+                        all_rows = cursor.fetchall()
+                        # Пробуем найти узел по порядковому номеру (msg_num - 1, так как нумерация с 1)
+                        if msg_num > 0 and msg_num <= len(all_rows):
+                            found_id = all_rows[msg_num - 1]["id"]
+                            # Загружаем узел в граф, если его там нет
+                            if found_id not in self.graph.graph:
+                                cursor.execute(
+                                    "SELECT id, type, label, properties, embedding FROM nodes WHERE id = ?",
+                                    (found_id,)
+                                )
+                                node_row = cursor.fetchone()
+                                if node_row:
+                                    props = json.loads(node_row["properties"]) if node_row["properties"] else {}
+                                    node_attrs = {
+                                        "node_type": node_row["type"],
+                                        "label": node_row["label"],
+                                        "properties": props,
+                                        **props,
+                                    }
+                                    if node_row["embedding"]:
+                                        try:
+                                            embedding = json.loads(node_row["embedding"].decode())
+                                            if hasattr(embedding, 'tolist'):
+                                                embedding = embedding.tolist()
+                                            elif not isinstance(embedding, list):
+                                                embedding = list(embedding)
+                                            node_attrs["embedding"] = embedding
+                                        except Exception:
+                                            pass
+                                    self.graph.graph.add_node(found_id, **node_attrs)
+                                    logger.debug(f"Узел {found_id} загружен из БД в граф")
+                            if found_id in self.graph.graph:
+                                logger.debug(f"Найден узел по номеру: {found_id} для {record_id}")
+                                return found_id
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Ошибка при поиске узла по номеру для {record_id}: {e}")
+                        pass
+        
+        # Пробуем поиск по частичному совпадению
+        cursor.execute(
+            "SELECT id FROM nodes WHERE id LIKE ? LIMIT 1",
+            (f"%{record_id}%",)
+        )
+        row = cursor.fetchone()
+        if row:
+            found_id = row["id"]
+            # Загружаем узел в граф, если его там нет
+            if found_id not in self.graph.graph:
+                cursor.execute(
+                    "SELECT id, type, label, properties, embedding FROM nodes WHERE id = ?",
+                    (found_id,)
+                )
+                node_row = cursor.fetchone()
+                if node_row:
+                    props = json.loads(node_row["properties"]) if node_row["properties"] else {}
+                    node_attrs = {
+                        "node_type": node_row["type"],
+                        "label": node_row["label"],
+                        "properties": props,
+                        **props,
+                    }
+                    if node_row["embedding"]:
+                        try:
+                            embedding = json.loads(node_row["embedding"].decode())
+                            if hasattr(embedding, 'tolist'):
+                                embedding = embedding.tolist()
+                            elif not isinstance(embedding, list):
+                                embedding = list(embedding)
+                            node_attrs["embedding"] = embedding
+                        except Exception:
+                            pass
+                    self.graph.graph.add_node(found_id, **node_attrs)
+                    logger.debug(f"Узел {found_id} загружен из БД в граф")
+            if found_id in self.graph.graph:
+                logger.debug(f"Найден узел по частичному совпадению: {found_id} для {record_id}")
+                return found_id
+        
+        return None
 
     def close(self) -> None:
         try:
@@ -341,34 +458,49 @@ class MemoryServiceAdapter:
         records = [_payload_to_record(item) for item in payload_list]
         stats = self.ingestor.ingest(records)
         if self.embedding_service and self.vector_store and payload_list:
-            for payload in payload_list:
+            # Собираем тексты для батчевой обработки
+            embedding_texts = []
+            payload_indices = []
+            for i, payload in enumerate(payload_list):
                 embedding_text = self._build_embedding_text(payload)
-                vector = self.embedding_service.embed(embedding_text)
-                if not vector:
-                    continue
-                payload_data: dict[str, object] = {
-                    "record_id": payload.record_id,
-                    "source": payload.source,
-                    "tags": payload.tags,
-                    "timestamp": payload.timestamp.timestamp(),
-                    "timestamp_iso": payload.timestamp.isoformat(),
-                    "content_preview": payload.content[:200],
-                }
-                chat_name = payload.metadata.get("chat")
-                if isinstance(chat_name, str):
-                    payload_data["chat"] = chat_name
-                try:
-                    # Сохраняем эмбеддинг в Qdrant
-                    self.vector_store.upsert(payload.record_id, vector, payload_data)
-                    # Сохраняем эмбеддинг в граф
-                    self.graph.update_node(
-                        payload.record_id,
-                        embedding=vector,
-                    )
-                except Exception:  # pragma: no cover
-                    logger.debug(
-                        "Vector upsert failed for %s", payload.record_id, exc_info=True
-                    )
+                if embedding_text.strip():  # Пропускаем пустые тексты
+                    embedding_texts.append(embedding_text)
+                    payload_indices.append(i)
+            
+            # Генерируем эмбеддинги батчем
+            if embedding_texts:
+                vectors = self.embedding_service.embed_batch(embedding_texts)
+                
+                # Сохраняем эмбеддинги для каждого payload
+                for vec_idx, payload_idx in enumerate(payload_indices):
+                    vector = vectors[vec_idx] if vec_idx < len(vectors) else None
+                    if not vector:
+                        continue
+                    
+                    payload = payload_list[payload_idx]
+                    payload_data: dict[str, object] = {
+                        "record_id": payload.record_id,
+                        "source": payload.source,
+                        "tags": payload.tags,
+                        "timestamp": payload.timestamp.timestamp(),
+                        "timestamp_iso": payload.timestamp.isoformat(),
+                        "content_preview": payload.content[:200],
+                    }
+                    chat_name = payload.metadata.get("chat")
+                    if isinstance(chat_name, str):
+                        payload_data["chat"] = chat_name
+                    try:
+                        # Сохраняем эмбеддинг в Qdrant
+                        self.vector_store.upsert(payload.record_id, vector, payload_data)
+                        # Сохраняем эмбеддинг в граф
+                        self.graph.update_node(
+                            payload.record_id,
+                            embedding=vector,
+                        )
+                    except Exception:  # pragma: no cover
+                        logger.debug(
+                            "Vector upsert failed for %s", payload.record_id, exc_info=True
+                        )
         duplicates = max(0, len(payload_list) - stats.records_ingested)
         return IngestResponse(
             records_ingested=stats.records_ingested,
@@ -617,11 +749,83 @@ class MemoryServiceAdapter:
     # Fetch
     def fetch(self, request: FetchRequest) -> FetchResponse:
         try:
-            # Сначала пытаемся найти в графе
+            logger.debug(f"Fetch record: {request.record_id}")
+            
+            # Сначала пытаемся найти в графе по точному совпадению
             if request.record_id in self.graph.graph:
                 data = self.graph.graph.nodes[request.record_id]
                 payload = _node_to_payload(self.graph, request.record_id, data)
+                logger.debug(f"Запись найдена в графе: {request.record_id}")
                 return FetchResponse(record=payload)
+            
+            # Fallback: поиск по частичному совпадению в БД
+            # Для record_id типа "telegram:Семья:257859" ищем узел с ID, содержащим эту часть
+            cursor = self.graph.conn.cursor()
+            
+            # Пробуем разные варианты поиска
+            search_patterns = [
+                request.record_id,  # Точное совпадение
+            ]
+            
+            # Если record_id в формате "telegram:Семья:257859", пробуем найти по последней части
+            if ":" in request.record_id:
+                parts = request.record_id.split(":")
+                if len(parts) >= 3:
+                    # Пробуем найти по точному совпадению с последней частью (если это число)
+                    try:
+                        msg_id = int(parts[-1])
+                        # Ищем по формату telegram:Семья:257859
+                        search_patterns.append(f"telegram:{parts[1]}:{msg_id}")
+                        # Ищем по формату с любым источником
+                        search_patterns.append(f"%:{parts[1]}:{msg_id}")
+                    except ValueError:
+                        pass
+            
+            # Убираем дубликаты
+            search_patterns = list(dict.fromkeys(search_patterns))
+            
+            for pattern in search_patterns:
+                cursor.execute(
+                    "SELECT id FROM nodes WHERE id = ? LIMIT 1",
+                    (pattern,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    found_id = row["id"]
+                    logger.debug(f"Найдена запись по паттерну '{pattern}': {found_id}")
+                    # Загружаем узел из БД, если его нет в графе
+                    if found_id not in self.graph.graph:
+                        # Пытаемся загрузить узел из БД
+                        cursor.execute(
+                            "SELECT id, type, label, properties, embedding FROM nodes WHERE id = ?",
+                            (found_id,)
+                        )
+                        node_row = cursor.fetchone()
+                        if node_row:
+                            props = json.loads(node_row["properties"]) if node_row["properties"] else {}
+                            node_attrs = {
+                                "node_type": node_row["type"],
+                                "label": node_row["label"],
+                                "properties": props,
+                                **props,
+                            }
+                            if node_row["embedding"]:
+                                try:
+                                    embedding = json.loads(node_row["embedding"].decode())
+                                    if hasattr(embedding, 'tolist'):
+                                        embedding = embedding.tolist()
+                                    elif not isinstance(embedding, list):
+                                        embedding = list(embedding)
+                                    node_attrs["embedding"] = embedding
+                                except Exception:
+                                    pass
+                            self.graph.graph.add_node(found_id, **node_attrs)
+                            logger.debug(f"Узел {found_id} загружен из БД в граф")
+                    
+                    if found_id in self.graph.graph:
+                        data = self.graph.graph.nodes[found_id]
+                        payload = _node_to_payload(self.graph, found_id, data)
+                        return FetchResponse(record=payload)
             
             # Если не найдено в графе, ищем в ChromaDB коллекциях
             try:
@@ -1407,6 +1611,18 @@ class MemoryServiceAdapter:
         self, request: GetGraphNeighborsRequest
     ) -> GetGraphNeighborsResponse:
         """Get neighbors of a graph node."""
+        # Логирование для отладки
+        logger.debug(
+            f"get_graph_neighbors: node_id={request.node_id}, "
+            f"edge_type={request.edge_type}, direction={request.direction}"
+        )
+        
+        # Пробуем найти узел по разным форматам record_id
+        node_id = self._find_node_id(request.node_id)
+        if not node_id:
+            logger.warning(f"Узел {request.node_id} не найден в графе")
+            return GetGraphNeighborsResponse(neighbors=[])
+        
         edge_type = None
         if request.edge_type:
             try:
@@ -1415,9 +1631,13 @@ class MemoryServiceAdapter:
                 logger.warning(f"Invalid edge type: {request.edge_type}")
 
         neighbors_data = self.graph.get_neighbors(
-            request.node_id,
+            node_id,
             edge_type=edge_type,
             direction=request.direction,
+        )
+
+        logger.debug(
+            f"Найдено {len(neighbors_data)} соседей для узла {node_id} (запрошен {request.node_id})"
         )
 
         neighbors = []
@@ -1460,12 +1680,15 @@ class MemoryServiceAdapter:
     ) -> GetRelatedRecordsResponse:
         """Get related records through graph connections."""
         try:
-            if request.record_id not in self.graph.graph:
+            # Пробуем найти узел по разным форматам record_id
+            node_id = self._find_node_id(request.record_id)
+            if not node_id:
+                logger.debug(f"Узел {request.record_id} не найден в графе для get_related_records")
                 return GetRelatedRecordsResponse(records=[])
             
             visited = set()
             related_records = []
-            current_level = {request.record_id}
+            current_level = {node_id}
             
             for depth in range(request.max_depth):
                 next_level = set()
@@ -1711,10 +1934,23 @@ class MemoryServiceAdapter:
                     continue
                 
                 # Фильтруем по датам
-                if request.date_from and timestamp < request.date_from:
-                    continue
-                if request.date_to and timestamp > request.date_to:
-                    continue
+                # Убеждаемся, что оба datetime имеют timezone для корректного сравнения
+                if request.date_from:
+                    date_from = request.date_from
+                    if timestamp.tzinfo is None and date_from.tzinfo is not None:
+                        timestamp = timestamp.replace(tzinfo=timezone.utc)
+                    elif timestamp.tzinfo is not None and date_from.tzinfo is None:
+                        date_from = date_from.replace(tzinfo=timezone.utc)
+                    if timestamp < date_from:
+                        continue
+                if request.date_to:
+                    date_to = request.date_to
+                    if timestamp.tzinfo is None and date_to.tzinfo is not None:
+                        timestamp = timestamp.replace(tzinfo=timezone.utc)
+                    elif timestamp.tzinfo is not None and date_to.tzinfo is None:
+                        date_to = date_to.replace(tzinfo=timezone.utc)
+                    if timestamp > date_to:
+                        continue
                 
                 content = props.get("content", "")
                 content_preview = content[:200] if content else ""

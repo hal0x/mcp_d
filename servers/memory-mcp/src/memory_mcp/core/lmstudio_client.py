@@ -179,32 +179,172 @@ class LMStudioEmbeddingClient:
         return all_embeddings
 
     async def _generate_batch_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Генерация эмбеддингов для батча текстов через параллельную обработку"""
+        """Генерация эмбеддингов для батча текстов одним запросом"""
         if not texts:
             return []
         
-        # Обрабатываем тексты параллельно
-        tasks = []
-        for i, text in enumerate(texts):
-            task = self._process_single_text_async(text, i, len(texts))
-            tasks.append(task)
+        # LM Studio API поддерживает батчи - отправляем все тексты одним запросом
+        # Проверяем длину текстов и обрезаем при необходимости
+        processed_texts = []
+        for text in texts:
+            if len(text) > self.max_text_length:
+                logger.warning(
+                    f"Текст превышает лимит ({len(text)} > {self.max_text_length}), обрезаем"
+                )
+                text = text[:self.max_text_length]
+            processed_texts.append(text)
         
-        # Выполняем все задачи параллельно
-        embeddings = await asyncio.gather(*tasks, return_exceptions=True)
+        # LM Studio использует OpenAI-совместимый формат с массивом текстов
+        payload = {"model": self.model_name, "input": processed_texts}
         
-        # Обрабатываем результаты и исключения
-        result = []
+        # Инициализируем сессию если не существует
+        if not self.session:
+            connector = aiohttp.TCPConnector(
+                limit=HTTP_CONNECTOR_LIMIT,
+                limit_per_host=HTTP_CONNECTOR_LIMIT_PER_HOST,
+                ttl_dns_cache=300,
+                use_dns_cache=True,
+                enable_cleanup_closed=True,
+                force_close=True,
+                ssl=False,
+            )
+            timeout = aiohttp.ClientTimeout(
+                total=DEFAULT_TIMEOUT_MAX_RETRY,
+                connect=DEFAULT_TIMEOUT_CONNECT,
+                sock_read=DEFAULT_TIMEOUT_MAX_RETRY,
+                sock_connect=DEFAULT_TIMEOUT_CONNECT,
+            )
+            self.session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=timeout,
+                headers={"Connection": "close"},
+            )
+        
+        # Повторные попытки с разумными таймаутами
         default_dim = self._embedding_dimension or 1024
-        for i, emb in enumerate(embeddings):
-            if isinstance(emb, Exception):
-                logger.warning(f"Ошибка при генерации эмбеддинга для текста {i+1}: {emb}")
-                result.append([0.0] * default_dim)
-            elif emb:
-                result.append(emb)
-            else:
-                result.append([0.0] * default_dim)
+        for attempt in range(3):
+            try:
+                timeout_seconds = 60 + (attempt * 30)
+                
+                if attempt > 0:
+                    logger.debug(f"Повторная попытка батч-запроса к LM Studio ({attempt + 1}/3)")
+                
+                async with asyncio.timeout(timeout_seconds):
+                    async with self.session.post(
+                        f"{self.base_url}/v1/embeddings", json=payload
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            # LM Studio возвращает OpenAI-совместимый формат:
+                            # {"data": [{"embedding": [...], "index": 0}, ...]}
+                            if "data" in data and isinstance(data["data"], list):
+                                # Сортируем по index, чтобы сохранить порядок
+                                sorted_data = sorted(data["data"], key=lambda x: x.get("index", 0))
+                                embeddings = [item.get("embedding") for item in sorted_data]
+                                
+                                # Проверяем, что все эмбеддинги получены
+                                if len(embeddings) == len(processed_texts) and all(emb for emb in embeddings):
+                                    # Сохраняем размерность при первом успешном запросе
+                                    if self._embedding_dimension is None and embeddings[0]:
+                                        self._embedding_dimension = len(embeddings[0])
+                                    logger.info(f"✅ Получено {len(embeddings)} эмбеддингов батчем")
+                                    return embeddings
+                                else:
+                                    logger.warning(
+                                        f"Получено {len(embeddings)} эмбеддингов вместо {len(processed_texts)}"
+                                    )
+                                    # Если не все эмбеддинги получены, создаем пустые для недостающих
+                                    result = []
+                                    for i, emb in enumerate(embeddings):
+                                        if emb and isinstance(emb, list):
+                                            result.append(emb)
+                                        else:
+                                            result.append([0.0] * default_dim)
+                                    # Добавляем пустые для недостающих
+                                    while len(result) < len(processed_texts):
+                                        result.append([0.0] * default_dim)
+                                    return result
+                            else:
+                                logger.error("LM Studio вернул неожиданный формат данных для батча")
+                                if attempt < 2:
+                                    await asyncio.sleep(2 + attempt)
+                                    continue
+                                return [[0.0] * default_dim] * len(processed_texts)
+                        else:
+                            error_text = await response.text()
+                            logger.error(
+                                f"Ошибка API LM Studio при батч-запросе: {response.status} - {error_text[:200]}"
+                            )
+                            if attempt < 2:
+                                await asyncio.sleep(2 + attempt)
+                                continue
+                            return [[0.0] * default_dim] * len(processed_texts)
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Таймаут батч-запроса к LM Studio (попытка {attempt + 1}/3)"
+                )
+                if attempt < 2:
+                    delay = (2 ** attempt) + random.uniform(0, 1)
+                    await asyncio.sleep(delay)
+                    continue
+                return [[0.0] * default_dim] * len(processed_texts)
+            except aiohttp.ClientError as e:
+                error_str = str(e)
+                is_connection_reset = "Connection reset" in error_str or "Errno 54" in error_str
+                
+                if is_connection_reset:
+                    logger.warning(
+                        f"Соединение с LM Studio разорвано при батч-запросе (попытка {attempt + 1}/3). "
+                        f"Ошибка: {e}"
+                    )
+                    if attempt < 2:
+                        try:
+                            if self.session:
+                                await self.session.close()
+                        except Exception:
+                            pass
+                        connector = aiohttp.TCPConnector(
+                            limit=HTTP_CONNECTOR_LIMIT,
+                            limit_per_host=HTTP_CONNECTOR_LIMIT_PER_HOST,
+                            ttl_dns_cache=300,
+                            use_dns_cache=True,
+                            enable_cleanup_closed=True,
+                            force_close=True,
+                            ssl=False,
+                        )
+                        timeout = aiohttp.ClientTimeout(
+                            total=DEFAULT_TIMEOUT_MAX_RETRY,
+                            connect=DEFAULT_TIMEOUT_CONNECT,
+                            sock_read=DEFAULT_TIMEOUT_MAX_RETRY,
+                            sock_connect=DEFAULT_TIMEOUT_CONNECT,
+                        )
+                        self.session = aiohttp.ClientSession(
+                            connector=connector,
+                            timeout=timeout,
+                            headers={"Connection": "close"},
+                        )
+                        delay = (5 * (2 ** attempt)) + random.uniform(0, 2)
+                        logger.debug(f"Ожидание {delay:.2f} секунд перед повторной попыткой батч-запроса...")
+                        await asyncio.sleep(delay)
+                        continue
+                else:
+                    logger.error(
+                        f"Ошибка соединения с LM Studio при батч-запросе (попытка {attempt + 1}/3): {e}"
+                    )
+                    if attempt < 2:
+                        delay = (2 ** attempt) * 2 + random.uniform(0, 1)
+                        await asyncio.sleep(delay)
+                        continue
+                return [[0.0] * default_dim] * len(processed_texts)
+            except Exception as e:
+                logger.error(f"Неожиданная ошибка при батч-запросе к LM Studio: {e}")
+                if attempt < 2:
+                    delay = (2 ** attempt) * 2 + random.uniform(0, 1)
+                    await asyncio.sleep(delay)
+                    continue
+                return [[0.0] * default_dim] * len(processed_texts)
         
-        return result
+        return [[0.0] * default_dim] * len(processed_texts)
 
     async def _process_single_text_async(
         self, text: str, index: int, total: int

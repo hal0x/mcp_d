@@ -726,6 +726,17 @@ def index(
             except Exception as e:
                 logger.warning(f"Ошибка при обновлении прогресса: {e}")
         
+        # Создаем граф памяти для синхронизации записей
+        from ..memory.typed_graph import TypedGraphMemory
+        db_path = settings.db_path
+        if not Path(db_path).is_absolute():
+            project_root = Path(__file__).parent.parent.parent
+            db_path = str(project_root / db_path)
+        db_path_obj = Path(db_path)
+        db_path_obj.parent.mkdir(parents=True, exist_ok=True)
+        graph = TypedGraphMemory(db_path=str(db_path))
+        logger.info(f"Инициализирован граф памяти: {db_path}")
+        
         indexer = TwoLevelIndexer(
             chroma_path=chroma_path,
             artifacts_path=settings.artifacts_path,
@@ -746,6 +757,7 @@ def index(
             recent_window_days=recent_window_days,
             strategy_threshold=strategy_threshold,
             force=force,
+            graph=graph,  # Передаем граф для синхронизации записей
             progress_callback=progress_callback,
         )
         click.echo("✅ Индексатор готов")

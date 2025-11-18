@@ -77,6 +77,7 @@ def fix_all_missing_embeddings(db_path: str = "data/memory_graph.db", chroma_pat
                     if collection is None:
                         continue
                     try:
+                        # Пробуем найти по точному совпадению ID
                         result = collection.get(ids=[record_id], include=["documents", "embeddings"])
                         if result.get("ids") and len(result["ids"]) > 0:
                             idx = result["ids"].index(record_id)
@@ -85,6 +86,29 @@ def fix_all_missing_embeddings(db_path: str = "data/memory_graph.db", chroma_pat
                             if result.get("documents") and idx < len(result["documents"]):
                                 content = result["documents"][idx]
                             break
+                        
+                        # Если не найдено по точному совпадению, пробуем найти по частичному совпадению
+                        # Для record_id типа "telegram:Семья:257859" ищем в метаданных
+                        if ":" in record_id:
+                            parts = record_id.split(":")
+                            if len(parts) >= 3:
+                                try:
+                                    msg_id = int(parts[-1])
+                                    chat_name = parts[1]
+                                    # Ищем по метаданным
+                                    where_filter = {"chat": chat_name}
+                                    result = collection.get(where=where_filter, include=["documents", "embeddings", "metadatas"])
+                                    if result.get("ids"):
+                                        # Ищем запись с похожим ID в метаданных
+                                        for idx, meta in enumerate(result.get("metadatas", [])):
+                                            if meta and meta.get("msg_id") == str(msg_id):
+                                                if result.get("embeddings") and idx < len(result["embeddings"]):
+                                                    embedding = result["embeddings"][idx]
+                                                if result.get("documents") and idx < len(result["documents"]):
+                                                    content = result["documents"][idx]
+                                                break
+                                except (ValueError, KeyError):
+                                    pass
                     except (ValueError, IndexError):
                         continue
                     except Exception as e:

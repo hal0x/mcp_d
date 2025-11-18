@@ -6,8 +6,10 @@
 
 import json
 import logging
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from ..utils.naming import slugify
 
@@ -68,15 +70,10 @@ class ContextManager:
             if not chat_sessions:
                 # Если нет сессий, но есть контекст чата, используем его
                 if chat_context:
-                    return {
-                        "previous_sessions_count": 0,
-                        "recent_context": chat_context,
-                        "ongoing_decisions": [],
-                        "open_risks": [],
-                        "key_links": [],
-                        "session_timeline": [],
-                        "chat_context": chat_context,
-                    }
+                    empty = self._empty_context()
+                    empty["recent_context"] = chat_context
+                    empty["chat_context"] = chat_context
+                    return empty
                 return self._empty_context()
 
             # Находим текущую сессию и предыдущие
@@ -88,15 +85,10 @@ class ContextManager:
                     f"Сессия {current_session_id} не найдена в чате {chat_name} (возможно, первая индексация)"
                 )
                 if chat_context:
-                    return {
-                        "previous_sessions_count": 0,
-                        "recent_context": chat_context,
-                        "ongoing_decisions": [],
-                        "open_risks": [],
-                        "key_links": [],
-                        "session_timeline": [],
-                        "chat_context": chat_context,
-                    }
+                    empty = self._empty_context()
+                    empty["recent_context"] = chat_context
+                    empty["chat_context"] = chat_context
+                    return empty
                 return self._empty_context()
 
             # Берем предыдущие сессии (не включая текущую)
@@ -192,6 +184,7 @@ class ContextManager:
             session_id = data.get("session_id") or session_file.stem
             meta = data.get("meta", {})
             time_range = meta.get("time_span", "")
+            end_time_utc = meta.get("end_time_utc", "")
             topics = data.get("topics", [])
             context_summary = " ".join(
                 topic.get("summary", "") for topic in topics[:2]
@@ -207,15 +200,56 @@ class ContextManager:
                 if attachment.startswith("link:")
             ]
 
+            # Извлекаем key_points и important_items из topics или напрямую из data
+            key_points = []
+            important_items = []
+            discussion = []
+            
+            # Пробуем извлечь из topics
+            for topic in topics:
+                if topic.get("key_points"):
+                    key_points.extend(topic.get("key_points", []))
+                if topic.get("important_items"):
+                    important_items.extend(topic.get("important_items", []))
+                if topic.get("discussion"):
+                    discussion.extend(topic.get("discussion", []))
+            
+            # Если не нашли в topics, пробуем напрямую из data
+            if not key_points:
+                key_points = data.get("key_points", [])
+            if not important_items:
+                important_items = data.get("important_items", [])
+            if not discussion:
+                discussion = data.get("discussion", [])
+
+            # Нормализуем формат (если это строки, оставляем как есть, если dict - извлекаем text)
+            def normalize_items(items):
+                result = []
+                for item in items:
+                    if isinstance(item, str):
+                        result.append(item)
+                    elif isinstance(item, dict):
+                        text = item.get("text") or item.get("summary") or str(item)
+                        result.append(text)
+                return result
+
+            key_points = normalize_items(key_points)
+            important_items = normalize_items(important_items)
+            discussion = normalize_items(discussion)
+
             return {
                 "session_id": session_id,
                 "file_path": session_file,
                 "file_time": session_file.stat().st_mtime,
                 "time_range": time_range,
+                "end_time_utc": end_time_utc,
                 "context": context_summary,
                 "decisions": decisions,
                 "risks": risks,
                 "links": links,
+                "key_points": key_points,
+                "important_items": important_items,
+                "discussion": discussion,
             }
 
         except Exception as e:
@@ -250,16 +284,26 @@ class ContextManager:
             "open_risks": [],
             "key_links": [],
             "session_timeline": [],
+            "plans_and_tasks": [],
+            "active_discussions": [],
+            "active_risks": [],
         }
 
         if not sessions:
             return context
 
+        # Определяем временную границу для актуальных рисков (30 дней назад)
+        now = datetime.now(ZoneInfo("UTC"))
+        thirty_days_ago = now - timedelta(days=30)
+
         # Собираем информацию из последних сессий
         recent_contexts = []
         all_decisions = []
-        all_risks = []
+        all_risks = []  # Все риски с информацией о сессии
         all_links = []
+        all_key_points = []
+        all_important_items = []
+        all_discussions = []
 
         for session in sessions:
             # Добавляем в timeline
@@ -280,11 +324,25 @@ class ContextManager:
             # Собираем решения
             all_decisions.extend(session["decisions"])
 
-            # Собираем риски
-            all_risks.extend(session["risks"])
+            # Собираем риски с информацией о времени сессии
+            end_time_utc = session.get("end_time_utc", "")
+            session_risks = session.get("risks", [])
+            for risk in session_risks:
+                all_risks.append({
+                    "risk": risk,
+                    "session_id": session["session_id"],
+                    "end_time_utc": end_time_utc,
+                })
 
             # Собираем ссылки
-            all_links.extend(session["links"])
+            all_links.extend(session.get("links", []))
+
+            # Собираем key_points и important_items
+            all_key_points.extend(session.get("key_points", []))
+            all_important_items.extend(session.get("important_items", []))
+
+            # Собираем discussion из последних сессий
+            all_discussions.extend(session.get("discussion", []))
 
         # Формируем агрегированный контекст
         if recent_contexts:
@@ -292,9 +350,48 @@ class ContextManager:
                 recent_contexts[-5:]
             )  # Последние 5 контекстов
 
-        # Берем последние решения и риски
+        # Берем последние решения
         context["ongoing_decisions"] = all_decisions[-10:] if all_decisions else []
-        context["open_risks"] = all_risks[-5:] if all_risks else []
+
+        # Фильтруем актуальные риски
+        # Риск актуален, если сессия была за последние 30 дней ИЛИ в последних 10 сессиях
+        recent_sessions_ids = {s["session_id"] for s in sessions[-10:]}
+        active_risks_list = []
+
+        for risk_info in all_risks:
+            is_recent = False
+            end_time_utc = risk_info.get("end_time_utc", "")
+            
+            # Проверяем по времени
+            if end_time_utc:
+                try:
+                    from ..utils.datetime_utils import parse_datetime_utc
+                    risk_time = parse_datetime_utc(
+                        end_time_utc, return_none_on_error=True, use_zoneinfo=True
+                    )
+                    if risk_time and risk_time >= thirty_days_ago:
+                        is_recent = True
+                except Exception:
+                    pass
+            
+            # Проверяем по последним сессиям
+            if risk_info["session_id"] in recent_sessions_ids:
+                is_recent = True
+
+            if is_recent:
+                active_risks_list.append(risk_info["risk"])
+
+        # Берем последние актуальные риски (до 15 штук)
+        context["active_risks"] = active_risks_list[-15:] if active_risks_list else []
+        # Для обратной совместимости оставляем open_risks
+        context["open_risks"] = context["active_risks"][:5] if context["active_risks"] else []
+
+        # Объединяем key_points и important_items в планы и задачи (до 20 элементов)
+        plans_and_tasks = all_key_points + all_important_items
+        context["plans_and_tasks"] = plans_and_tasks[-20:] if plans_and_tasks else []
+
+        # Берем последние обсуждения (до 10 элементов)
+        context["active_discussions"] = all_discussions[-10:] if all_discussions else []
 
         # Уникальные ссылки
         context["key_links"] = list(set(all_links))[-20:] if all_links else []
@@ -436,12 +533,22 @@ class ContextManager:
         window = session.get("window", "unknown")
         message_count = session.get("message_count", len(session.get("messages", [])))
 
+        # Извлекаем новые поля из сессии
+        key_points = session.get("key_points", [])
+        important_items = session.get("important_items", [])
+        discussion = session.get("discussion", [])
+        risks = session.get("risks", [])
+
         session_info = {
             "session_id": session_id,
             "time_range": time_range,
             "window": window,
             "message_count": message_count,
             "summary": session_summary or session.get("summary", ""),
+            "key_points": key_points,
+            "important_items": important_items,
+            "discussion": discussion,
+            "risks": risks,
         }
 
         self._session_summaries[chat_name].append(session_info)
@@ -467,6 +574,35 @@ class ContextManager:
                     f"- {sess_info['session_id']} ({sess_info['time_range']}, "
                     f"окно: {sess_info['window']}): {summary[:300]}"
                 )
+
+        # Собираем планы и задачи из последних сессий
+        all_plans_tasks = []
+        for sess_info in recent_summaries:
+            all_plans_tasks.extend(sess_info.get("key_points", []))
+            all_plans_tasks.extend(sess_info.get("important_items", []))
+        
+        if all_plans_tasks:
+            context_parts.append("\nПланы и задачи:\n")
+            for item in all_plans_tasks[-20:]:  # Последние 20 элементов
+                if isinstance(item, str):
+                    context_parts.append(f"- {item}")
+                elif isinstance(item, dict):
+                    text = item.get("text") or item.get("summary") or str(item)
+                    context_parts.append(f"- {text}")
+
+        # Собираем активные обсуждения из последних сессий
+        all_discussions = []
+        for sess_info in recent_summaries:
+            all_discussions.extend(sess_info.get("discussion", []))
+        
+        if all_discussions:
+            context_parts.append("\nАктивные обсуждения:\n")
+            for item in all_discussions[-10:]:  # Последние 10 элементов
+                if isinstance(item, str):
+                    context_parts.append(f"- {item}")
+                elif isinstance(item, dict):
+                    text = item.get("text") or item.get("summary") or str(item)
+                    context_parts.append(f"- {text}")
 
         # Объединяем и ограничиваем размер
         new_context = "\n".join(context_parts)

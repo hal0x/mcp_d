@@ -51,6 +51,7 @@ class EmbeddingService:
         return self._dimension
 
     def embed(self, text: str) -> Optional[List[float]]:
+        """Генерация эмбеддинга для одного текста"""
         if not self.base_url:
             return None
         payload_text = text.strip()
@@ -94,6 +95,81 @@ class EmbeddingService:
         except Exception as exc:  # pragma: no cover - network errors
             logger.warning("Embedding service error: %s", exc)
             return None
+
+    def embed_batch(self, texts: List[str]) -> List[Optional[List[float]]]:
+        """Генерация эмбеддингов для батча текстов одним запросом"""
+        if not self.base_url or not texts:
+            return [None] * len(texts) if texts else []
+        
+        # Очищаем и фильтруем тексты
+        processed_texts = [text.strip() for text in texts if text.strip()]
+        if not processed_texts:
+            return [None] * len(texts)
+        
+        try:
+            # Determine endpoint and payload format
+            if self.api_format == "openai":
+                endpoint = f"{self.base_url}/v1/embeddings"
+                # LM Studio и OpenAI API поддерживают батчи - отправляем массив текстов
+                payload = {
+                    "model": self.model_name or "text-embedding-ada-002",
+                    "input": processed_texts,
+                }
+            else:  # tei format
+                endpoint = f"{self.base_url}/embeddings"
+                payload = {"inputs": processed_texts}
+
+            logger.info(f"🔤 Отправка батча из {len(processed_texts)} текстов для генерации эмбеддингов")
+            
+            response = self.session.post(
+                endpoint,
+                json=payload,
+                timeout=self.timeout * max(1, len(processed_texts) // 10),  # Увеличиваем таймаут для больших батчей
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Handle both response formats
+            embeddings = []
+            if "data" in data and isinstance(data["data"], list):
+                # OpenAI format: {"data": [{"embedding": [...], "index": 0}, ...]}
+                sorted_data = sorted(data["data"], key=lambda x: x.get("index", 0))
+                embeddings = [item.get("embedding") for item in sorted_data]
+            elif isinstance(data, list) and len(data) > 0:
+                # TEI format: [[...], [...]]
+                embeddings = data
+            else:
+                raise ValueError("Embedding service returned unexpected payload format")
+            
+            # Проверяем, что все эмбеддинги получены
+            if len(embeddings) != len(processed_texts):
+                logger.warning(
+                    f"Получено {len(embeddings)} эмбеддингов вместо {len(processed_texts)}"
+                )
+                # Дополняем None для недостающих
+                while len(embeddings) < len(processed_texts):
+                    embeddings.append(None)
+            
+            # Сохраняем размерность при первом успешном запросе
+            if self._dimension is None and embeddings and embeddings[0]:
+                self._dimension = len(embeddings[0])
+            
+            # Создаем результат с None для пустых текстов
+            result = []
+            processed_idx = 0
+            for text in texts:
+                if text.strip():
+                    emb = embeddings[processed_idx] if processed_idx < len(embeddings) else None
+                    result.append(emb)
+                    processed_idx += 1
+                else:
+                    result.append(None)
+            
+            logger.info(f"✅ Получено {len([e for e in result if e])} эмбеддингов из {len(texts)} текстов")
+            return result
+        except Exception as exc:  # pragma: no cover - network errors
+            logger.warning(f"Embedding service batch error: {exc}")
+            return [None] * len(texts)
 
     def close(self) -> None:
         try:

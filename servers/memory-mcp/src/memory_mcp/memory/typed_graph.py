@@ -117,6 +117,8 @@ class TypedGraphMemory:
 
         # Загружаем узлы (включая эмбеддинги)
         cursor.execute("SELECT id, type, label, properties, embedding FROM nodes")
+        nodes_with_embeddings = 0
+        nodes_without_embeddings = 0
         for row in cursor.fetchall():
             props = json.loads(row["properties"]) if row["properties"] else {}
             node_attrs = {
@@ -129,18 +131,46 @@ class TypedGraphMemory:
             if row["embedding"]:
                 try:
                     embedding = json.loads(row["embedding"].decode())
-                    node_attrs["embedding"] = embedding
-                except Exception:
+                    # Убеждаемся, что эмбеддинг - это список
+                    if hasattr(embedding, 'tolist'):
+                        embedding = embedding.tolist()
+                    elif not isinstance(embedding, list):
+                        try:
+                            embedding = list(embedding)
+                        except (TypeError, ValueError):
+                            logger.warning(f"Не удалось преобразовать эмбеддинг в список для узла {row['id']}")
+                            embedding = None
+                    if embedding:
+                        node_attrs["embedding"] = embedding
+                        nodes_with_embeddings += 1
+                except Exception as e:
                     # Если не удалось распарсить, пропускаем
-                    pass
+                    logger.debug(f"Ошибка загрузки эмбеддинга для узла {row['id']}: {e}")
+                    nodes_without_embeddings += 1
+            else:
+                nodes_without_embeddings += 1
             self.graph.add_node(row["id"], **node_attrs)
+        
+        logger.info(
+            f"Загружено узлов с эмбеддингами: {nodes_with_embeddings}, "
+            f"без эмбеддингов: {nodes_without_embeddings}"
+        )
 
         # Загружаем рёбра
+        edges_loaded = 0
         cursor.execute(
             "SELECT source_id, target_id, type, weight, properties FROM edges"
         )
         for row in cursor.fetchall():
             props = json.loads(row["properties"]) if row["properties"] else {}
+            # Проверяем, что оба узла существуют в графе
+            if row["source_id"] not in self.graph:
+                logger.debug(f"Исходный узел {row['source_id']} не найден в графе, пропускаем ребро")
+                continue
+            if row["target_id"] not in self.graph:
+                logger.debug(f"Целевой узел {row['target_id']} не найден в графе, пропускаем ребро")
+                continue
+            
             self.graph.add_edge(
                 row["source_id"],
                 row["target_id"],
@@ -148,10 +178,12 @@ class TypedGraphMemory:
                 weight=row["weight"],
                 **props,
             )
+            edges_loaded += 1
 
         logger.info(
             f"Граф загружен: {self.graph.number_of_nodes()} узлов, "
-            f"{self.graph.number_of_edges()} рёбер"
+            f"{edges_loaded} рёбер загружено из БД, "
+            f"{self.graph.number_of_edges()} рёбер в графе"
         )
 
         # Обновляем FTS индекс из существующих данных
@@ -299,6 +331,15 @@ class TypedGraphMemory:
                 json.dumps(new_embedding).encode() if new_embedding else None
             )
 
+            # Логирование для отладки эмбеддингов
+            if embedding is not None:
+                embedding_size = len(embedding) if isinstance(embedding, (list, tuple)) else 0
+                logger.debug(
+                    f"Обновление эмбеддинга для узла {node_id}: "
+                    f"размер={embedding_size}, "
+                    f"тип={type(embedding).__name__}"
+                )
+
             # Обновляем в БД
             cursor.execute(
                 """
@@ -322,7 +363,17 @@ class TypedGraphMemory:
                 if source is not None:
                     self.graph.nodes[node_id]["source"] = source
                 if new_embedding is not None:
+                    # Убеждаемся, что эмбеддинг - это список
+                    if hasattr(new_embedding, 'tolist'):
+                        new_embedding = new_embedding.tolist()
+                    elif not isinstance(new_embedding, list):
+                        try:
+                            new_embedding = list(new_embedding)
+                        except (TypeError, ValueError):
+                            logger.warning(f"Не удалось преобразовать эмбеддинг в список для узла {node_id}")
+                            new_embedding = None
                     self.graph.nodes[node_id]["embedding"] = new_embedding
+                    logger.debug(f"Эмбеддинг обновлен в NetworkX графе для узла {node_id}: размер={len(new_embedding) if new_embedding else 0}")
 
             self.conn.commit()
 
@@ -757,28 +808,70 @@ class TypedGraphMemory:
         if not query.strip():
             return [], 0
 
+        logger.debug(
+            f"Поиск: query='{query}', limit={limit}, source={source}, "
+            f"tags={tags}, date_from={date_from}, date_to={date_to}"
+        )
+
         match_expr = self._prepare_match_expression(query)
         if not match_expr:
+            logger.debug(f"Не удалось подготовить match expression для запроса: '{query}'")
             return [], 0
+
+        logger.debug(f"Match expression: {match_expr}")
 
         cursor = self.conn.cursor()
         fetch_limit = max(limit * 5, 50)
-        rows = cursor.execute(
-            """
-            SELECT node_id,
-                   content,
-                   snippet(node_search, 1, '<b>', '</b>', ' … ', 15) AS snippet,
-                   bm25(node_search) AS score,
-                   source,
-                   tags,
-                   entities
-            FROM node_search
-            WHERE node_search MATCH ?
-            ORDER BY score
-            LIMIT ?
-        """,
-            (match_expr, fetch_limit),
-        ).fetchall()
+        
+        try:
+            rows = cursor.execute(
+                """
+                SELECT node_id,
+                       content,
+                       snippet(node_search, 1, '<b>', '</b>', ' … ', 15) AS snippet,
+                       bm25(node_search) AS score,
+                       source,
+                       tags,
+                       entities
+                FROM node_search
+                WHERE node_search MATCH ?
+                ORDER BY score
+                LIMIT ?
+            """,
+                (match_expr, fetch_limit),
+            ).fetchall()
+        except Exception as e:
+            logger.warning(f"Ошибка при выполнении FTS поиска: {e}, query='{query}', match_expr='{match_expr}'")
+            # Пробуем более простой поиск без расширенных токенов
+            try:
+                # Простой поиск по словам из запроса
+                simple_tokens = [t for t in query.split() if len(t) > 2]
+                if simple_tokens:
+                    simple_expr = " OR ".join(f'"{t}"' for t in simple_tokens[:5])
+                    rows = cursor.execute(
+                        """
+                        SELECT node_id,
+                               content,
+                               snippet(node_search, 1, '<b>', '</b>', ' … ', 15) AS snippet,
+                               bm25(node_search) AS score,
+                               source,
+                               tags,
+                               entities
+                        FROM node_search
+                        WHERE node_search MATCH ?
+                        ORDER BY score
+                        LIMIT ?
+                    """,
+                        (simple_expr, fetch_limit),
+                    ).fetchall()
+                    logger.debug(f"Использован упрощенный поиск: {simple_expr}")
+                else:
+                    rows = []
+            except Exception as e2:
+                logger.error(f"Ошибка при упрощенном поиске: {e2}")
+                rows = []
+        
+        logger.debug(f"Найдено {len(rows)} результатов до фильтрации")
 
         results: List[Dict[str, Any]] = []
         # Собираем все BM25 scores для нормализации
@@ -844,6 +937,13 @@ class TypedGraphMemory:
             # BM25 обычно возвращает отрицательные значения, где более отрицательные = лучше
             bm25_score = row["score"] if row["score"] is not None else 0.0
             
+            # Логируем результаты для отладки
+            if result_count < 5:  # Логируем только первые 5 результатов
+                logger.debug(
+                    f"Результат {result_count + 1}: node_id={node_id}, "
+                    f"bm25_score={bm25_score:.4f}, source={node_source}"
+                )
+            
             # Нормализуем BM25 с учетом диапазона scores для лучшего различения
             if bm25_range > 0.001:
                 # Есть различия в scores - используем нормализацию по диапазону
@@ -886,6 +986,12 @@ class TypedGraphMemory:
 
         total = len(results)
         results.sort(key=lambda item: item["score"], reverse=True)
+        
+        logger.debug(
+            f"Поиск завершен: найдено {total} результатов из {len(rows)} "
+            f"до фильтрации для запроса '{query}'"
+        )
+        
         return results[:limit], total
 
     def get_node(self, node_id: str) -> Optional[GraphNode]:
@@ -980,22 +1086,50 @@ class TypedGraphMemory:
             Список (neighbor_id, edge_data)
         """
         if node_id not in self.graph:
+            logger.debug(f"Узел {node_id} не найден в графе")
             return []
 
         neighbors = []
+        edge_type_value = edge_type.value if edge_type else None
 
         if direction in ("out", "both"):
-            for neighbor in self.graph.successors(node_id):
-                edge_data = self.graph[node_id][neighbor]
-                if edge_type is None or edge_data.get("edge_type") == edge_type.value:
-                    neighbors.append((neighbor, edge_data))
+            successors = list(self.graph.successors(node_id))
+            logger.debug(f"Узел {node_id} имеет {len(successors)} исходящих связей")
+            for neighbor in successors:
+                try:
+                    edge_data = self.graph[node_id][neighbor]
+                    edge_type_in_data = edge_data.get("edge_type")
+                    # Сравниваем как строку, так и значение enum
+                    # edge_type_in_data может быть строкой "relates_to", а edge_type.value тоже "relates_to"
+                    if edge_type is None:
+                        neighbors.append((neighbor, edge_data))
+                    elif edge_type_in_data:
+                        # Сравниваем строки напрямую
+                        if str(edge_type_in_data) == str(edge_type_value) or str(edge_type_in_data) == str(edge_type.value):
+                            neighbors.append((neighbor, edge_data))
+                except KeyError:
+                    logger.debug(f"Ребро между {node_id} и {neighbor} не найдено в графе")
+                    continue
 
         if direction in ("in", "both"):
-            for neighbor in self.graph.predecessors(node_id):
-                edge_data = self.graph[neighbor][node_id]
-                if edge_type is None or edge_data.get("edge_type") == edge_type.value:
-                    neighbors.append((neighbor, edge_data))
+            predecessors = list(self.graph.predecessors(node_id))
+            logger.debug(f"Узел {node_id} имеет {len(predecessors)} входящих связей")
+            for neighbor in predecessors:
+                try:
+                    edge_data = self.graph[neighbor][node_id]
+                    edge_type_in_data = edge_data.get("edge_type")
+                    # Сравниваем как строку, так и значение enum
+                    if edge_type is None:
+                        neighbors.append((neighbor, edge_data))
+                    elif edge_type_in_data:
+                        # Сравниваем строки напрямую
+                        if str(edge_type_in_data) == str(edge_type_value) or str(edge_type_in_data) == str(edge_type.value):
+                            neighbors.append((neighbor, edge_data))
+                except KeyError:
+                    logger.debug(f"Ребро между {neighbor} и {node_id} не найдено в графе")
+                    continue
 
+        logger.debug(f"Найдено {len(neighbors)} соседей для узла {node_id}")
         return neighbors
 
     def find_path(

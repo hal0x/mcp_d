@@ -1495,7 +1495,9 @@ class TwoLevelIndexer:
                             raise
                     
                     # Синхронизация с графом памяти
+                    logger.debug(f"Проверка синхронизации с графом: ingestor={self.ingestor is not None}, graph={self.graph is not None}")
                     if self.ingestor and self.graph:
+                        logger.info(f"Синхронизация с графом: обрабатываем {len(messages_to_index)} сообщений")
                         from ..indexing import MemoryRecord, Attachment
                         from ..utils.datetime_utils import parse_datetime_utc
                         
@@ -1547,12 +1549,17 @@ class TwoLevelIndexer:
                                 continue
                         
                         # Сохраняем записи в граф батчем
+                        logger.debug(f"Подготовлено {len(records_to_ingest)} записей для сохранения в граф")
                         if records_to_ingest:
                             try:
                                 records_only = [r for r, _ in records_to_ingest]
-                                self.ingestor.ingest(records_only)
+                                logger.info(f"Сохранение {len(records_only)} записей в граф через ingestor.ingest()")
+                                ingest_result = self.ingestor.ingest(records_only)
+                                logger.info(f"Результат ingest: records_ingested={ingest_result.records_ingested}, attachments_ingested={ingest_result.attachments_ingested}")
                                 
                                 # Сохраняем эмбеддинги в граф
+                                embeddings_saved = 0
+                                embeddings_failed = 0
                                 for record, embedding in records_to_ingest:
                                     # Проверяем, что эмбеддинг существует и не пустой
                                     if embedding is not None and len(embedding) > 0:
@@ -1563,12 +1570,44 @@ class TwoLevelIndexer:
                                             elif not isinstance(embedding, list):
                                                 embedding = list(embedding)
                                             
-                                            self.graph.update_node(
+                                            # Проверяем, что узел существует в графе
+                                            if record.record_id not in self.graph.graph:
+                                                logger.warning(
+                                                    f"Узел {record.record_id} не найден в графе, "
+                                                    f"нельзя обновить эмбеддинг"
+                                                )
+                                                embeddings_failed += 1
+                                                continue
+                                            
+                                            # Сохраняем эмбеддинг
+                                            success = self.graph.update_node(
                                                 record.record_id,
                                                 embedding=embedding,
                                             )
+                                            if success:
+                                                embeddings_saved += 1
+                                                logger.debug(
+                                                    f"Эмбеддинг сохранен для {record.record_id}: "
+                                                    f"размер={len(embedding)}"
+                                                )
+                                            else:
+                                                embeddings_failed += 1
+                                                logger.warning(
+                                                    f"Не удалось сохранить эмбеддинг для {record.record_id}"
+                                                )
                                         except Exception as e:
-                                            logger.debug(f"Ошибка при сохранении эмбеддинга для {record.record_id}: {e}")
+                                            embeddings_failed += 1
+                                            logger.warning(
+                                                f"Ошибка при сохранении эмбеддинга для {record.record_id}: {e}",
+                                                exc_info=True
+                                            )
+                                    else:
+                                        logger.debug(f"Эмбеддинг отсутствует или пустой для {record.record_id}")
+                                
+                                logger.info(
+                                    f"Эмбеддинги сохранены: {embeddings_saved}, "
+                                    f"ошибок: {embeddings_failed} из {len(records_to_ingest)} записей"
+                                )
                                 
                                 logger.debug(f"Синхронизировано {len(records_to_ingest)} записей с графом памяти")
                             except Exception as e:

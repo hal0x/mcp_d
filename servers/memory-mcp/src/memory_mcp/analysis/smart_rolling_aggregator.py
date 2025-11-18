@@ -13,7 +13,8 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -1252,6 +1253,92 @@ class SmartRollingAggregator:
                     max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
                 )
 
+            # Извлекаем данные из сессий для новых разделов
+            all_key_points = []
+            all_important_items = []
+            all_discussions = []
+            all_risks_with_time = []  # Риски с информацией о времени
+
+            # Определяем временную границу для актуальных рисков (30 дней назад)
+            now = datetime.now(ZoneInfo("UTC"))
+            thirty_days_ago = now - timedelta(days=30)
+
+            for session in sessions:
+                # Извлекаем key_points и important_items из topics или напрямую
+                topics = session.get("topics", [])
+                for topic in topics:
+                    if topic.get("key_points"):
+                        all_key_points.extend(topic.get("key_points", []))
+                    if topic.get("important_items"):
+                        all_important_items.extend(topic.get("important_items", []))
+                    if topic.get("discussion"):
+                        all_discussions.extend(topic.get("discussion", []))
+
+                # Если не нашли в topics, пробуем напрямую из session
+                if not all_key_points:
+                    all_key_points.extend(session.get("key_points", []))
+                if not all_important_items:
+                    all_important_items.extend(session.get("important_items", []))
+                if not all_discussions:
+                    all_discussions.extend(session.get("discussion", []))
+
+                # Извлекаем риски с информацией о времени
+                meta = session.get("meta", {})
+                end_time_utc = meta.get("end_time_utc", "")
+                risks = session.get("risks", [])
+                for risk in risks:
+                    risk_text = risk.get("text", "") if isinstance(risk, dict) else str(risk)
+                    if risk_text:
+                        all_risks_with_time.append({
+                            "risk": risk_text,
+                            "end_time_utc": end_time_utc,
+                            "session_id": session.get("session_id", "unknown"),
+                        })
+
+            # Нормализуем формат элементов
+            def normalize_items(items):
+                result = []
+                for item in items:
+                    if isinstance(item, str):
+                        result.append(item)
+                    elif isinstance(item, dict):
+                        text = item.get("text") or item.get("summary") or str(item)
+                        result.append(text)
+                return result
+
+            all_key_points = normalize_items(all_key_points)
+            all_important_items = normalize_items(all_important_items)
+            all_discussions = normalize_items(all_discussions)
+
+            # Объединяем планы и задачи
+            plans_and_tasks = all_key_points + all_important_items
+
+            # Фильтруем актуальные риски
+            recent_sessions_ids = {s.get("session_id", "") for s in sessions[-10:]}
+            active_risks = []
+            for risk_info in all_risks_with_time:
+                is_recent = False
+                end_time_utc = risk_info.get("end_time_utc", "")
+
+                # Проверяем по времени
+                if end_time_utc:
+                    try:
+                        from ..utils.datetime_utils import parse_datetime_utc
+                        risk_time = parse_datetime_utc(
+                            end_time_utc, return_none_on_error=True, use_zoneinfo=True
+                        )
+                        if risk_time and risk_time >= thirty_days_ago:
+                            is_recent = True
+                    except Exception:
+                        pass
+
+                # Проверяем по последним сессиям
+                if risk_info["session_id"] in recent_sessions_ids:
+                    is_recent = True
+
+                if is_recent:
+                    active_risks.append(risk_info["risk"])
+
             # Сохраняем обновленный контекст
             with open(context_file, "w", encoding="utf-8") as f:
                 f.write(f"# Контекст чата: {chat_name}\n\n")
@@ -1261,6 +1348,28 @@ class SmartRollingAggregator:
                 f.write("## Образ чата\n\n")
                 f.write(updated_context.strip())
                 f.write("\n\n")
+
+                # Добавляем раздел "Планы и задачи"
+                if plans_and_tasks:
+                    f.write("## Планы и задачи\n\n")
+                    for item in plans_and_tasks[-20:]:  # Последние 20 элементов
+                        f.write(f"- {item}\n")
+                    f.write("\n")
+
+                # Добавляем раздел "Проблемы и открытые вопросы"
+                if active_risks:
+                    f.write("## Проблемы и открытые вопросы\n\n")
+                    for risk in active_risks[-15:]:  # Последние 15 рисков
+                        f.write(f"- {risk}\n")
+                    f.write("\n")
+
+                # Добавляем раздел "Активные обсуждения"
+                if all_discussions:
+                    f.write("## Активные обсуждения\n\n")
+                    for discussion in all_discussions[-10:]:  # Последние 10 обсуждений
+                        f.write(f"- {discussion}\n")
+                    f.write("\n")
+
                 f.write("## Последние сессии\n\n")
                 f.write(sessions_content)
 

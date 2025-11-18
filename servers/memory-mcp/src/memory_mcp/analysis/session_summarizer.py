@@ -868,7 +868,33 @@ class SessionSummarizer:
                 if len(previous_context["ongoing_decisions"]) > max_decisions:
                     context_section += f"- ... и еще {len(previous_context['ongoing_decisions']) - max_decisions} решений\n"
 
-            if previous_context["open_risks"]:
+            if previous_context.get("plans_and_tasks"):
+                context_section += "\nПланы и задачи из предыдущих сессий:\n"
+                max_plans = 15  # Максимум 15 планов и задач
+                for item in previous_context["plans_and_tasks"][:max_plans]:
+                    context_section += f"- {item}\n"
+                if len(previous_context["plans_and_tasks"]) > max_plans:
+                    context_section += f"- ... и еще {len(previous_context['plans_and_tasks']) - max_plans} пунктов\n"
+
+            if previous_context.get("active_discussions"):
+                context_section += "\nАктивные обсуждения из предыдущих сессий:\n"
+                max_discussions = 10  # Максимум 10 обсуждений
+                for discussion in previous_context["active_discussions"][:max_discussions]:
+                    context_section += f"- {discussion}\n"
+                if len(previous_context["active_discussions"]) > max_discussions:
+                    context_section += f"- ... и еще {len(previous_context['active_discussions']) - max_discussions} обсуждений\n"
+
+            if previous_context.get("active_risks"):
+                context_section += "\nПроблемы и открытые вопросы из предыдущих сессий:\n"
+                # Ограничиваем количество рисков
+                max_risks = 12  # Увеличиваем до 12 рисков для максимального контекста
+                for risk in previous_context["active_risks"][:max_risks]:
+                    context_section += f"- {risk}\n"
+                if len(previous_context["active_risks"]) > max_risks:
+                    context_section += f"- ... и еще {len(previous_context['active_risks']) - max_risks} проблем\n"
+            
+            # Для обратной совместимости оставляем open_risks
+            if previous_context.get("open_risks") and not previous_context.get("active_risks"):
                 context_section += "\nОткрытые риски из предыдущих сессий:\n"
                 # Ограничиваем количество рисков
                 max_risks = 12  # Увеличиваем до 12 рисков для максимального контекста
