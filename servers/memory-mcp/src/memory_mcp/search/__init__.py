@@ -1,24 +1,7 @@
-"""Search functionality for Telegram Dump Manager."""
+"""Модуль интерактивного поиска."""
 
-from .hybrid_search import HybridSearchEngine, HybridSearchManager
-from .search_explainer import (
-    ConnectionGraphBuilder,
-    ConnectionPath,
-    MarkdownExporter,
-    RelevanceExplanation,
-    ScoreBreakdown,
-    ScoreDecomposer,
-    SearchExplainer,
-)
+from .search_session_store import SearchSessionStore
+from .smart_search_engine import SmartSearchEngine
+from .hybrid_search import HybridSearchManager
 
-__all__ = [
-    "HybridSearchEngine",
-    "HybridSearchManager",
-    "SearchExplainer",
-    "ScoreDecomposer",
-    "ScoreBreakdown",
-    "ConnectionGraphBuilder",
-    "ConnectionPath",
-    "RelevanceExplanation",
-    "MarkdownExporter",
-]
+__all__ = ["SearchSessionStore", "SmartSearchEngine", "HybridSearchManager"]
