@@ -800,11 +800,27 @@ class TwoLevelIndexer:
                 if self.enable_smart_aggregation and self.smart_aggregator:
                     logger.info("🧠 Используем умную группировку с скользящими окнами")
                     # Используем умную агрегацию
-                    aggregation_result = await self.smart_aggregator.aggregate_chat(
-                        chat_name, dry_run=False
-                    )
-                    sessions = aggregation_result.get("sessions", [])
-                    logger.info(f"Умная агрегация создала {len(sessions)} сессий")
+                    try:
+                        aggregation_result = await self.smart_aggregator.aggregate_chat(
+                            chat_name, dry_run=False
+                        )
+                        # Проверяем, что результат - словарь
+                        if isinstance(aggregation_result, dict):
+                            sessions = aggregation_result.get("sessions", [])
+                        else:
+                            logger.error(
+                                f"Неожиданный тип результата агрегации: {type(aggregation_result)}"
+                            )
+                            sessions = []
+                        logger.info(f"Умная агрегация создала {len(sessions)} сессий")
+                    except Exception as e:
+                        logger.error(f"Ошибка при умной агрегации: {e}", exc_info=True)
+                        # Fallback на классическую группировку
+                        logger.info("Переключаемся на классическую группировку")
+                        sessions = self._group_messages_by_smart_strategy(
+                            messages_to_index, chat_name
+                        )
+                        logger.info(f"Создано {len(sessions)} сессий с умной стратегией")
                 else:
                     logger.info("📊 Используем классическую группировку")
                     # Классическая группировка с умной стратегией окон

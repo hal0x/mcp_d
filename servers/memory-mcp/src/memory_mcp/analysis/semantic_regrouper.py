@@ -6,8 +6,14 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..core.lmstudio_client import LMStudioEmbeddingClient
-from ..core.ollama_client import OllamaEmbeddingClient
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..core.lmstudio_client import LMStudioEmbeddingClient
+    from ..core.ollama_client import OllamaEmbeddingClient
+else:
+    from ..core.lmstudio_client import LMStudioEmbeddingClient
+    from ..core.ollama_client import OllamaEmbeddingClient
 
 logger = logging.getLogger(__name__)
 
@@ -70,12 +76,39 @@ class SemanticRegrouper:
                 return sessions
 
             async with self.embedding_client:
-                # Используем generate_summary для генерации текста
-                response = await self.embedding_client.generate_summary(
-                    prompt=prompt,
-                    temperature=0.3,
-                    max_tokens=8192,
-                )
+                # Проверяем, есть ли LLM модель для генерации текста
+                if isinstance(self.embedding_client, LMStudioEmbeddingClient):
+                    if not self.embedding_client.llm_model_name:
+                        # Используем Ollama как fallback
+                        logger.warning(
+                            "LLM модель не настроена в LM Studio, используем Ollama для перегруппировки"
+                        )
+                        from ..core.ollama_client import OllamaEmbeddingClient
+                        from ..config import get_quality_analysis_settings
+                        
+                        qa_settings = get_quality_analysis_settings()
+                        ollama_client = OllamaEmbeddingClient(
+                            llm_model_name=qa_settings.ollama_model,
+                        )
+                        async with ollama_client:
+                            response = await ollama_client.generate_summary(
+                                prompt=prompt,
+                                temperature=0.3,
+                                max_tokens=8192,
+                            )
+                    else:
+                        response = await self.embedding_client.generate_summary(
+                            prompt=prompt,
+                            temperature=0.3,
+                            max_tokens=8192,
+                        )
+                else:
+                    # Используем generate_summary для генерации текста
+                    response = await self.embedding_client.generate_summary(
+                        prompt=prompt,
+                        temperature=0.3,
+                        max_tokens=8192,
+                    )
 
             # Парсим ответ от LLM
             regrouped_sessions = self._parse_llm_response(response, sessions)

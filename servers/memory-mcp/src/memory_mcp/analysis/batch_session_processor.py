@@ -198,11 +198,21 @@ class BatchSessionProcessor:
             prompt = self._create_summarize_prompt(chat_name, accumulative_context, batch)
 
         # Обрабатываем через LargeContextProcessor
-        result = await self.large_context_processor.process_large_context(
-            all_messages,
-            chat_name,
-            prompt,
-        )
+        try:
+            result = await self.large_context_processor.process_large_context(
+                all_messages,
+                chat_name,
+                prompt,
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при обработке большого контекста: {e}", exc_info=True)
+            # В случае ошибки возвращаем оригинальные сессии без саммаризации
+            result = {
+                "summary": "",
+                "detailed_summaries": [],
+                "groups": [],
+                "tokens_used": 0,
+            }
 
         # Восстанавливаем структуру сессий из результата
         processed_sessions = self._reconstruct_sessions_from_batch(
@@ -211,9 +221,9 @@ class BatchSessionProcessor:
 
         return {
             "sessions": processed_sessions,
-            "total_tokens": result.get("tokens_used", 0),
-            "summary": result.get("summary", ""),
-            "detailed_summaries": result.get("detailed_summaries", []),
+            "total_tokens": result.get("tokens_used", 0) if isinstance(result, dict) else 0,
+            "summary": result.get("summary", "") if isinstance(result, dict) else "",
+            "detailed_summaries": result.get("detailed_summaries", []) if isinstance(result, dict) else [],
         }
 
     def _create_regroup_prompt(

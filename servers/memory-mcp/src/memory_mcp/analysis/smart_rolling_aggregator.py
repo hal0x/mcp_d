@@ -1018,20 +1018,36 @@ class SmartRollingAggregator:
             )
 
             # Шаг 2: Батч-саммаризация перегруппированных сессий
-            batch_result = await self.batch_processor.process_batch(
-                regrouped_sessions,
-                chat_name,
-                current_context,
-                processing_type="summarize",
-            )
+            try:
+                batch_result = await self.batch_processor.process_batch(
+                    regrouped_sessions,
+                    chat_name,
+                    current_context,
+                    processing_type="summarize",
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при батч-обработке: {e}")
+                # В случае ошибки используем оригинальные сессии без саммаризации
+                batch_result = {
+                    "sessions": regrouped_sessions,
+                    "total_tokens": 0,
+                    "summary": "",
+                    "detailed_summaries": [],
+                }
 
             # Шаг 3: Обновляем накопительный контекст после каждого обработанного батча
-            for processed_session in batch_result.get("sessions", []):
-                session_summary = processed_session.get("summary", "")
-                self.context_manager.update_context_after_session(
-                    chat_name, processed_session, session_summary
-                )
-                processed_sessions.append(processed_session)
+            if isinstance(batch_result, dict):
+                for processed_session in batch_result.get("sessions", []):
+                    if isinstance(processed_session, dict):
+                        session_summary = processed_session.get("summary", "")
+                        self.context_manager.update_context_after_session(
+                            chat_name, processed_session, session_summary
+                        )
+                        processed_sessions.append(processed_session)
+                    else:
+                        logger.warning(f"Неожиданный тип сессии: {type(processed_session)}")
+            else:
+                logger.error(f"Неожиданный тип batch_result: {type(batch_result)}")
 
             logger.info(
                 f"Батч {batch_idx} обработан: {len(batch_result.get('sessions', []))} сессий"

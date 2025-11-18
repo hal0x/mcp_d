@@ -621,7 +621,7 @@ class LMStudioEmbeddingClient:
 
         if not conversation_part:
             # Если структура промпта другая, разбиваем по символам
-            max_chars = max_prompt_tokens * 1.2
+            max_chars = int(max_prompt_tokens * 1.2)
             chunks = []
             for i in range(0, len(prompt), max_chars):
                 chunks.append(prompt[i : i + max_chars])
@@ -631,7 +631,7 @@ class LMStudioEmbeddingClient:
         max_conversation_tokens = (
             max_prompt_tokens - self._estimate_tokens(system_part) - 100
         )  # запас
-        max_conversation_chars = max_conversation_tokens * 1.2
+        max_conversation_chars = int(max_conversation_tokens * 1.2)
 
         conversation_chunks = []
         for i in range(0, len(conversation_part), max_conversation_chars):

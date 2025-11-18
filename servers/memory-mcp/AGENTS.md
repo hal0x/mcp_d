@@ -45,7 +45,7 @@ memory-mcp/
 ### MCP сервер (`src/memory_mcp/mcp/server.py`)
 - Использует стандартный MCP Server (`mcp.server.Server`), регистрирует инструменты через `@server.list_tools()` и `@server.call_tool()`.
 - Располагает `MemoryServiceAdapter`, который объединяет FTS и Qdrant-поиск.
-- Читает настройки из `Settings` (`MEMORY_MCP_*`, совместимые с `MEMORY_*`/`TG_DUMP_*` алиасами): пути БД/артефактов, LM Studio, embeddings и Qdrant.
+- Читает настройки из `Settings` (`MEMORY_MCP_*`): пути БД/артефактов, LM Studio, embeddings и Qdrant.
 
 #### Почему используется стандартный MCP Server
 
@@ -102,7 +102,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
 ### Embed-сервис (`src/memory_mcp/memory/embeddings.py`)
 - HTTP клиент для `text-embeddings-inference` (или совместимых сервисов).
-- Функция `build_embedding_service_from_env()` читает `MEMORY_MCP_EMBEDDINGS_URL` (алиас `EMBEDDINGS_URL`) или параметры LM Studio.
+- Функция `build_embedding_service_from_env()` читает `MEMORY_MCP_EMBEDDINGS_URL` или параметры LM Studio.
 
 ### Индексаторы (`src/memory_mcp/indexing/*`)
 - Unified интерфейс `BaseIndexer`.
@@ -198,7 +198,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 - Локально: БД создаётся в `data/memory_graph.db` (относительно корня проекта)
 - Docker: БД монтируется из `data/` в `/app/data/memory_graph.db`
 - Убедитесь, что директория существует и доступна для записи
-- Проверьте `MEMORY_MCP_DB_PATH` (или алиас `MEMORY_DB_PATH`); относительный путь резолвится от `pyproject.toml`.
+- Проверьте `MEMORY_MCP_DB_PATH`; относительный путь резолвится от `pyproject.toml`.
 
 **Примечание**: `list_tools()` вызывается только при запросе списка инструментов клиентом, не при запуске сервера.
 
@@ -239,31 +239,29 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
 ### Переменные окружения
 
-Основные настройки читаются через `pydantic.BaseSettings` с префиксом `MEMORY_MCP_`. Алиасы обеспечивают обратную
-совместимость со старыми именами (`MEMORY_*`, `TG_DUMP_*`). Сначала используйте новую переменную, а затем, при
-необходимости, добавляйте алиас.
+Основные настройки читаются через `pydantic.BaseSettings` с префиксом `MEMORY_MCP_`.
 
-| Новая переменная | Алиасы | По умолчанию | Описание |
-|------------------|--------|--------------|----------|
-| `MEMORY_MCP_DB_PATH` | `MEMORY_DB_PATH` | `data/memory_graph.db` | Путь к SQLite БД. Относительный путь резолвится от `pyproject.toml`. |
-| `MEMORY_MCP_HOST` | `HOST`, `TG_DUMP_HOST` | `127.0.0.1` | HTTP-хост для FastAPI транспорта. |
-| `MEMORY_MCP_PORT` | `PORT`, `TG_DUMP_PORT` | `8050` | HTTP-порт сервера / CLI RPC. |
-| `MEMORY_MCP_LOG_LEVEL` | `MEMORY_LOG_LEVEL`, `LOG_LEVEL` | `INFO` | Уровень логирования MCP. |
-| `MEMORY_MCP_TRANSPORT` | `TRANSPORT` | `stdio` | Транспорт запуска (`stdio`, `streamable-http`). |
-| `MEMORY_MCP_LMSTUDIO_HOST` | `LMSTUDIO_HOST` | `127.0.0.1` | LM Studio (эмбеддинги/LLM) хост. |
-| `MEMORY_MCP_LMSTUDIO_PORT` | `LMSTUDIO_PORT` | `1234` | LM Studio порт. |
-| `MEMORY_MCP_LMSTUDIO_MODEL` | `LMSTUDIO_MODEL` | `text-embedding-qwen3-embedding-0.6b` | Модель для `/v1/embeddings`. |
-| `MEMORY_MCP_LMSTUDIO_LLM_MODEL` | - | `gpt-oss-20b` | LLM для `/v1/chat/completions`; если не задан, используется Ollama. |
-| `MEMORY_MCP_EMBEDDINGS_URL` | `EMBEDDINGS_URL` | - | URL внешнего сервиса эмбеддингов (приоритетнее LM Studio). |
-| `MEMORY_MCP_QDRANT_URL` | `QDRANT_URL` | - | URL Qdrant. Если пуст, векторный поиск не активен. |
-| `MEMORY_MCP_BACKGROUND_INDEXING_ENABLED` | - | `False` | Авто-запуск фоновой индексации при старте. |
-| `MEMORY_MCP_BACKGROUND_INDEXING_INTERVAL` | - | `60` | Интервал проверки `input/` (сек). |
-| `SMART_SEARCH_SESSION_STORE_PATH` | - | `data/search_sessions.db` | Расположение БД для `SmartSearchEngine`. |
-| `SMART_SEARCH_MIN_CONFIDENCE` | - | `0.5` | Порог уверенности для LLM-уточнений. |
-| `QUALITY_ANALYSIS_OLLAMA_MODEL` | - | `gpt-oss-20b:latest` | Модель Ollama для анализа качества (fallback, если нет LM Studio LLM). |
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
+| `MEMORY_MCP_DB_PATH` | `data/memory_graph.db` | Путь к SQLite БД. Относительный путь резолвится от `pyproject.toml`. |
+| `MEMORY_MCP_HOST` | `127.0.0.1` | HTTP-хост для FastAPI транспорта. |
+| `MEMORY_MCP_PORT` | `8050` | HTTP-порт сервера / CLI RPC. |
+| `MEMORY_MCP_LOG_LEVEL` | `INFO` | Уровень логирования MCP. |
+| `MEMORY_MCP_TRANSPORT` | `stdio` | Транспорт запуска (`stdio`, `streamable-http`). |
+| `MEMORY_MCP_LMSTUDIO_HOST` | `127.0.0.1` | LM Studio (эмбеддинги/LLM) хост. |
+| `MEMORY_MCP_LMSTUDIO_PORT` | `1234` | LM Studio порт. |
+| `MEMORY_MCP_LMSTUDIO_MODEL` | `text-embedding-qwen3-embedding-0.6b` | Модель для `/v1/embeddings`. |
+| `MEMORY_MCP_LMSTUDIO_LLM_MODEL` | `gpt-oss-20b` | LLM для `/v1/chat/completions`; если не задан, используется Ollama. |
+| `MEMORY_MCP_EMBEDDINGS_URL` | - | URL внешнего сервиса эмбеддингов (приоритетнее LM Studio). |
+| `MEMORY_MCP_QDRANT_URL` | - | URL Qdrant. Если пуст, векторный поиск не активен. |
+| `MEMORY_MCP_BACKGROUND_INDEXING_ENABLED` | `False` | Авто-запуск фоновой индексации при старте. |
+| `MEMORY_MCP_BACKGROUND_INDEXING_INTERVAL` | `60` | Интервал проверки `input/` (сек). |
+| `SMART_SEARCH_SESSION_STORE_PATH` | `data/search_sessions.db` | Расположение БД для `SmartSearchEngine`. |
+| `SMART_SEARCH_MIN_CONFIDENCE` | `0.5` | Порог уверенности для LLM-уточнений. |
+| `QUALITY_ANALYSIS_OLLAMA_MODEL` | `gpt-oss-20b:latest` | Модель Ollama для анализа качества (fallback, если нет LM Studio LLM). |
 
 **Приоритет конфигурации эмбеддингов:**
-1. `MEMORY_MCP_EMBEDDINGS_URL` (или алиас `EMBEDDINGS_URL`) — прямой HTTP endpoint.
+1. `MEMORY_MCP_EMBEDDINGS_URL` — прямой HTTP endpoint.
 2. `MEMORY_MCP_LMSTUDIO_HOST` + `MEMORY_MCP_LMSTUDIO_PORT` + `MEMORY_MCP_LMSTUDIO_MODEL` — формируется локальный URL.
 
 **Важно - разделение моделей:**
