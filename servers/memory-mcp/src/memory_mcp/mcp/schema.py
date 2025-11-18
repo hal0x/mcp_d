@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -568,6 +568,57 @@ class BatchUpdateRecordsResponse(BaseModel):
     total_failed: int = Field(..., description="Всего неудачных обновлений")
 
 
+class BatchDeleteRecordsRequest(BaseModel):
+    """Request for batch deleting records."""
+
+    record_ids: list[str] = Field(..., description="Список идентификаторов записей для удаления")
+
+
+class BatchDeleteResult(BaseModel):
+    """Single batch delete result."""
+
+    record_id: str = Field(..., description="ID записи")
+    deleted: bool = Field(..., description="Успешно ли удалена")
+    message: Optional[str] = Field(None, description="Сообщение о результате")
+
+
+class BatchDeleteRecordsResponse(BaseModel):
+    """Response after batch delete."""
+
+    results: list[BatchDeleteResult] = Field(
+        default_factory=list, description="Результаты удаления"
+    )
+    total_deleted: int = Field(..., description="Всего успешно удалено")
+    total_failed: int = Field(..., description="Всего неудачных удалений")
+
+
+class BatchFetchRecordsRequest(BaseModel):
+    """Request for batch fetching records."""
+
+    record_ids: list[str] = Field(..., description="Список идентификаторов записей для получения")
+
+
+class BatchFetchResult(BaseModel):
+    """Single batch fetch result."""
+
+    record_id: str = Field(..., description="ID записи")
+    record: Optional[MemoryRecordPayload] = Field(
+        None, description="Данные записи, если найдена"
+    )
+    found: bool = Field(..., description="Найдена ли запись")
+    message: Optional[str] = Field(None, description="Сообщение о результате")
+
+
+class BatchFetchRecordsResponse(BaseModel):
+    """Response after batch fetch."""
+
+    results: list[BatchFetchResult] = Field(
+        default_factory=list, description="Результаты получения"
+    )
+    total_found: int = Field(..., description="Всего найдено записей")
+    total_not_found: int = Field(..., description="Всего не найдено записей")
+
+
 # --------------------------- Export/Import schemas ---------------------------
 
 
@@ -777,3 +828,78 @@ class GetBackgroundIndexingStatusResponse(BaseModel):
     input_path: str = Field(..., description="Путь к input директории")
     chats_path: str = Field(..., description="Путь к chats директории")
     message: str = Field(..., description="Сообщение о статусе")
+
+
+# --------------------------- Smart search schemas ---------------------------
+
+
+class SearchFeedback(BaseModel):
+    """Модель обратной связи по результату поиска."""
+
+    record_id: str = Field(..., description="Идентификатор результата")
+    artifact_path: Optional[str] = Field(
+        None, description="Путь к артифакту (если результат из артифакта)"
+    )
+    relevance: Literal["relevant", "irrelevant", "partially_relevant"] = Field(
+        ..., description="Релевантность результата"
+    )
+    comment: Optional[str] = Field(None, description="Комментарий пользователя")
+
+
+class SmartSearchRequest(BaseModel):
+    """Запрос для интерактивного смарт-поиска."""
+
+    query: str = Field(..., description="Поисковый запрос (естественный язык)")
+    session_id: Optional[str] = Field(
+        None, description="ID сессии для многошагового диалога"
+    )
+    feedback: Optional[list[SearchFeedback]] = Field(
+        None, description="Обратная связь по предыдущим результатам"
+    )
+    clarify: Optional[bool] = Field(
+        False, description="Запросить уточняющие вопросы, если результаты неоднозначны"
+    )
+    top_k: int = Field(10, ge=1, le=50, description="Максимальное количество результатов")
+    source: Optional[str] = Field(
+        None, description="Фильтр по источнику (например, telegram)"
+    )
+    tags: list[str] = Field(
+        default_factory=list, description="Фильтр по тегам"
+    )
+    date_from: Optional[datetime] = Field(
+        None, description="Фильтр: дата не раньше указанной"
+    )
+    date_to: Optional[datetime] = Field(
+        None, description="Фильтр: дата не позже указанной"
+    )
+    artifact_types: Optional[list[str]] = Field(
+        None,
+        description="Фильтр по типам артифактов (chat_context, now_summary, report, aggregation_state)",
+    )
+
+
+class SmartSearchResponse(BaseModel):
+    """Ответ интерактивного смарт-поиска."""
+
+    results: list[SearchResultItem] = Field(
+        default_factory=list, description="Список результатов поиска"
+    )
+    clarifying_questions: Optional[list[str]] = Field(
+        None, description="Уточняющие вопросы для улучшения поиска"
+    )
+    suggested_refinements: Optional[list[str]] = Field(
+        None, description="Предложенные уточнения запроса"
+    )
+    session_id: str = Field(..., description="ID сессии поиска")
+    confidence_score: float = Field(
+        ..., ge=0.0, le=1.0, description="Уверенность в релевантности результатов"
+    )
+    artifacts_found: int = Field(
+        0, description="Количество найденных артифактов"
+    )
+    db_records_found: int = Field(
+        0, description="Количество найденных записей из БД"
+    )
+    total_matches: int = Field(
+        ..., description="Общее количество совпадений до применения top_k"
+    )

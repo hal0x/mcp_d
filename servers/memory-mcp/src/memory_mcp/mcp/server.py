@@ -20,6 +20,8 @@ from ..quality_analyzer.utils.error_handler import format_error_message
 from ..config import get_settings
 
 from .adapters import MemoryServiceAdapter
+from ..memory.artifacts_reader import ArtifactsReader
+from ..search import SmartSearchEngine, SearchSessionStore
 from .schema import (
     StartBackgroundIndexingRequest,
     StartBackgroundIndexingResponse,
@@ -77,6 +79,9 @@ from .schema import (
     SearchTradingPatternsResponse,
     SimilarRecordsRequest,
     SimilarRecordsResponse,
+    SmartSearchRequest,
+    SmartSearchResponse,
+    SearchFeedback,
     StoreTradingSignalRequest,
     StoreTradingSignalResponse,
     UpdateRecordRequest,
@@ -107,6 +112,7 @@ logger.info(f"MCP сервер '{server.name}' создан, начинаем р
 ToolResponse = Tuple[List[TextContent], Dict[str, Any]]
 
 _adapter: MemoryServiceAdapter | None = None
+_smart_search_engine: SmartSearchEngine | None = None
 _active_indexing_jobs: Dict[str, Dict[str, Any]] = {}
 _background_indexing_service = None
 
@@ -132,6 +138,39 @@ def _get_adapter() -> MemoryServiceAdapter:
         logger.info(f"Используется путь к БД: {db_path}")
         _adapter = MemoryServiceAdapter(db_path=db_path)
     return _adapter
+
+
+def _get_smart_search_engine() -> SmartSearchEngine:
+    """Ленивая инициализация интерактивного поискового движка."""
+    global _smart_search_engine
+    if _smart_search_engine is None:
+        settings = get_settings()
+        adapter = _get_adapter()
+        artifacts_reader = ArtifactsReader(artifacts_dir=settings.artifacts_path)
+        
+        # Путь к БД сессий
+        session_db_path = os.getenv("SMART_SEARCH_SESSION_STORE_PATH", "data/search_sessions.db")
+        if not os.path.isabs(session_db_path):
+            current_dir = Path(__file__).parent
+            project_root = current_dir
+            while project_root.parent != project_root:
+                if (project_root / "pyproject.toml").exists():
+                    break
+                project_root = project_root.parent
+            if not (project_root / "pyproject.toml").exists():
+                project_root = Path.cwd()
+            session_db_path = str(project_root / session_db_path)
+        
+        session_store = SearchSessionStore(db_path=session_db_path)
+        min_confidence = float(os.getenv("SMART_SEARCH_MIN_CONFIDENCE", "0.5"))
+        
+        _smart_search_engine = SmartSearchEngine(
+            adapter=adapter,
+            artifacts_reader=artifacts_reader,
+            session_store=session_store,
+            min_confidence=min_confidence,
+        )
+    return _smart_search_engine
 
 
 def _to_serializable(value: Any) -> Any:
@@ -245,17 +284,67 @@ async def list_tools() -> List[Tool]:
             },
         ),
         Tool(
-            name="fetch_record",
-            description="Fetch a full memory record by identifier.",
+            name="smart_search",
+            description="Interactive smart search across all available artifacts (DB + files) with LLM-powered query refinement.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "record_id": {
+                    "query": {"type": "string", "description": "Поисковый запрос (естественный язык)"},
+                    "session_id": {
                         "type": "string",
-                        "description": "Идентификатор записи",
-                    }
+                        "description": "ID сессии для многошагового диалога (опционально)",
+                    },
+                    "feedback": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "record_id": {"type": "string"},
+                                "artifact_path": {"type": "string"},
+                                "relevance": {
+                                    "type": "string",
+                                    "enum": ["relevant", "irrelevant", "partially_relevant"],
+                                },
+                                "comment": {"type": "string"},
+                            },
+                            "required": ["record_id", "relevance"],
+                        },
+                        "description": "Обратная связь по предыдущим результатам (опционально)",
+                    },
+                    "clarify": {
+                        "type": "boolean",
+                        "description": "Запросить уточняющие вопросы, если результаты неоднозначны",
+                        "default": False,
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Максимальное количество результатов",
+                        "default": 10,
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Фильтр по источнику (опционально)",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Фильтр по тегам",
+                    },
+                    "date_from": {
+                        "type": "string",
+                        "description": "Фильтр: дата не раньше (ISO format)",
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "Фильтр: дата не позже (ISO format)",
+                    },
+                    "artifact_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Фильтр по типам артифактов (chat_context, now_summary, report, aggregation_state)",
+                    },
                 },
-                "required": ["record_id"],
+                "required": ["query"],
             },
         ),
         Tool(
@@ -427,20 +516,6 @@ async def list_tools() -> List[Tool]:
                         "type": "object",
                         "description": "Дополнительные метаданные (объединяются с существующими)",
                         "additionalProperties": True,
-                    },
-                },
-                "required": ["record_id"],
-            },
-        ),
-        Tool(
-            name="delete_record",
-            description="Delete a memory record from storage.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "record_id": {
-                        "type": "string",
-                        "description": "Идентификатор записи для удаления",
                     },
                 },
                 "required": ["record_id"],
@@ -731,6 +806,36 @@ async def list_tools() -> List[Tool]:
                     },
                 },
                 "required": ["updates"],
+            },
+        ),
+        Tool(
+            name="batch_delete_records",
+            description="Delete multiple records in a single batch operation.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "record_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Список идентификаторов записей для удаления",
+                    },
+                },
+                "required": ["record_ids"],
+            },
+        ),
+        Tool(
+            name="batch_fetch_records",
+            description="Fetch multiple records in a single batch operation.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "record_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Список идентификаторов записей для получения",
+                    },
+                },
+                "required": ["record_ids"],
             },
         ),
         Tool(
@@ -1052,10 +1157,37 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
             result = adapter.search(request)
             return _format_tool_response(result.model_dump())
 
-        elif name == "fetch_record":
-            request = FetchRequest(**arguments)
-            result = adapter.fetch(request)
-            return _format_tool_response(result.model_dump())
+        elif name == "smart_search":
+            try:
+                # Парсим feedback, если есть
+                feedback_data = arguments.get("feedback")
+                feedback_list = None
+                if feedback_data:
+                    feedback_list = [SearchFeedback(**item) for item in feedback_data]
+
+                # Парсим даты
+                date_from = _parse_date_safe(arguments.get("date_from"))
+                date_to = _parse_date_safe(arguments.get("date_to"))
+
+                request = SmartSearchRequest(
+                    query=arguments["query"],
+                    session_id=arguments.get("session_id"),
+                    feedback=feedback_list,
+                    clarify=arguments.get("clarify", False),
+                    top_k=arguments.get("top_k", 10),
+                    source=arguments.get("source"),
+                    tags=arguments.get("tags", []),
+                    date_from=date_from,
+                    date_to=date_to,
+                    artifact_types=arguments.get("artifact_types"),
+                )
+
+                engine = _get_smart_search_engine()
+                result = await engine.search(request)
+                return _format_tool_response(result.model_dump())
+            except Exception as e:
+                logger.exception(f"smart_search failed: {e}")
+                raise RuntimeError(format_error_message(e)) from e
 
         elif name == "store_trading_signal":
             request = StoreTradingSignalRequest(**arguments)
@@ -1100,11 +1232,6 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
         elif name == "update_record":
             request = UpdateRecordRequest(**arguments)
             result = adapter.update_record(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "delete_record":
-            request = DeleteRecordRequest(**arguments)
-            result = adapter.delete_record(request)
             return _format_tool_response(result.model_dump())
 
         elif name == "get_statistics":
@@ -1207,6 +1334,18 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
             updates = [BatchUpdateRecordItem(**item) for item in updates_data]
             request = BatchUpdateRecordsRequest(updates=updates)
             result = adapter.batch_update_records(request)
+            return _format_tool_response(result.model_dump())
+
+        elif name == "batch_delete_records":
+            from .schema import BatchDeleteRecordsRequest
+            request = BatchDeleteRecordsRequest(**arguments)
+            result = adapter.batch_delete_records(request)
+            return _format_tool_response(result.model_dump())
+
+        elif name == "batch_fetch_records":
+            from .schema import BatchFetchRecordsRequest
+            request = BatchFetchRecordsRequest(**arguments)
+            result = adapter.batch_fetch_records(request)
             return _format_tool_response(result.model_dump())
 
         elif name == "export_records":
@@ -1480,14 +1619,12 @@ def get_version_payload() -> Dict[str, Any]:
         "version",
         "ingest_records",
         "search_memory",
-        "fetch_record",
         "store_trading_signal",
         "search_trading_patterns",
         "get_signal_performance",
         "ingest_scraped_content",
         "generate_embedding",
         "update_record",
-        "delete_record",
         "get_statistics",
         "get_indexing_progress",
         "get_graph_neighbors",
@@ -1500,6 +1637,8 @@ def get_version_payload() -> Dict[str, Any]:
         "get_timeline",
         "analyze_entities",
         "batch_update_records",
+        "batch_delete_records",
+        "batch_fetch_records",
         "export_records",
         "import_records",
         "update_summaries",

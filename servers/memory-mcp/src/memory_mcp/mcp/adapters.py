@@ -7,10 +7,11 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from ..core.constants import DEFAULT_SEARCH_LIMIT
 from ..indexing import Attachment, MemoryRecord
+from ..memory.artifacts_reader import ArtifactsReader
 from ..memory.embeddings import build_embedding_service_from_env
 from ..memory.graph_types import EdgeType, NodeType
 from ..memory.ingest import MemoryIngestor
@@ -22,6 +23,12 @@ from .schema import (
     AnalyzeEntitiesRequest,
     AnalyzeEntitiesResponse,
     AttachmentPayload,
+    BatchDeleteRecordsRequest,
+    BatchDeleteRecordsResponse,
+    BatchDeleteResult,
+    BatchFetchRecordsRequest,
+    BatchFetchRecordsResponse,
+    BatchFetchResult,
     BatchUpdateRecordItem,
     BatchUpdateRecordsRequest,
     BatchUpdateRecordsResponse,
@@ -198,6 +205,10 @@ class MemoryServiceAdapter:
         self._rrf_k = 60
         # Использовать RRF для объединения результатов (True) или простое объединение с весами (False)
         self._use_rrf = True
+        # Инициализация читателя артифактов
+        from ..config import get_settings
+        settings = get_settings()
+        self.artifacts_reader = ArtifactsReader(artifacts_dir=settings.artifacts_path)
 
     def close(self) -> None:
         try:
@@ -1798,6 +1809,170 @@ class MemoryServiceAdapter:
             total_failed=total_failed,
         )
 
+    def batch_delete_records(
+        self, request: BatchDeleteRecordsRequest
+    ) -> BatchDeleteRecordsResponse:
+        """Batch delete multiple records."""
+        results = []
+        total_deleted = 0
+        total_failed = 0
+        successfully_deleted_ids = []
+
+        for record_id in request.record_ids:
+            try:
+                # Проверяем существование записи
+                node = self.graph.get_node(record_id)
+                if not node:
+                    results.append(
+                        BatchDeleteResult(
+                            record_id=record_id,
+                            deleted=False,
+                            message=f"Record {record_id} not found",
+                        )
+                    )
+                    total_failed += 1
+                    continue
+
+                # Удаляем из графа
+                deleted = self.graph.delete_node(record_id)
+
+                if not deleted:
+                    results.append(
+                        BatchDeleteResult(
+                            record_id=record_id,
+                            deleted=False,
+                            message="Failed to delete record from graph",
+                        )
+                    )
+                    total_failed += 1
+                    continue
+
+                # Собираем успешно удалённые ID для батч-удаления из vector_store
+                successfully_deleted_ids.append(record_id)
+                results.append(
+                    BatchDeleteResult(
+                        record_id=record_id,
+                        deleted=True,
+                        message="Record deleted successfully",
+                    )
+                )
+                total_deleted += 1
+
+            except Exception as e:
+                # Обрабатываем ошибку для конкретного элемента, продолжаем с остальными
+                logger.warning(
+                    f"Ошибка при удалении записи {record_id}: {e}",
+                    exc_info=True,
+                )
+                results.append(
+                    BatchDeleteResult(
+                        record_id=record_id,
+                        deleted=False,
+                        message=f"Ошибка при удалении: {str(e)}",
+                    )
+                )
+                total_failed += 1
+
+        # Оптимизация: удаляем из vector_store батчами
+        if (
+            self.vector_store
+            and self.vector_store.available()
+            and successfully_deleted_ids
+        ):
+            try:
+                from qdrant_client.http import models as qmodels
+
+                if not self.vector_store.client or qmodels is None:
+                    logger.warning("Vector store client or qmodels not available")
+                    return BatchDeleteRecordsResponse(
+                        results=results,
+                        total_deleted=total_deleted,
+                        total_failed=total_failed,
+                    )
+
+                batch_size = 1000
+                for i in range(0, len(successfully_deleted_ids), batch_size):
+                    batch = successfully_deleted_ids[i : i + batch_size]
+                    try:
+                        self.vector_store.client.delete(
+                            collection_name=self.vector_store.collection,
+                            points_selector=qmodels.PointIdsList(
+                                points=[str(record_id) for record_id in batch]
+                            ),
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to delete batch from vector store: {e}",
+                            exc_info=True,
+                        )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to delete from vector store: {e}",
+                    exc_info=True,
+                )
+
+        return BatchDeleteRecordsResponse(
+            results=results,
+            total_deleted=total_deleted,
+            total_failed=total_failed,
+        )
+
+    def batch_fetch_records(
+        self, request: BatchFetchRecordsRequest
+    ) -> BatchFetchRecordsResponse:
+        """Batch fetch multiple records."""
+        results = []
+        total_found = 0
+        total_not_found = 0
+
+        for record_id in request.record_ids:
+            try:
+                fetch_req = FetchRequest(record_id=record_id)
+                fetch_resp = self.fetch(fetch_req)
+
+                if fetch_resp.record:
+                    results.append(
+                        BatchFetchResult(
+                            record_id=record_id,
+                            record=fetch_resp.record,
+                            found=True,
+                            message="Record found",
+                        )
+                    )
+                    total_found += 1
+                else:
+                    results.append(
+                        BatchFetchResult(
+                            record_id=record_id,
+                            record=None,
+                            found=False,
+                            message=f"Record {record_id} not found",
+                        )
+                    )
+                    total_not_found += 1
+
+            except Exception as e:
+                # Обрабатываем ошибку для конкретного элемента, продолжаем с остальными
+                logger.warning(
+                    f"Ошибка при получении записи {record_id}: {e}",
+                    exc_info=True,
+                )
+                results.append(
+                    BatchFetchResult(
+                        record_id=record_id,
+                        record=None,
+                        found=False,
+                        message=f"Ошибка при получении: {str(e)}",
+                    )
+                )
+                total_not_found += 1
+
+        return BatchFetchRecordsResponse(
+            results=results,
+            total_found=total_found,
+            total_not_found=total_not_found,
+        )
+
     # Export/Import
     def export_records(self, request: ExportRecordsRequest) -> ExportRecordsResponse:
         """Export records in various formats."""
@@ -2545,3 +2720,40 @@ class MemoryServiceAdapter:
             metadata=metadata,
             embedding=embedding,
         )
+
+    def search_artifacts(
+        self,
+        query: str,
+        artifact_types: Optional[List[str]] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """
+        Поиск по артифактам через ArtifactsReader.
+
+        Args:
+            query: Поисковый запрос
+            artifact_types: Фильтр по типам артифактов
+            limit: Максимальное количество результатов
+
+        Returns:
+            Список результатов поиска в формате словарей
+        """
+        results = self.artifacts_reader.search_artifacts(
+            query=query,
+            artifact_types=artifact_types,
+            limit=limit,
+        )
+
+        # Конвертируем в формат словарей
+        return [
+            {
+                "artifact_path": r.artifact_path,
+                "artifact_type": r.artifact_type,
+                "score": r.score,
+                "content": r.content,
+                "snippet": r.snippet,
+                "metadata": r.metadata,
+                "line_number": r.line_number,
+            }
+            for r in results
+        ]
