@@ -23,9 +23,9 @@ class RelevanceAnalyzer:
         self,
         model_name: str = "gemma3n:e4b-it-q8_0",
         base_url: str = "http://localhost:11434",
-        max_context_tokens: int = 30000,
+        max_context_tokens: int = 131072,  # Для gpt-oss-20b
         temperature: float = 0.1,
-        max_response_tokens: int = 1000,
+        max_response_tokens: int = 131072,  # Для gpt-oss-20b (максимальный лимит)
         prompts_dir: Path | None = None,
         thinking_level: str | None = None,
     ):

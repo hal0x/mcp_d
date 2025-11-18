@@ -34,7 +34,7 @@ class LMStudioEmbeddingClient:
         model_name: str = "text-embedding-qwen3-embedding-0.6b",
         llm_model_name: Optional[str] = None,  # Модель для LLM генерации текста
         base_url: str = "http://127.0.0.1:1234",
-        max_text_length: int = 16384,  # 4096 токенов * 4 символа/токен для безопасного лимита
+        max_text_length: int = 16384,  # 4096 токенов * 4 символа/токен (лимит для text-embedding-qwen3-embedding-0.6b)
     ):
         self.model_name = model_name  # Модель для эмбеддингов
         self.llm_model_name = llm_model_name  # Модель для LLM генерации (если None, используется model_name, что неправильно)
@@ -655,10 +655,10 @@ class LMStudioEmbeddingClient:
         self,
         prompt: str,
         temperature: float = 0.3,
-        max_tokens: int = 900,
+        max_tokens: int = 131072,  # Для gpt-oss-20b (максимальный лимит)
         top_p: float = 0.93,
         presence_penalty: float = 0.05,
-        max_prompt_tokens: int = 30000,
+        max_prompt_tokens: int = 100000,  # Увеличено для gpt-oss-20b (доступно 131072 токена)
     ) -> str:
         """
         Генерация саммаризации через LLM с автоматической разбивкой длинных промптов
@@ -711,23 +711,6 @@ class LMStudioEmbeddingClient:
             if reasoning_model.lower() in model_lower:
                 return True
         return False
-    
-    def _adjust_max_tokens_for_reasoning(self, model_name: str, max_tokens: int) -> int:
-        """Увеличивает max_tokens для reasoning-моделей, чтобы учесть токены на reasoning"""
-        if not self._is_reasoning_model(model_name):
-            return max_tokens
-        
-        # Для reasoning-моделей добавляем резерв для reasoning (обычно 200-500 токенов)
-        # Минимальный max_tokens для reasoning-моделей - 200
-        reasoning_reserve = 500
-        adjusted_max_tokens = max(max_tokens + reasoning_reserve, 200)
-        
-        logger.debug(
-            f"Обнаружена reasoning-модель '{model_name}'. "
-            f"Увеличиваем max_tokens с {max_tokens} до {adjusted_max_tokens} "
-            f"(резерв для reasoning: {reasoning_reserve} токенов)"
-        )
-        return adjusted_max_tokens
 
     async def _generate_single_summary(
         self,
@@ -753,9 +736,6 @@ class LMStudioEmbeddingClient:
             logger.error(error_msg)
             return f"Ошибка: {error_msg}"
         
-        # Увеличиваем max_tokens для reasoning-моделей
-        adjusted_max_tokens = self._adjust_max_tokens_for_reasoning(llm_model, max_tokens)
-        
         # LM Studio использует OpenAI-совместимый API для chat completions
         payload = {
             "model": llm_model,  # Используем LLM модель, а не модель эмбеддингов
@@ -767,7 +747,7 @@ class LMStudioEmbeddingClient:
                 {"role": "user", "content": prompt},
             ],
             "temperature": temperature,
-            "max_tokens": adjusted_max_tokens,  # Используем скорректированное значение
+            "max_tokens": max_tokens,  # Используем переданное значение без изменений
             "top_p": top_p,
             "presence_penalty": presence_penalty,
             "stream": False,
@@ -802,9 +782,37 @@ class LMStudioEmbeddingClient:
                     if response.status == 200:
                         data = await response.json()
                         # LM Studio возвращает OpenAI-совместимый формат:
-                        # {"choices": [{"message": {"content": "..."}}]}
+                        # {"choices": [{"message": {"content": "...", "reasoning": "..."}}]}
                         if "choices" in data and len(data["choices"]) > 0:
-                            return data["choices"][0]["message"]["content"].strip()
+                            choice = data["choices"][0]
+                            message = choice.get("message", {})
+                            
+                            # Извлекаем контент
+                            content = message.get("content", "").strip()
+                            
+                            # Для reasoning-моделей проверяем, есть ли reasoning
+                            reasoning = message.get("reasoning", "")
+                            finish_reason = choice.get("finish_reason", "")
+                            
+                            # Если контент пустой, но есть reasoning, это может быть проблема с max_tokens
+                            if not content and reasoning:
+                                logger.warning(
+                                    f"Получен пустой контент от reasoning-модели '{llm_model}'. "
+                                    f"Reasoning обрезан: '{reasoning[:100]}...'. "
+                                    f"Finish reason: {finish_reason}. "
+                                    f"Возможно, max_tokens ({max_tokens}) недостаточно. "
+                                    f"Попробуйте увеличить max_tokens."
+                                )
+                            
+                            # Если finish_reason == "length", значит достигнут лимит токенов
+                            if finish_reason == "length" and not content:
+                                logger.error(
+                                    f"Достигнут лимит токенов для модели '{llm_model}'. "
+                                    f"Текущий max_tokens: {max_tokens}. "
+                                    f"Все токены ушли на reasoning. Увеличьте max_tokens."
+                                )
+                            
+                            return content if content else "Ошибка: пустой ответ от модели"
                         else:
                             logger.error("LM Studio вернул неожиданный формат данных")
                             return "Ошибка генерации: неожиданный формат ответа"

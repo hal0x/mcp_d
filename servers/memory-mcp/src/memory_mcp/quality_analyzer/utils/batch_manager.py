@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class BatchConfig:
-    max_context_tokens: int = 30000
+    max_context_tokens: int = 131072  # Для gpt-oss-20b
     system_prompt_reserve: float = 0.2
     max_batch_size: int = 10
     max_query_tokens: int = 6000

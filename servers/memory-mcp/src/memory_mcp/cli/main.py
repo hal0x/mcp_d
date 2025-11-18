@@ -298,6 +298,17 @@ def cli(verbose, quiet):
       • extract-messages   - Извлечение новых сообщений из input в chats
       • deduplicate        - Удаление дубликатов сообщений
       • stop-indexing      - Остановка всех процессов индексации
+      
+    Управление данными:
+      • backup-database    - Создание резервной копии (SQLite + ChromaDB)
+      • restore-database   - Восстановление из резервной копии
+      • optimize-database  - Оптимизация SQLite (VACUUM, ANALYZE, REINDEX)
+      • validate-database  - Проверка целостности данных
+      
+    Система важности:
+      • calculate-importance    - Вычисление важности записи
+      • prune-memory            - Автоматическая очистка неважных записей
+      • update-importance-scores - Массовый пересчёт важности
     """
     # Настройка логирования
     if verbose:
@@ -2344,7 +2355,7 @@ def review_summaries(dry_run, chat, limit):
                     improved = await embedding_client.generate_summary(
                         prompt,
                         temperature=0.3,
-                        max_tokens=8000,
+                        max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
                     )
                     improved = improved.strip()
 
@@ -2480,6 +2491,954 @@ def review_summaries(dry_run, chat, limit):
         click.echo("=" * 80)
 
     asyncio.run(_review_summaries())
+
+
+@cli.command("backup-database")
+@click.option(
+    "--backup-path",
+    type=click.Path(path_type=Path),
+    help="Путь для сохранения backup (по умолчанию: backups/backup_YYYYMMDD_HHMMSS)",
+)
+@click.option(
+    "--include-chromadb/--no-chromadb",
+    default=True,
+    help="Включить ChromaDB в backup",
+)
+@click.option(
+    "--include-reports/--no-reports",
+    default=False,
+    help="Включить markdown отчеты в backup",
+)
+@click.option(
+    "--compress/--no-compress",
+    default=True,
+    help="Создать сжатый .tar.gz архив",
+)
+@click.option(
+    "--db-path",
+    default="data/memory_graph.db",
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Путь к SQLite базе данных",
+)
+@click.option(
+    "--chroma-path",
+    default="chroma_db",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Путь к ChromaDB",
+)
+def backup_database(backup_path, include_chromadb, include_reports, compress, db_path, chroma_path):
+    """📦 Создание резервной копии базы данных (SQLite + ChromaDB)
+    
+    Создаёт полную резервную копию всех данных системы:
+    - SQLite база данных (memory_graph.db)
+    - ChromaDB векторное хранилище (опционально)
+    - Markdown отчеты (опционально)
+    """
+    import shutil
+    import tarfile
+    
+    click.echo("📦 Создание резервной копии базы данных")
+    click.echo()
+    
+    # Определяем путь для backup
+    if not backup_path:
+        backups_dir = Path("backups")
+        backups_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = backups_dir / f"backup_{timestamp}"
+        if compress:
+            backup_path = backup_path.with_suffix(".tar.gz")
+    
+    backup_path = Path(backup_path)
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    includes = []
+    temp_backup_dir = None
+    
+    try:
+        if compress:
+            # Для сжатого архива создаём временную директорию
+            temp_backup_dir = Path(f"/tmp/memory_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            temp_backup_dir.mkdir(exist_ok=True)
+            actual_backup_path = temp_backup_dir
+        else:
+            actual_backup_path = backup_path
+            actual_backup_path.mkdir(exist_ok=True)
+        
+        # Копируем SQLite БД
+        if db_path.exists():
+            click.echo(f"📄 Копирование SQLite БД: {db_path}")
+            db_backup_path = actual_backup_path / "memory_graph.db"
+            shutil.copy2(db_path, db_backup_path)
+            includes.append("sqlite_database")
+            click.echo(f"   ✅ Размер: {db_backup_path.stat().st_size / 1024 / 1024:.2f} MB")
+        else:
+            click.echo(f"⚠️  SQLite БД не найдена: {db_path}")
+        
+        # Копируем ChromaDB
+        if include_chromadb and chroma_path.exists():
+            click.echo(f"🔍 Копирование ChromaDB: {chroma_path}")
+            chroma_backup_path = actual_backup_path / "chroma_db"
+            shutil.copytree(chroma_path, chroma_backup_path, dirs_exist_ok=True)
+            includes.append("chromadb")
+            # Подсчитываем размер
+            total_size = sum(f.stat().st_size for f in chroma_backup_path.rglob('*') if f.is_file())
+            click.echo(f"   ✅ Размер: {total_size / 1024 / 1024:.2f} MB")
+        elif include_chromadb:
+            click.echo(f"⚠️  ChromaDB не найдена: {chroma_path}")
+        
+        # Копируем отчеты
+        if include_reports:
+            reports_path = Path("artifacts/reports")
+            if reports_path.exists():
+                click.echo(f"📊 Копирование отчетов: {reports_path}")
+                reports_backup_path = actual_backup_path / "reports"
+                shutil.copytree(reports_path, reports_backup_path, dirs_exist_ok=True)
+                includes.append("reports")
+                total_size = sum(f.stat().st_size for f in reports_backup_path.rglob('*') if f.is_file())
+                click.echo(f"   ✅ Размер: {total_size / 1024 / 1024:.2f} MB")
+            else:
+                click.echo(f"⚠️  Отчеты не найдены: {reports_path}")
+        
+        # Создаём архив если нужно
+        if compress and temp_backup_dir:
+            click.echo(f"🗜️  Создание архива: {backup_path}")
+            with tarfile.open(backup_path, "w:gz") as tar:
+                tar.add(temp_backup_dir, arcname=backup_path.stem)
+            backup_size = backup_path.stat().st_size
+            click.echo(f"   ✅ Размер архива: {backup_size / 1024 / 1024:.2f} MB")
+        
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("✅ Резервная копия успешно создана!")
+        click.echo("=" * 80)
+        click.echo(f"📁 Путь: {backup_path}")
+        click.echo(f"📦 Включено: {', '.join(includes)}")
+        if compress:
+            click.echo(f"📊 Размер: {backup_path.stat().st_size / 1024 / 1024:.2f} MB")
+        click.echo()
+        
+    except Exception as e:
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("❌ Ошибка при создании резервной копии!")
+        click.echo("=" * 80)
+        click.echo(f"Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        raise click.Abort()
+    finally:
+        # Удаляем временную директорию
+        if temp_backup_dir and temp_backup_dir.exists():
+            shutil.rmtree(temp_backup_dir)
+
+
+@cli.command("restore-database")
+@click.option(
+    "--backup-path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Путь к резервной копии (файл .tar.gz или директория)",
+)
+@click.option(
+    "--confirm",
+    is_flag=True,
+    help="Подтвердить восстановление (удалит текущие данные)",
+)
+@click.option(
+    "--restore-chromadb/--no-chromadb",
+    default=True,
+    help="Восстановить ChromaDB",
+)
+@click.option(
+    "--restore-reports/--no-reports",
+    default=False,
+    help="Восстановить markdown отчеты",
+)
+@click.option(
+    "--db-path",
+    default="data/memory_graph.db",
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Путь к SQLite базе данных",
+)
+@click.option(
+    "--chroma-path",
+    default="chroma_db",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Путь к ChromaDB",
+)
+def restore_database(backup_path, confirm, restore_chromadb, restore_reports, db_path, chroma_path):
+    """🔄 Восстановление базы данных из резервной копии
+    
+    ВНИМАНИЕ: Эта операция удалит текущие данные и заменит их данными из backup!
+    """
+    import shutil
+    import tarfile
+    
+    click.echo("🔄 Восстановление базы данных из резервной копии")
+    click.echo()
+    
+    if not confirm:
+        click.echo("⚠️  ВНИМАНИЕ: Эта операция удалит текущие данные!")
+        click.echo(f"   Будет восстановлено из: {backup_path}")
+        if not click.confirm("Продолжить?"):
+            click.echo("❌ Операция отменена")
+            return
+    
+    backup_path = Path(backup_path)
+    temp_extract_dir = None
+    
+    try:
+        # Распаковываем архив если нужно
+        if backup_path.suffix == ".gz" or backup_path.suffixes == [".tar", ".gz"]:
+            click.echo(f"📦 Распаковка архива: {backup_path}")
+            temp_extract_dir = Path(f"/tmp/memory_restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            temp_extract_dir.mkdir(exist_ok=True)
+            with tarfile.open(backup_path, "r:gz") as tar:
+                tar.extractall(temp_extract_dir)
+            # Находим распакованную директорию
+            extracted_dirs = [d for d in temp_extract_dir.iterdir() if d.is_dir()]
+            if extracted_dirs:
+                source_dir = extracted_dirs[0]
+            else:
+                source_dir = temp_extract_dir
+        else:
+            source_dir = backup_path
+        
+        # Восстанавливаем SQLite БД
+        db_backup = source_dir / "memory_graph.db"
+        if db_backup.exists():
+            click.echo(f"📄 Восстановление SQLite БД: {db_path}")
+            if db_path.exists():
+                # Создаём backup текущей БД
+                old_db_backup = Path(f"{db_path}.old_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+                shutil.copy2(db_path, old_db_backup)
+                click.echo(f"   💾 Текущая БД сохранена как: {old_db_backup}")
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(db_backup, db_path)
+            click.echo("   ✅ SQLite БД восстановлена")
+        else:
+            click.echo(f"⚠️  SQLite БД не найдена в backup: {db_backup}")
+        
+        # Восстанавливаем ChromaDB
+        if restore_chromadb:
+            chroma_backup = source_dir / "chroma_db"
+            if chroma_backup.exists() and chroma_backup.is_dir():
+                click.echo(f"🔍 Восстановление ChromaDB: {chroma_path}")
+                if chroma_path.exists():
+                    shutil.rmtree(chroma_path)
+                chroma_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(chroma_backup, chroma_path)
+                click.echo("   ✅ ChromaDB восстановлена")
+            else:
+                click.echo(f"⚠️  ChromaDB не найдена в backup: {chroma_backup}")
+        
+        # Восстанавливаем отчеты
+        if restore_reports:
+            reports_backup = source_dir / "reports"
+            if reports_backup.exists() and reports_backup.is_dir():
+                reports_path = Path("artifacts/reports")
+                click.echo(f"📊 Восстановление отчетов: {reports_path}")
+                if reports_path.exists():
+                    shutil.rmtree(reports_path)
+                reports_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(reports_backup, reports_path)
+                click.echo("   ✅ Отчеты восстановлены")
+            else:
+                click.echo(f"⚠️  Отчеты не найдены в backup: {reports_backup}")
+        
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("✅ База данных успешно восстановлена!")
+        click.echo("=" * 80)
+        click.echo()
+        
+    except Exception as e:
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("❌ Ошибка при восстановлении базы данных!")
+        click.echo("=" * 80)
+        click.echo(f"Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        raise click.Abort()
+    finally:
+        # Удаляем временную директорию
+        if temp_extract_dir and temp_extract_dir.exists():
+            shutil.rmtree(temp_extract_dir)
+
+
+@cli.command("optimize-database")
+@click.option(
+    "--db-path",
+    default="data/memory_graph.db",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Путь к SQLite базе данных",
+)
+@click.option(
+    "--vacuum/--no-vacuum",
+    default=True,
+    help="Выполнить VACUUM для освобождения места",
+)
+@click.option(
+    "--analyze/--no-analyze",
+    default=True,
+    help="Выполнить ANALYZE для обновления статистики",
+)
+@click.option(
+    "--reindex/--no-reindex",
+    default=False,
+    help="Выполнить REINDEX для пересоздания индексов",
+)
+@click.option(
+    "--optimize-fts/--no-optimize-fts",
+    default=True,
+    help="Оптимизировать FTS5 индекс",
+)
+def optimize_database(db_path, vacuum, analyze, reindex, optimize_fts):
+    """⚡ Оптимизация SQLite базы данных
+    
+    Выполняет операции оптимизации для улучшения производительности:
+    - VACUUM: освобождает место, удаляя неиспользуемые страницы
+    - ANALYZE: обновляет статистику для оптимизатора запросов
+    - REINDEX: пересоздаёт индексы
+    - FTS5 оптимизация: оптимизирует полнотекстовый поиск
+    """
+    import sqlite3
+    import time
+    
+    click.echo("⚡ Оптимизация SQLite базы данных")
+    click.echo()
+    
+    if not db_path.exists():
+        click.echo(f"❌ База данных не найдена: {db_path}")
+        raise click.Abort()
+    
+    # Получаем размер до оптимизации
+    size_before = db_path.stat().st_size
+    
+    operations_performed = []
+    start_time = time.time()
+    
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        
+        # VACUUM
+        if vacuum:
+            click.echo("🧹 Выполнение VACUUM...")
+            cursor.execute("VACUUM")
+            conn.commit()
+            operations_performed.append("VACUUM")
+            click.echo("   ✅ VACUUM выполнен")
+        
+        # ANALYZE
+        if analyze:
+            click.echo("📊 Выполнение ANALYZE...")
+            cursor.execute("ANALYZE")
+            conn.commit()
+            operations_performed.append("ANALYZE")
+            click.echo("   ✅ ANALYZE выполнен")
+        
+        # REINDEX
+        if reindex:
+            click.echo("🔄 Выполнение REINDEX...")
+            cursor.execute("REINDEX")
+            conn.commit()
+            operations_performed.append("REINDEX")
+            click.echo("   ✅ REINDEX выполнен")
+        
+        # FTS5 оптимизация
+        if optimize_fts:
+            click.echo("🔍 Оптимизация FTS5 индекса...")
+            try:
+                cursor.execute("INSERT INTO node_search(node_search) VALUES('optimize')")
+                conn.commit()
+                operations_performed.append("FTS5_optimize")
+                click.echo("   ✅ FTS5 индекс оптимизирован")
+            except sqlite3.OperationalError as e:
+                if "no such table" not in str(e).lower():
+                    raise
+                click.echo("   ⚠️  FTS5 таблица не найдена, пропускаем")
+        
+        conn.close()
+        
+        # Получаем размер после оптимизации
+        size_after = db_path.stat().st_size
+        space_freed = size_before - size_after
+        duration = time.time() - start_time
+        
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("✅ Оптимизация завершена!")
+        click.echo("=" * 80)
+        click.echo(f"📊 Операции: {', '.join(operations_performed)}")
+        click.echo(f"📦 Размер до: {size_before / 1024 / 1024:.2f} MB")
+        click.echo(f"📦 Размер после: {size_after / 1024 / 1024:.2f} MB")
+        if space_freed > 0:
+            click.echo(f"💾 Освобождено: {space_freed / 1024 / 1024:.2f} MB")
+        click.echo(f"⏱️  Время выполнения: {duration:.2f} сек")
+        click.echo()
+        
+    except Exception as e:
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("❌ Ошибка при оптимизации базы данных!")
+        click.echo("=" * 80)
+        click.echo(f"Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        raise click.Abort()
+
+
+@cli.command("validate-database")
+@click.option(
+    "--db-path",
+    default="data/memory_graph.db",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Путь к SQLite базе данных",
+)
+@click.option(
+    "--check-integrity/--no-check-integrity",
+    default=True,
+    help="Проверить целостность SQLite (PRAGMA integrity_check)",
+)
+@click.option(
+    "--check-foreign-keys/--no-check-foreign-keys",
+    default=True,
+    help="Проверить внешние ключи (PRAGMA foreign_key_check)",
+)
+@click.option(
+    "--check-orphaned-nodes/--no-check-orphaned-nodes",
+    default=True,
+    help="Проверить узлы без связей",
+)
+@click.option(
+    "--check-orphaned-edges/--no-check-orphaned-edges",
+    default=True,
+    help="Проверить рёбра с несуществующими узлами",
+)
+def validate_database(db_path, check_integrity, check_foreign_keys, check_orphaned_nodes, check_orphaned_edges):
+    """🔍 Проверка целостности базы данных
+    
+    Выполняет комплексную проверку целостности данных:
+    - Проверка целостности SQLite
+    - Проверка внешних ключей
+    - Проверка графа знаний (сиротские узлы и рёбра)
+    """
+    import sqlite3
+    
+    click.echo("🔍 Проверка целостности базы данных")
+    click.echo()
+    
+    if not db_path.exists():
+        click.echo(f"❌ База данных не найдена: {db_path}")
+        raise click.Abort()
+    
+    issues = []
+    checks_performed = []
+    
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Проверка целостности SQLite
+        if check_integrity:
+            click.echo("🔍 Проверка целостности SQLite...")
+            cursor.execute("PRAGMA integrity_check")
+            result = cursor.fetchone()[0]
+            checks_performed.append("integrity_check")
+            if result == "ok":
+                click.echo("   ✅ Целостность SQLite: OK")
+            else:
+                click.echo(f"   ❌ Проблемы с целостностью: {result}")
+                issues.append({
+                    "type": "integrity",
+                    "severity": "error",
+                    "message": f"SQLite integrity check failed: {result}",
+                    "details": {"result": result}
+                })
+        
+        # Проверка внешних ключей
+        if check_foreign_keys:
+            click.echo("🔗 Проверка внешних ключей...")
+            cursor.execute("PRAGMA foreign_key_check")
+            foreign_key_issues = cursor.fetchall()
+            checks_performed.append("foreign_key_check")
+            if not foreign_key_issues:
+                click.echo("   ✅ Внешние ключи: OK")
+            else:
+                click.echo(f"   ❌ Найдено проблем с внешними ключами: {len(foreign_key_issues)}")
+                for issue in foreign_key_issues:
+                    issues.append({
+                        "type": "foreign_key",
+                        "severity": "error",
+                        "message": f"Foreign key violation: {dict(issue)}",
+                        "details": dict(issue)
+                    })
+        
+        # Проверка графа знаний
+        if check_orphaned_nodes or check_orphaned_edges:
+            click.echo("🕸️  Проверка графа знаний...")
+            from ..memory.typed_graph import TypedGraphMemory
+            graph = TypedGraphMemory(db_path=str(db_path))
+            
+            # Проверка сиротских узлов
+            if check_orphaned_nodes:
+                cursor.execute("""
+                    SELECT id, type 
+                    FROM nodes 
+                    WHERE id NOT IN (
+                        SELECT DISTINCT source_id FROM edges
+                        UNION
+                        SELECT DISTINCT target_id FROM edges
+                    )
+                """)
+                orphaned_nodes = cursor.fetchall()
+                checks_performed.append("orphaned_nodes")
+                if not orphaned_nodes:
+                    click.echo("   ✅ Сиротские узлы: не найдено")
+                else:
+                    click.echo(f"   ⚠️  Найдено сиротских узлов: {len(orphaned_nodes)}")
+                    for node in orphaned_nodes[:10]:  # Показываем первые 10
+                        issues.append({
+                            "type": "orphaned_node",
+                            "severity": "warning",
+                            "message": f"Node '{node['id']}' has no connections",
+                            "details": {"node_id": node["id"], "node_type": node["type"]}
+                        })
+            
+            # Проверка сиротских рёбер
+            if check_orphaned_edges:
+                cursor.execute("""
+                    SELECT e.id, e.source_id, e.target_id, e.type
+                    FROM edges e
+                    LEFT JOIN nodes n1 ON e.source_id = n1.id
+                    LEFT JOIN nodes n2 ON e.target_id = n2.id
+                    WHERE n1.id IS NULL OR n2.id IS NULL
+                """)
+                orphaned_edges = cursor.fetchall()
+                checks_performed.append("orphaned_edges")
+                if not orphaned_edges:
+                    click.echo("   ✅ Сиротские рёбра: не найдено")
+                else:
+                    click.echo(f"   ❌ Найдено сиротских рёбер: {len(orphaned_edges)}")
+                    for edge in orphaned_edges[:10]:  # Показываем первые 10
+                        issues.append({
+                            "type": "orphaned_edge",
+                            "severity": "error",
+                            "message": f"Edge '{edge['id']}' references non-existent node",
+                            "details": {
+                                "edge_id": edge["id"],
+                                "source_id": edge["source_id"],
+                                "target_id": edge["target_id"],
+                                "edge_type": edge["type"]
+                            }
+                        })
+        
+        conn.close()
+        
+        click.echo()
+        click.echo("=" * 80)
+        if not issues:
+            click.echo("✅ База данных валидна! Проблем не обнаружено.")
+        else:
+            click.echo(f"⚠️  Найдено проблем: {len(issues)}")
+            click.echo()
+            for issue in issues[:20]:  # Показываем первые 20
+                severity_icon = "❌" if issue["severity"] == "error" else "⚠️"
+                click.echo(f"{severity_icon} [{issue['type']}] {issue['message']}")
+        click.echo("=" * 80)
+        click.echo(f"📊 Выполнено проверок: {', '.join(checks_performed)}")
+        click.echo()
+        
+    except Exception as e:
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("❌ Ошибка при проверке базы данных!")
+        click.echo("=" * 80)
+        click.echo(f"Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        raise click.Abort()
+
+
+@cli.command("calculate-importance")
+@click.option(
+    "--record-id",
+    required=True,
+    help="ID записи для оценки важности",
+)
+@click.option(
+    "--db-path",
+    default="data/memory_graph.db",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Путь к SQLite базе данных",
+)
+@click.option(
+    "--entity-weight",
+    type=float,
+    default=0.1,
+    help="Вес за каждую сущность",
+)
+@click.option(
+    "--task-weight",
+    type=float,
+    default=0.3,
+    help="Вес за наличие задачи",
+)
+@click.option(
+    "--length-weight",
+    type=float,
+    default=0.2,
+    help="Вес за длину сообщения",
+)
+@click.option(
+    "--search-hits-weight",
+    type=float,
+    default=0.4,
+    help="Вес за частоту поиска",
+)
+def calculate_importance(record_id, db_path, entity_weight, task_weight, length_weight, search_hits_weight):
+    """📊 Вычисление важности записи
+    
+    Вычисляет importance score (0.0-1.0) для указанной записи на основе:
+    - Наличия сущностей
+    - Наличия задач/action items
+    - Длины контента
+    - Частоты поиска
+    """
+    from ..memory.importance_scoring import ImportanceScorer
+    from ..memory.typed_graph import TypedGraphMemory
+    import sqlite3
+    
+    click.echo(f"📊 Вычисление важности записи: {record_id}")
+    click.echo()
+    
+    try:
+        # Инициализируем граф и scorer
+        graph = TypedGraphMemory(db_path=str(db_path))
+        scorer = ImportanceScorer(
+            entity_weight=entity_weight,
+            task_weight=task_weight,
+            length_weight=length_weight,
+            search_hits_weight=search_hits_weight
+        )
+        
+        # Получаем запись из БД
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM nodes WHERE id = ?", (record_id,))
+        node = cursor.fetchone()
+        
+        if not node:
+            click.echo(f"❌ Запись не найдена: {record_id}")
+            raise click.Abort()
+        
+        # Преобразуем узел в словарь
+        node_dict = dict(node)
+        properties = json.loads(node_dict.get("properties", "{}") or "{}")
+        node_dict.update(properties)
+        
+        # Получаем метаданные (частота поиска и т.д.)
+        metadata = {
+            "_search_hits": properties.get("_search_hits", 0)
+        }
+        
+        # Вычисляем важность
+        importance_score = scorer.compute_importance(node_dict, metadata)
+        
+        # Вычисляем факторы отдельно для детализации
+        factors = {}
+        entities = node_dict.get("entities") or properties.get("entities", [])
+        if entities:
+            factors["entities"] = min(len(entities) * entity_weight, 0.5)
+        if node_dict.get("has_task") or node_dict.get("is_action_item") or properties.get("has_task") or properties.get("is_action_item"):
+            factors["task"] = task_weight
+        text = node_dict.get("text", "") or node_dict.get("content", "") or properties.get("content", "")
+        if len(text) > 500:
+            factors["length"] = length_weight
+        elif len(text) > 200:
+            factors["length"] = length_weight * 0.5
+        if metadata.get("_search_hits", 0) > 0:
+            factors["search_hits"] = min(metadata["_search_hits"] / 10.0, 1.0) * search_hits_weight
+        
+        conn.close()
+        
+        click.echo("=" * 80)
+        click.echo("📊 Результаты оценки важности")
+        click.echo("=" * 80)
+        click.echo(f"📝 Запись: {record_id}")
+        click.echo(f"⭐ Importance Score: {importance_score:.3f} (0.0 - 1.0)")
+        click.echo()
+        click.echo("📈 Факторы:")
+        for factor, value in factors.items():
+            click.echo(f"   • {factor}: {value:.3f}")
+        click.echo()
+        
+    except Exception as e:
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("❌ Ошибка при вычислении важности!")
+        click.echo("=" * 80)
+        click.echo(f"Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        raise click.Abort()
+
+
+@cli.command("prune-memory")
+@click.option(
+    "--db-path",
+    default="data/memory_graph.db",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Путь к SQLite базе данных",
+)
+@click.option(
+    "--max-records",
+    type=int,
+    default=100000,
+    help="Максимальное количество записей",
+)
+@click.option(
+    "--eviction-threshold",
+    type=float,
+    default=0.7,
+    help="Порог eviction score для удаления (0.0-1.0)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Только анализ, без удаления",
+)
+@click.option(
+    "--source",
+    help="Фильтр по источнику (опционально)",
+)
+def prune_memory(db_path, max_records, eviction_threshold, dry_run, source):
+    """🧹 Автоматическая очистка неважных записей
+    
+    Удаляет записи с низкой важностью для управления размером БД.
+    Использует систему оценки важности (Importance Scoring).
+    """
+    from ..memory.importance_scoring import MemoryPruner, EvictionScorer
+    from ..memory.typed_graph import TypedGraphMemory
+    import sqlite3
+    
+    click.echo("🧹 Автоматическая очистка памяти")
+    click.echo()
+    
+    if dry_run:
+        click.echo("🔸 Режим DRY RUN - записи не будут удалены")
+        click.echo()
+    
+    try:
+        graph = TypedGraphMemory(db_path=str(db_path))
+        eviction_scorer = EvictionScorer()
+        pruner = MemoryPruner(
+            eviction_scorer=eviction_scorer,
+            max_messages=max_records,
+            eviction_threshold=eviction_threshold
+        )
+        
+        # Получаем все записи
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        query = "SELECT * FROM nodes"
+        params = []
+        if source:
+            query += " WHERE properties LIKE ?"
+            params.append(f'%"source": "{source}"%')
+        
+        cursor.execute(query, params)
+        nodes = cursor.fetchall()
+        
+        current_count = len(nodes)
+        click.echo(f"📊 Текущее количество записей: {current_count}")
+        
+        if not pruner.should_prune(current_count):
+            click.echo("✅ Очистка не требуется (количество записей в пределах лимита)")
+            conn.close()
+            return
+        
+        click.echo(f"⚠️  Превышен лимит ({max_records}), требуется очистка")
+        click.echo()
+        
+        # Преобразуем узлы в словари
+        messages = []
+        for node in nodes:
+            node_dict = dict(node)
+            properties = json.loads(node_dict.get("properties", "{}") or "{}")
+            node_dict.update(properties)
+            # Убеждаемся, что есть поле id или msg_id для get_eviction_candidates
+            if "id" not in node_dict and "msg_id" not in node_dict:
+                node_dict["id"] = node_dict.get("node_id") or node["id"]
+            messages.append(node_dict)
+        
+        # Получаем кандидатов на удаление
+        candidates = pruner.get_eviction_candidates(
+            messages,
+            threshold=eviction_threshold
+        )
+        
+        click.echo(f"🎯 Найдено кандидатов на удаление: {len(candidates)}")
+        click.echo()
+        
+        if not dry_run and candidates:
+            click.echo("🗑️  Удаление записей...")
+            removed_count = 0
+            for candidate in candidates:
+                try:
+                    # get_eviction_candidates возвращает msg_id
+                    node_id = candidate.get("msg_id") or candidate.get("message", {}).get("id")
+                    if node_id:
+                        graph.delete_node(node_id)
+                        removed_count += 1
+                except Exception as e:
+                    click.echo(f"   ⚠️  Ошибка удаления {node_id}: {e}")
+            
+            click.echo(f"   ✅ Удалено записей: {removed_count}")
+        
+        conn.close()
+        
+        click.echo()
+        click.echo("=" * 80)
+        if dry_run:
+            click.echo("🔸 DRY RUN завершён")
+            click.echo(f"📊 Будет удалено записей: {len(candidates)}")
+        else:
+            click.echo("✅ Очистка памяти завершена")
+        click.echo("=" * 80)
+        click.echo()
+        
+    except Exception as e:
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("❌ Ошибка при очистке памяти!")
+        click.echo("=" * 80)
+        click.echo(f"Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        raise click.Abort()
+
+
+@cli.command("update-importance-scores")
+@click.option(
+    "--db-path",
+    default="data/memory_graph.db",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Путь к SQLite базе данных",
+)
+@click.option(
+    "--source",
+    help="Обновить только для указанного источника",
+)
+@click.option(
+    "--batch-size",
+    type=int,
+    default=1000,
+    help="Размер батча для обработки",
+)
+def update_importance_scores(db_path, source, batch_size):
+    """🔄 Массовый пересчёт важности записей
+    
+    Пересчитывает importance scores для всех записей в базе данных.
+    Полезно после изменения весов факторов или обновления системы оценки.
+    """
+    from ..memory.importance_scoring import ImportanceScorer
+    from ..memory.typed_graph import TypedGraphMemory
+    import sqlite3
+    
+    click.echo("🔄 Массовый пересчёт важности записей")
+    click.echo()
+    
+    try:
+        graph = TypedGraphMemory(db_path=str(db_path))
+        scorer = ImportanceScorer()
+        
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Получаем все записи
+        query = "SELECT * FROM nodes"
+        params = []
+        if source:
+            query += " WHERE properties LIKE ?"
+            params.append(f'%"source": "{source}"%')
+        
+        cursor.execute(query, params)
+        nodes = cursor.fetchall()
+        
+        total_nodes = len(nodes)
+        click.echo(f"📊 Всего записей для обработки: {total_nodes}")
+        click.echo()
+        
+        updated_count = 0
+        importance_scores = []
+        
+        for i, node in enumerate(nodes, 1):
+            try:
+                node_dict = dict(node)
+                properties = json.loads(node_dict.get("properties", "{}"))
+                node_dict.update(properties)
+                
+                metadata = {
+                    "_search_hits": properties.get("_search_hits", 0)
+                }
+                
+                importance_score = scorer.compute_importance(node_dict, metadata)
+                importance_scores.append(importance_score)
+                
+                # Обновляем properties с новым importance_score
+                properties["_importance_score"] = importance_score
+                
+                # Обновляем узел в графе
+                graph.update_node(
+                    node_id=node_dict["id"],
+                    properties=properties
+                )
+                
+                updated_count += 1
+                
+                if i % batch_size == 0:
+                    click.echo(f"   ⏳ Обработано: {i}/{total_nodes} ({i*100//total_nodes}%)")
+            
+            except Exception as e:
+                node_id_str = node_dict.get("id", "unknown")
+                click.echo(f"   ⚠️  Ошибка обработки {node_id_str}: {e}")
+        
+        conn.close()
+        
+        # Статистика
+        avg_importance = sum(importance_scores) / len(importance_scores) if importance_scores else 0
+        min_importance = min(importance_scores) if importance_scores else 0
+        max_importance = max(importance_scores) if importance_scores else 0
+        
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("✅ Пересчёт важности завершён")
+        click.echo("=" * 80)
+        click.echo(f"📊 Обновлено записей: {updated_count}")
+        click.echo(f"⭐ Средняя важность: {avg_importance:.3f}")
+        click.echo(f"📉 Минимальная важность: {min_importance:.3f}")
+        click.echo(f"📈 Максимальная важность: {max_importance:.3f}")
+        click.echo()
+        
+    except Exception as e:
+        click.echo()
+        click.echo("=" * 80)
+        click.echo("❌ Ошибка при пересчёте важности!")
+        click.echo("=" * 80)
+        click.echo(f"Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        raise click.Abort()
 
 
 def main():

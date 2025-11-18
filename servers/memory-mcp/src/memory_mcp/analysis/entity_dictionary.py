@@ -417,12 +417,12 @@ class EntityDictionary:
                 if hasattr(llm_client, 'generate_summary'):
                     # LMStudioEmbeddingClient или OllamaEmbeddingClient
                     # Для reasoning-моделей увеличиваем max_tokens, так как они генерируют reasoning перед ответом
-                    # Минимум 50 токенов для reasoning-моделей, 20 для обычных
-                    base_max_tokens = 20
+                    # Минимум 200 токенов для reasoning-моделей, 100 для обычных
+                    base_max_tokens = 100
                     # Проверяем, является ли модель reasoning-моделью
                     if hasattr(llm_client, '_is_reasoning_model') and hasattr(llm_client, 'llm_model_name'):
                         if llm_client._is_reasoning_model(llm_client.llm_model_name or ""):
-                            base_max_tokens = 100  # Больше токенов для reasoning-моделей
+                            base_max_tokens = 500  # Больше токенов для reasoning-моделей
                     
                     response = await llm_client.generate_summary(
                         prompt=prompt,

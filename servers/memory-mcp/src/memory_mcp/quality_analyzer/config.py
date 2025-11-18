@@ -28,9 +28,9 @@ class QualityAnalysisConfig:
 
     ollama_model: str = "gpt-oss-20b:latest"
     ollama_base_url: str = "http://localhost:11434"
-    max_context_tokens: int = 8192
+    max_context_tokens: int = 131072  # Для gpt-oss-20b
     temperature: float = 0.1
-    max_response_tokens: int = 1000
+    max_response_tokens: int = 131072  # Для gpt-oss-20b (максимальный лимит)
     batch_size: int | None = None
     max_queries_per_chat: int = 20
     thinking_level: str | None = None

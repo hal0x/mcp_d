@@ -696,7 +696,7 @@ class SmartRollingAggregator:
                 summary = await self.embedding_client.generate_summary(
                     prompt=prompt,
                     temperature=0.3,
-                    max_tokens=400,
+                    max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
                 )
             return summary.strip()
         except Exception as e:
@@ -1086,7 +1086,7 @@ class SmartRollingAggregator:
                 updated_context = await self.ollama_client.generate_summary(
                     prompt=prompt,
                     temperature=0.3,
-                    max_tokens=800,
+                    max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
                 )
 
             # Сохраняем обновленный контекст

@@ -756,6 +756,9 @@ class IndexChatRequest(BaseModel):
     # Дополнительные параметры
     enable_entity_learning: Optional[bool] = Field(default=True, description="Включить автоматическое обучение словарей сущностей")
     enable_time_analysis: Optional[bool] = Field(default=True, description="Включить анализ временных паттернов")
+    
+    # Оптимизации после индексации
+    run_optimizations: Optional[bool] = Field(default=True, description="Выполнить оптимизации после индексации (VACUUM, ANALYZE, пересчёт важности, проверка целостности)")
 
 
 class IndexChatResponse(BaseModel):

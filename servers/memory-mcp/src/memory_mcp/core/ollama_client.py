@@ -483,10 +483,10 @@ class OllamaEmbeddingClient:
         self,
         prompt: str,
         temperature: float = 0.3,
-        max_tokens: int = 900,
+        max_tokens: int = 131072,  # Для gpt-oss-20b (максимальный лимит)
         top_p: float = 0.93,
         presence_penalty: float = 0.05,
-        max_prompt_tokens: int = 30000,
+        max_prompt_tokens: int = 100000,  # Увеличено для gpt-oss-20b (доступно 131072 токена)
     ) -> str:
         """
         Генерация саммаризации через LLM с автоматической разбивкой длинных промптов
@@ -582,7 +582,7 @@ class OllamaEmbeddingClientSync:
         self,
         model_name: str = "hf.co/lmstudio-community/Magistral-Small-2509-GGUF:Q4_K_M",
         base_url: str = "http://localhost:11434",
-        max_text_length: int = 16384,  # 4096 токенов * 4 символа/токен для безопасного лимита
+        max_text_length: int = 16384,  # 4096 токенов * 4 символа/токен (лимит для text-embedding-qwen3-embedding-0.6b)
     ):
         self.model_name = model_name
         self.base_url = base_url

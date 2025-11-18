@@ -28,7 +28,7 @@ class ReportGenerator:
         ollama_model: Optional[str] = None,
         ollama_base_url: Optional[str] = None,
         ollama_temperature: float = 0.2,
-        ollama_max_tokens: int = 800,
+        ollama_max_tokens: int = 131072,  # Для gpt-oss-20b (максимальный лимит)
         ollama_thinking_level: Optional[str] = None,
     ):
         """

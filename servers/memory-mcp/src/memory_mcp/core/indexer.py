@@ -687,6 +687,12 @@ class TwoLevelIndexer:
         logger.info(
             f"Начало индексации: scope={scope}, chat={chat}, force_full={force_full}"
         )
+        if scope == "chat" and chat:
+            logger.info(f"🎯 Режим индексации одного чата: '{chat}'")
+        elif scope == "all":
+            logger.info("🌐 Режим индексации всех чатов")
+        else:
+            logger.warning(f"⚠️ Неизвестный scope={scope}, будет использован режим 'all'")
 
         stats = {
             "indexed_chats": [],
@@ -698,7 +704,17 @@ class TwoLevelIndexer:
         # Получаем список чатов для индексации
         chats_path = Path("chats")
         if scope == "chat" and chat:
-            chat_dirs = [chats_path / chat]
+            chat_dir = chats_path / chat
+            if not chat_dir.exists() or not chat_dir.is_dir():
+                logger.error(f"❌ Чат '{chat}' не найден в {chats_path}")
+                return {
+                    "indexed_chats": [],
+                    "sessions_indexed": 0,
+                    "messages_indexed": 0,
+                    "tasks_indexed": 0,
+                    "error": f"Чат '{chat}' не найден",
+                }
+            chat_dirs = [chat_dir]
         else:
             chat_dirs = [d for d in chats_path.iterdir() if d.is_dir()]
 
@@ -1266,7 +1282,7 @@ class TwoLevelIndexer:
                 # Проверяем и обрезаем текст, если он превышает лимит токенов
                 # Оценка токенов: примерно 4 символа = 1 токен
                 estimated_tokens = len(embedding_text) // 4
-                max_tokens = 8192  # Уменьшаем до 8192 токенов для ускорения обработки
+                max_tokens = 131072  # Для gpt-oss-20b (максимальный лимит)
 
                 if estimated_tokens > max_tokens:
                     # Сначала обрезаем контекст, если он слишком длинный

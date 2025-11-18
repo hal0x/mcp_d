@@ -21,7 +21,6 @@ from ..config import get_settings
 
 from .adapters import MemoryServiceAdapter
 from ..memory.artifacts_reader import ArtifactsReader
-from ..search import SmartSearchEngine, SearchSessionStore
 from .schema import (
     StartBackgroundIndexingRequest,
     StartBackgroundIndexingResponse,
@@ -112,7 +111,7 @@ logger.info(f"MCP сервер '{server.name}' создан, начинаем р
 ToolResponse = Tuple[List[TextContent], Dict[str, Any]]
 
 _adapter: MemoryServiceAdapter | None = None
-_smart_search_engine: SmartSearchEngine | None = None
+_smart_search_engine: Any | None = None  # SmartSearchEngine (ленивый импорт)
 _active_indexing_jobs: Dict[str, Dict[str, Any]] = {}
 _background_indexing_service = None
 
@@ -140,10 +139,13 @@ def _get_adapter() -> MemoryServiceAdapter:
     return _adapter
 
 
-def _get_smart_search_engine() -> SmartSearchEngine:
+def _get_smart_search_engine():
     """Ленивая инициализация интерактивного поискового движка."""
     global _smart_search_engine
     if _smart_search_engine is None:
+        # Ленивый импорт для избежания циклических зависимостей
+        from ..search import SmartSearchEngine, SearchSessionStore
+        
         settings = get_settings()
         adapter = _get_adapter()
         artifacts_reader = ArtifactsReader(artifacts_dir=settings.artifacts_path)
@@ -1077,6 +1079,11 @@ async def list_tools() -> List[Tool]:
                         "description": "Включить анализ временных паттернов",
                         "default": True,
                     },
+                    "run_optimizations": {
+                        "type": "boolean",
+                        "description": "Выполнить оптимизации после индексации (VACUUM, ANALYZE, пересчёт важности, проверка целостности)",
+                        "default": True,
+                    },
                 },
                 "required": ["chat"],
             },
@@ -1514,6 +1521,71 @@ async def _run_indexing_job(
         
         logger.info(f"Индексация чата '{request.chat}' завершена успешно (job_id: {job_id})")
         
+        # Выполняем оптимизации после индексации
+        run_optimizations = request.run_optimizations if request.run_optimizations is not None else True
+        if run_optimizations:
+            try:
+                _active_indexing_jobs[job_id]["current_stage"] = "Оптимизация базы данных"
+                logger.info(f"⚡ Запуск оптимизаций после индексации чата '{request.chat}'...")
+                
+                optimization_results = {}
+                
+                # Получаем путь к БД из адаптера
+                db_path = str(adapter.graph.db_path) if hasattr(adapter.graph, 'db_path') else str(adapter.graph.conn.execute("PRAGMA database_list").fetchone()[2])
+                
+                # 1. Оптимизация базы данных
+                try:
+                    _active_indexing_jobs[job_id]["current_stage"] = "Оптимизация: VACUUM/ANALYZE"
+                    opt_result = _optimize_database(db_path)
+                    optimization_results["optimize_database"] = opt_result
+                    logger.info(f"✅ Оптимизация БД завершена: {opt_result}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка при оптимизации БД: {e}", exc_info=True)
+                    optimization_results["optimize_database"] = {"error": str(e)}
+                
+                # 2. Пересчёт важности записей
+                try:
+                    _active_indexing_jobs[job_id]["current_stage"] = "Обновление важности записей"
+                    importance_result = _update_importance_scores(adapter.graph)
+                    optimization_results["update_importance"] = importance_result
+                    logger.info(f"✅ Пересчёт важности завершён: {importance_result}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка при пересчёте важности: {e}", exc_info=True)
+                    optimization_results["update_importance"] = {"error": str(e)}
+                
+                # 3. Проверка целостности (опционально, только валидация)
+                try:
+                    _active_indexing_jobs[job_id]["current_stage"] = "Проверка целостности"
+                    validation_result = _validate_database(db_path)
+                    optimization_results["validate_database"] = validation_result
+                    if validation_result.get("valid"):
+                        logger.info(f"✅ Проверка целостности пройдена")
+                    else:
+                        logger.warning(f"⚠️ Найдены проблемы при проверке целостности: {validation_result.get('total_issues', 0)}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка при проверке целостности: {e}", exc_info=True)
+                    optimization_results["validate_database"] = {"error": str(e)}
+                
+                # 4. Проверка необходимости очистки памяти
+                try:
+                    _active_indexing_jobs[job_id]["current_stage"] = "Проверка очистки памяти"
+                    prune_result = _check_prune_memory(adapter.graph)
+                    optimization_results["prune_check"] = prune_result
+                    if prune_result.get("prune_needed"):
+                        logger.info(f"⚠️ Требуется очистка памяти: {prune_result.get('candidates_count', 0)} кандидатов")
+                    else:
+                        logger.info(f"✅ Очистка памяти не требуется")
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка при проверке очистки памяти: {e}", exc_info=True)
+                    optimization_results["prune_check"] = {"error": str(e)}
+                
+                _active_indexing_jobs[job_id]["optimization_results"] = optimization_results
+                logger.info(f"✅ Все оптимизации завершены для чата '{request.chat}'")
+                
+            except Exception as e:
+                logger.error(f"Ошибка при выполнении оптимизаций: {e}", exc_info=True)
+                _active_indexing_jobs[job_id]["optimization_error"] = str(e)
+        
     except Exception as e:
         logger.error(f"Ошибка при индексации чата '{request.chat}' (job_id: {job_id}): {e}", exc_info=True)
         _active_indexing_jobs[job_id] = {
@@ -1567,6 +1639,273 @@ async def _start_indexing_job(
         chat=request.chat,
         message=f"Индексация чата '{request.chat}' запущена в фоновом режиме. Используйте get_indexing_progress для отслеживания прогресса.",
     )
+
+
+def _optimize_database(db_path: str) -> Dict[str, Any]:
+    """Оптимизация базы данных (VACUUM, ANALYZE, FTS5)."""
+    import sqlite3
+    import time
+    from pathlib import Path
+    
+    db_path_obj = Path(db_path)
+    if not db_path_obj.exists():
+        return {"error": f"База данных не найдена: {db_path}"}
+    
+    size_before = db_path_obj.stat().st_size
+    operations_performed = []
+    start_time = time.time()
+    
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        
+        # VACUUM
+        cursor.execute("VACUUM")
+        conn.commit()
+        operations_performed.append("VACUUM")
+        
+        # ANALYZE
+        cursor.execute("ANALYZE")
+        conn.commit()
+        operations_performed.append("ANALYZE")
+        
+        # FTS5 оптимизация
+        try:
+            cursor.execute("INSERT INTO node_search(node_search) VALUES('optimize')")
+            conn.commit()
+            operations_performed.append("FTS5_optimize")
+        except sqlite3.OperationalError:
+            pass  # FTS5 таблица может отсутствовать
+        
+        conn.close()
+        
+        size_after = db_path_obj.stat().st_size
+        space_freed = size_before - size_after
+        duration = time.time() - start_time
+        
+        return {
+            "success": True,
+            "operations": operations_performed,
+            "size_before_mb": round(size_before / 1024 / 1024, 2),
+            "size_after_mb": round(size_after / 1024 / 1024, 2),
+            "space_freed_mb": round(space_freed / 1024 / 1024, 2) if space_freed > 0 else 0,
+            "duration_sec": round(duration, 2),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _update_importance_scores(graph) -> Dict[str, Any]:
+    """Пересчёт важности записей."""
+    import json
+    import sqlite3
+    from ..memory.importance_scoring import ImportanceScorer
+    
+    try:
+        scorer = ImportanceScorer()
+        db_path = graph.db_path
+        
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM nodes")
+        nodes = cursor.fetchall()
+        
+        updated_count = 0
+        importance_scores = []
+        
+        for node in nodes:
+            try:
+                node_dict = dict(node)
+                properties = json.loads(node_dict.get("properties", "{}") or "{}")
+                node_dict.update(properties)
+                
+                metadata = {
+                    "_search_hits": properties.get("_search_hits", 0)
+                }
+                
+                importance_score = scorer.compute_importance(node_dict, metadata)
+                importance_scores.append(importance_score)
+                
+                properties["_importance_score"] = importance_score
+                
+                graph.update_node(
+                    node_id=node_dict["id"],
+                    properties=properties
+                )
+                
+                updated_count += 1
+            except Exception:
+                continue
+        
+        conn.close()
+        
+        avg_importance = sum(importance_scores) / len(importance_scores) if importance_scores else 0
+        min_importance = min(importance_scores) if importance_scores else 0
+        max_importance = max(importance_scores) if importance_scores else 0
+        
+        return {
+            "success": True,
+            "updated_count": updated_count,
+            "avg_importance": round(avg_importance, 3),
+            "min_importance": round(min_importance, 3),
+            "max_importance": round(max_importance, 3),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _validate_database(db_path: str) -> Dict[str, Any]:
+    """Проверка целостности базы данных."""
+    import sqlite3
+    from pathlib import Path
+    
+    db_path_obj = Path(db_path)
+    if not db_path_obj.exists():
+        return {"error": f"База данных не найдена: {db_path}"}
+    
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        issues = []
+        checks_performed = []
+        
+        # Проверка целостности SQLite
+        cursor.execute("PRAGMA integrity_check")
+        integrity_result = cursor.fetchone()[0]
+        checks_performed.append("integrity_check")
+        if integrity_result != "ok":
+            issues.append({
+                "type": "integrity",
+                "severity": "error",
+                "message": f"SQLite integrity check failed: {integrity_result}",
+            })
+        
+        # Проверка внешних ключей
+        cursor.execute("PRAGMA foreign_key_check")
+        fk_issues = cursor.fetchall()
+        checks_performed.append("foreign_key_check")
+        if fk_issues:
+            for issue in fk_issues[:10]:  # Первые 10
+                issues.append({
+                    "type": "foreign_key",
+                    "severity": "error",
+                    "message": f"Foreign key violation: {dict(issue)}",
+                })
+        
+        # Проверка графа знаний
+        from ..memory.typed_graph import TypedGraphMemory
+        graph = TypedGraphMemory(db_path=str(db_path))
+        
+        # Сиротские узлы
+        cursor.execute("""
+            SELECT id, type 
+            FROM nodes 
+            WHERE id NOT IN (
+                SELECT DISTINCT source_id FROM edges
+                UNION
+                SELECT DISTINCT target_id FROM edges
+            )
+        """)
+        orphaned_nodes = cursor.fetchall()
+        checks_performed.append("orphaned_nodes")
+        if orphaned_nodes:
+            for node in orphaned_nodes[:10]:
+                issues.append({
+                    "type": "orphaned_node",
+                    "severity": "warning",
+                    "message": f"Node '{node['id']}' has no connections",
+                })
+        
+        # Сиротские рёбра
+        cursor.execute("""
+            SELECT e.id, e.source_id, e.target_id, e.type
+            FROM edges e
+            LEFT JOIN nodes n1 ON e.source_id = n1.id
+            LEFT JOIN nodes n2 ON e.target_id = n2.id
+            WHERE n1.id IS NULL OR n2.id IS NULL
+        """)
+        orphaned_edges = cursor.fetchall()
+        checks_performed.append("orphaned_edges")
+        if orphaned_edges:
+            for edge in orphaned_edges[:10]:
+                issues.append({
+                    "type": "orphaned_edge",
+                    "severity": "error",
+                    "message": f"Edge '{edge['id']}' references non-existent node",
+                })
+        
+        conn.close()
+        
+        return {
+            "valid": len([i for i in issues if i["severity"] == "error"]) == 0,
+            "total_issues": len(issues),
+            "error_count": len([i for i in issues if i["severity"] == "error"]),
+            "warning_count": len([i for i in issues if i["severity"] == "warning"]),
+            "checks_performed": checks_performed,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _check_prune_memory(graph) -> Dict[str, Any]:
+    """Проверка необходимости очистки памяти."""
+    import json
+    import sqlite3
+    from ..memory.importance_scoring import MemoryPruner, EvictionScorer
+    
+    try:
+        eviction_scorer = EvictionScorer()
+        pruner = MemoryPruner(
+            eviction_scorer=eviction_scorer,
+            max_messages=100000,
+            eviction_threshold=0.7
+        )
+        
+        db_path = graph.db_path
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM nodes")
+        nodes = cursor.fetchall()
+        
+        current_count = len(nodes)
+        prune_needed = pruner.should_prune(current_count)
+        
+        if not prune_needed:
+            conn.close()
+            return {
+                "prune_needed": False,
+                "current_count": current_count,
+                "max_records": 100000,
+            }
+        
+        # Получаем кандидатов
+        messages = []
+        for node in nodes:
+            node_dict = dict(node)
+            properties = json.loads(node_dict.get("properties", "{}") or "{}")
+            node_dict.update(properties)
+            if "id" not in node_dict:
+                node_dict["id"] = node["id"]
+            messages.append(node_dict)
+        
+        candidates = pruner.get_eviction_candidates(messages, threshold=0.7)
+        
+        conn.close()
+        
+        return {
+            "prune_needed": True,
+            "current_count": current_count,
+            "max_records": 100000,
+            "candidates_count": len(candidates),
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def get_health_payload() -> Dict[str, Any]:

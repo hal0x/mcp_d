@@ -75,9 +75,9 @@ class QualityAnalysisSettings(BaseSettings):
     # Ollama настройки
     ollama_model: str = Field("gpt-oss-20b:latest", description="Модель Ollama")
     ollama_base_url: str = Field("http://localhost:11434", description="URL Ollama сервера")
-    max_context_tokens: int = Field(8192, description="Максимальное количество токенов контекста")
+    max_context_tokens: int = Field(131072, description="Максимальное количество токенов контекста (для gpt-oss-20b)")
     temperature: float = Field(0.1, description="Температура для генерации")
-    max_response_tokens: int = Field(1000, description="Максимальное количество токенов ответа")
+    max_response_tokens: int = Field(131072, description="Максимальное количество токенов ответа (для gpt-oss-20b)")
     thinking_level: str | None = Field(None, description="Уровень мышления (thinking)")
 
     # Настройки генерации запросов
@@ -187,9 +187,9 @@ class QualityAnalysisSettings(BaseSettings):
         return cls(
             ollama_model=ollama_section.get("model", "gpt-oss-20b:latest"),
             ollama_base_url=ollama_section.get("base_url", "http://localhost:11434"),
-            max_context_tokens=ollama_section.get("max_context_tokens", 8192),
+            max_context_tokens=ollama_section.get("max_context_tokens", 131072),
             temperature=ollama_section.get("temperature", 0.1),
-            max_response_tokens=ollama_section.get("max_tokens", 1000),
+            max_response_tokens=ollama_section.get("max_tokens", 131072),
             thinking_level=ollama_section.get("thinking_level"),
             max_queries_per_chat=query_section.get("max_queries_per_chat", 20),
             batch_size=analysis_section.get("batch_size") if analysis_section.get("batch_size") and analysis_section.get("batch_size") > 0 else None,

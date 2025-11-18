@@ -310,7 +310,7 @@ class RollingWindowAggregator:
                 summary = await self.embedding_client.generate_summary(
                     prompt=prompt,
                     temperature=0.3,
-                    max_tokens=300,
+                    max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
                 )
             return summary.strip()
         except Exception as e:

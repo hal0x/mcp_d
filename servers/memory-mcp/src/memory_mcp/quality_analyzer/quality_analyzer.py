@@ -43,9 +43,9 @@ class QualityAnalyzer:
         self,
         ollama_model: str = "gemma3n:e4b-it-q8_0",
         ollama_base_url: str = "http://localhost:11434",
-        max_context_tokens: int = 8192,
+        max_context_tokens: int = 131072,  # Для gpt-oss-20b
         ollama_temperature: float = 0.1,
-        ollama_max_tokens: int = 1000,
+        ollama_max_tokens: int = 131072,  # Для gpt-oss-20b (максимальный лимит)
         ollama_thinking_level: Optional[str] = None,
         reports_dir: Path = Path("artifacts/reports"),
         history_dir: Path = Path("quality_analysis_history"),
