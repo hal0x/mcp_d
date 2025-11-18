@@ -52,6 +52,17 @@ class IngestRequest(BaseModel):
     records: list[MemoryRecordPayload] = Field(
         ..., description="Пакет записей для загрузки в память"
     )
+    source_type: Optional[Literal["records", "scraped"]] = Field(
+        default="records", description="Тип источника: records (обычные записи), scraped (скрапленный контент). Для scraped можно использовать поля из ScrapedContentRequest."
+    )
+    # Поля для source_type="scraped" (опциональные, используются если records пустой)
+    url: Optional[str] = Field(None, description="URL скрапленной страницы (для scraped)")
+    title: Optional[str] = Field(None, description="Заголовок страницы (для scraped)")
+    content: Optional[str] = Field(None, description="Основной текстовый контент (для scraped)")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Дополнительные метаданные (для scraped)")
+    source: Optional[str] = Field(default="bright_data", description="Источник скраппинга (для scraped)")
+    tags: Optional[list[str]] = Field(None, description="Теги для классификации (для scraped)")
+    entities: Optional[list[str]] = Field(None, description="Извлеченные сущности (для scraped)")
 
 
 class IngestResponse(BaseModel):
@@ -906,3 +917,181 @@ class SmartSearchResponse(BaseModel):
     total_matches: int = Field(
         ..., description="Общее количество совпадений до применения top_k"
     )
+
+
+# --------------------------- Unified schemas for tool optimization ---------------------------
+
+
+class UnifiedSearchRequest(BaseModel):
+    """Универсальный запрос поиска, объединяющий все типы поиска."""
+
+    search_type: Literal["hybrid", "smart", "embedding", "similar", "trading"] = Field(
+        default="hybrid", description="Тип поиска: hybrid (FTS+вектор), smart (LLM-assisted), embedding (по вектору), similar (похожие записи), trading (торговые паттерны)"
+    )
+    # Общие параметры для всех типов поиска
+    query: Optional[str] = Field(None, description="Поисковый запрос (требуется для hybrid, smart, trading)")
+    embedding: Optional[list[float]] = Field(None, description="Вектор эмбеддинга (требуется для embedding)")
+    record_id: Optional[str] = Field(None, description="ID записи (требуется для similar)")
+    top_k: int = Field(5, ge=1, le=50, description="Максимальное количество результатов")
+    source: Optional[str] = Field(None, description="Фильтр по источнику")
+    tags: list[str] = Field(default_factory=list, description="Фильтр по тегам")
+    date_from: Optional[datetime] = Field(None, description="Фильтр: дата не раньше")
+    date_to: Optional[datetime] = Field(None, description="Фильтр: дата не позже")
+    include_embeddings: bool = Field(False, description="Возвращать ли эмбеддинги")
+    # Параметры для smart search
+    session_id: Optional[str] = Field(None, description="ID сессии для smart search")
+    feedback: Optional[list[SearchFeedback]] = Field(None, description="Обратная связь для smart search")
+    clarify: Optional[bool] = Field(False, description="Запросить уточняющие вопросы для smart search")
+    artifact_types: Optional[list[str]] = Field(None, description="Фильтр по типам артифактов для smart search")
+    # Параметры для trading search
+    symbol: Optional[str] = Field(None, description="Торговая пара для trading search")
+    limit: Optional[int] = Field(None, ge=1, le=100, description="Лимит результатов для trading search")
+
+
+class UnifiedSearchResponse(BaseModel):
+    """Универсальный ответ поиска, объединяющий все типы результатов."""
+
+    search_type: str = Field(..., description="Тип выполненного поиска")
+    # Результаты для hybrid, embedding, similar
+    results: Optional[list[SearchResultItem]] = Field(None, description="Результаты поиска (для hybrid, embedding, similar)")
+    total_matches: Optional[int] = Field(None, description="Общее количество совпадений")
+    # Результаты для smart search
+    clarifying_questions: Optional[list[str]] = Field(None, description="Уточняющие вопросы (для smart)")
+    suggested_refinements: Optional[list[str]] = Field(None, description="Предложенные уточнения (для smart)")
+    session_id: Optional[str] = Field(None, description="ID сессии (для smart)")
+    confidence_score: Optional[float] = Field(None, ge=0.0, le=1.0, description="Уверенность в результатах (для smart)")
+    artifacts_found: Optional[int] = Field(None, description="Количество найденных артифактов (для smart)")
+    db_records_found: Optional[int] = Field(None, description="Количество найденных записей из БД (для smart)")
+    # Результаты для trading search
+    signals: Optional[list[TradingSignalRecord]] = Field(None, description="Найденные торговые сигналы (для trading)")
+
+
+class BatchOperationsRequest(BaseModel):
+    """Универсальный запрос для batch операций."""
+
+    operation: Literal["update", "delete", "fetch"] = Field(..., description="Тип операции: update, delete, fetch")
+    # Параметры для update
+    updates: Optional[list[BatchUpdateRecordItem]] = Field(None, description="Список обновлений (требуется для update)")
+    # Параметры для delete и fetch
+    record_ids: Optional[list[str]] = Field(None, description="Список ID записей (требуется для delete и fetch)")
+
+
+class BatchOperationsResponse(BaseModel):
+    """Универсальный ответ для batch операций."""
+
+    operation: str = Field(..., description="Тип выполненной операции")
+    # Результаты для update
+    update_results: Optional[list[BatchUpdateResult]] = Field(None, description="Результаты обновления")
+    total_updated: Optional[int] = Field(None, description="Всего успешно обновлено")
+    total_failed: Optional[int] = Field(None, description="Всего неудачных обновлений")
+    # Результаты для delete
+    delete_results: Optional[list[BatchDeleteResult]] = Field(None, description="Результаты удаления")
+    total_deleted: Optional[int] = Field(None, description="Всего успешно удалено")
+    # Результаты для fetch
+    fetch_results: Optional[list[BatchFetchResult]] = Field(None, description="Результаты получения")
+    total_found: Optional[int] = Field(None, description="Всего найдено записей")
+    total_not_found: Optional[int] = Field(None, description="Всего не найдено записей")
+
+
+class GetStatisticsRequest(BaseModel):
+    """Запрос статистики с опциональным фильтром по типу."""
+
+    type: Optional[Literal["general", "tags", "indexing"]] = Field(
+        None, description="Тип статистики: general (общая), tags (по тегам), indexing (прогресс индексации). Если None, возвращается вся статистика."
+    )
+    chat: Optional[str] = Field(None, description="Фильтр по конкретному чату (для indexing)")
+
+
+class UnifiedStatisticsResponse(BaseModel):
+    """Универсальный ответ статистики, объединяющий все типы."""
+
+    # Общая статистика
+    graph_stats: Optional[dict[str, Any]] = Field(None, description="Статистика графа знаний")
+    sources_count: Optional[dict[str, int]] = Field(None, description="Количество записей по источникам")
+    tags_count: Optional[dict[str, int]] = Field(None, description="Количество записей по тегам")
+    database_size_bytes: Optional[int] = Field(None, description="Размер базы данных в байтах")
+    # Статистика по тегам
+    total_tags: Optional[int] = Field(None, description="Всего уникальных тегов")
+    total_tagged_records: Optional[int] = Field(None, description="Всего записей с тегами")
+    # Прогресс индексации
+    indexing_progress: Optional[list[IndexingProgressItem]] = Field(None, description="Прогресс индексации")
+    indexing_message: Optional[str] = Field(None, description="Сообщение о статусе индексации")
+
+
+class GraphQueryRequest(BaseModel):
+    """Универсальный запрос к графу знаний."""
+
+    query_type: Literal["neighbors", "path", "related"] = Field(
+        ..., description="Тип запроса: neighbors (соседи узла), path (путь между узлами), related (связанные записи)"
+    )
+    # Параметры для neighbors
+    node_id: Optional[str] = Field(None, description="ID узла (требуется для neighbors и related)")
+    edge_type: Optional[str] = Field(None, description="Фильтр по типу рёбер (для neighbors)")
+    direction: Optional[str] = Field("both", description="Направление: 'out', 'in', 'both' (для neighbors)")
+    # Параметры для path
+    source_id: Optional[str] = Field(None, description="ID исходного узла (требуется для path)")
+    target_id: Optional[str] = Field(None, description="ID целевого узла (требуется для path)")
+    max_length: Optional[int] = Field(5, ge=1, le=20, description="Максимальная длина пути (для path)")
+    # Параметры для related
+    record_id: Optional[str] = Field(None, description="ID записи (альтернатива node_id для related)")
+    max_depth: Optional[int] = Field(1, ge=1, le=3, description="Максимальная глубина поиска (для related)")
+    limit: Optional[int] = Field(10, ge=1, le=50, description="Максимальное количество результатов (для related)")
+
+
+class GraphQueryResponse(BaseModel):
+    """Универсальный ответ запроса к графу."""
+
+    query_type: str = Field(..., description="Тип выполненного запроса")
+    # Результаты для neighbors
+    neighbors: Optional[list[GraphNeighborItem]] = Field(None, description="Список соседних узлов")
+    # Результаты для path
+    path: Optional[list[str]] = Field(None, description="Путь как список ID узлов")
+    total_weight: Optional[float] = Field(None, description="Суммарный вес пути")
+    found: Optional[bool] = Field(None, description="Найден ли путь")
+    # Результаты для related
+    records: Optional[list[MemoryRecordPayload]] = Field(None, description="Список связанных записей")
+
+
+class BackgroundIndexingRequest(BaseModel):
+    """Универсальный запрос управления фоновой индексацией."""
+
+    action: Literal["start", "stop", "status"] = Field(..., description="Действие: start (запустить), stop (остановить), status (получить статус)")
+
+
+class BackgroundIndexingResponse(BaseModel):
+    """Универсальный ответ управления фоновой индексацией."""
+
+    action: str = Field(..., description="Выполненное действие")
+    success: Optional[bool] = Field(None, description="Успешность выполнения (для start/stop)")
+    message: str = Field(..., description="Сообщение о результате")
+    # Параметры для status
+    running: Optional[bool] = Field(None, description="Запущен ли фоновый процесс")
+    check_interval: Optional[int] = Field(None, description="Интервал проверки в секундах")
+    last_check_time: Optional[str] = Field(None, description="Время последней проверки (ISO format)")
+    input_path: Optional[str] = Field(None, description="Путь к input директории")
+    chats_path: Optional[str] = Field(None, description="Путь к chats директории")
+
+
+class SummariesRequest(BaseModel):
+    """Универсальный запрос управления саммаризацией."""
+
+    action: Literal["update", "review"] = Field(..., description="Действие: update (обновить), review (проверить)")
+    # Общие параметры
+    chat: Optional[str] = Field(None, description="Обработать только конкретный чат")
+    # Параметры для update
+    force: Optional[bool] = Field(False, description="Принудительно пересоздать существующие артефакты (для update)")
+    # Параметры для review
+    dry_run: Optional[bool] = Field(False, description="Только анализ, без изменения файлов (для review)")
+    limit: Optional[int] = Field(None, description="Максимальное количество файлов для обработки (для review)")
+
+
+class SummariesResponse(BaseModel):
+    """Универсальный ответ управления саммаризацией."""
+
+    action: str = Field(..., description="Выполненное действие")
+    message: str = Field(..., description="Сообщение о результате")
+    # Результаты для update
+    chats_updated: Optional[int] = Field(None, description="Количество обновленных чатов")
+    # Результаты для review
+    files_processed: Optional[int] = Field(None, description="Количество обработанных файлов")
+    files_fixed: Optional[int] = Field(None, description="Количество исправленных файлов")

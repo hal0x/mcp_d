@@ -22,22 +22,22 @@ logger = logging.getLogger(__name__)
 
 
 class TypedGraphMemory:
-    """Типизированный граф знаний с персистентным хранилищем"""
+    """Типизированный граф знаний с персистентным хранилищем.
+    
+    Использует SQLite для персистентности и NetworkX для операций в памяти.
+    Вдохновлено HALv1 Memory 2.0 Typed Graph Memory.
+    """
 
     def __init__(self, db_path: str = "./data/memory_graph.db"):
-        """
-        Инициализация графа
-
+        """Инициализирует граф с указанным путём к БД.
+        
         Args:
             db_path: Путь к SQLite базе данных
         """
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # NetworkX граф для быстрых операций
         self.graph = nx.DiGraph()
-
-        # SQLite для персистентности
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.row_factory = sqlite3.Row
 
@@ -47,10 +47,9 @@ class TypedGraphMemory:
         logger.info(f"Инициализирован TypedGraphMemory: {db_path}")
 
     def _initialize_schema(self):
-        """Создание схемы БД"""
+        """Создаёт схему БД: таблицы узлов, рёбер, индексы и FTS5."""
         cursor = self.conn.cursor()
 
-        # Таблица узлов
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS nodes (
@@ -65,7 +64,6 @@ class TypedGraphMemory:
         """
         )
 
-        # Таблица рёбер
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS edges (
@@ -83,7 +81,6 @@ class TypedGraphMemory:
         """
         )
 
-        # Индексы для быстрого поиска
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type)")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id)"
@@ -93,7 +90,6 @@ class TypedGraphMemory:
         )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type)")
 
-        # Таблица полнотекстового поиска
         cursor.execute(
             """
             CREATE VIRTUAL TABLE IF NOT EXISTS node_search
@@ -112,10 +108,9 @@ class TypedGraphMemory:
         logger.info("Схема БД инициализирована")
 
     def _load_graph_from_db(self):
-        """Загрузка графа из БД в память (NetworkX)"""
+        """Загружает граф из БД в память (NetworkX), включая эмбеддинги."""
         cursor = self.conn.cursor()
 
-        # Загружаем узлы (включая эмбеддинги)
         cursor.execute("SELECT id, type, label, properties, embedding FROM nodes")
         nodes_with_embeddings = 0
         nodes_without_embeddings = 0
@@ -127,11 +122,9 @@ class TypedGraphMemory:
                 "properties": props,
                 **props,
             }
-            # Загружаем эмбеддинг, если есть
             if row["embedding"]:
                 try:
                     embedding = json.loads(row["embedding"].decode())
-                    # Убеждаемся, что эмбеддинг - это список
                     if hasattr(embedding, 'tolist'):
                         embedding = embedding.tolist()
                     elif not isinstance(embedding, list):
@@ -144,7 +137,6 @@ class TypedGraphMemory:
                         node_attrs["embedding"] = embedding
                         nodes_with_embeddings += 1
                 except Exception as e:
-                    # Если не удалось распарсить, пропускаем
                     logger.debug(f"Ошибка загрузки эмбеддинга для узла {row['id']}: {e}")
                     nodes_without_embeddings += 1
             else:

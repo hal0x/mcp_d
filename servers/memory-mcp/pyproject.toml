@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "memory-mcp"
-version = "1.0.0"
+version = "2.0.0"
 description = "Unified memory MCP server with multimodal indexing"
 readme = "README.md"
 license = {text = "MIT"}

@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""
-Модуль для двухуровневой индексации
-L1 - sessions (саммари + E1)
-L2 - messages (текст + симметричный контекст)
-"""
+"""Двухуровневая индексация: L1 (sessions с саммари) и L2 (messages с контекстом)."""
 
 import asyncio
 import logging
@@ -24,8 +20,6 @@ from ..analysis.markdown_renderer import MarkdownRenderer
 from ..analysis.session_clustering import SessionClusterer
 from ..analysis.session_segmentation import SessionSegmenter
 from ..analysis.session_summarizer import SessionSummarizer
-# Отложенный импорт для избежания циклических зависимостей
-# from ..analysis.smart_rolling_aggregator import SmartRollingAggregator
 from ..analysis.time_processor import TimeProcessor
 from ..utils.naming import slugify
 from ..utils.url_validator import validate_embedding_text
@@ -33,13 +27,11 @@ from .lmstudio_client import LMStudioEmbeddingClient
 
 logger = logging.getLogger(__name__)
 
-MIN_SESSION_MESSAGES = (
-    15  # Уменьшено с 30 до 15 для более гибкого объединения маленьких сессий
-)
+MIN_SESSION_MESSAGES = 15
 
 
 class TwoLevelIndexer:
-    """Класс для двухуровневой индексации (L1: sessions, L2: messages)"""
+    """Двухуровневая индексация: L1 (sessions с саммари) и L2 (messages с контекстом)."""
 
     def __init__(
         self,
@@ -64,11 +56,10 @@ class TwoLevelIndexer:
         force: bool = False,
         enable_entity_learning: bool = True,
         enable_time_analysis: bool = True,
-        graph: Optional[Any] = None,  # TypedGraphMemory
+        graph: Optional[Any] = None,
         progress_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
     ):
-        """
-        Инициализация индексатора
+        """Инициализирует индексатор с указанными параметрами.
 
         Args:
             chroma_path: Путь к ChromaDB
@@ -103,17 +94,12 @@ class TwoLevelIndexer:
         self.reports_path.mkdir(parents=True, exist_ok=True)
         self.embedding_client = embedding_client or LMStudioEmbeddingClient()
 
-        # Флаги и параметры кластеризации
         self.enable_clustering = enable_clustering
         self.clustering_threshold = clustering_threshold
         self.min_cluster_size = min_cluster_size
-
-        # Параметры группировки
         self.max_messages_per_group = max_messages_per_group
         self.max_session_hours = max_session_hours
         self.gap_minutes = gap_minutes
-
-        # Параметры умной группировки
         self.enable_smart_aggregation = enable_smart_aggregation
         self.aggregation_strategy = aggregation_strategy
         self.now_window_hours = now_window_hours
@@ -121,8 +107,6 @@ class TwoLevelIndexer:
         self.recent_window_days = recent_window_days
         self.strategy_threshold = strategy_threshold
         self.force = force
-
-        # Новые параметры для расширенного анализа
         self.enable_entity_learning = enable_entity_learning
         self.enable_time_analysis = enable_time_analysis
 
@@ -135,7 +119,6 @@ class TwoLevelIndexer:
             max_messages_per_group=max_messages_per_group,
         )
 
-        # Создаём менеджер инструкций и SessionSummarizer с системой оценки качества
         self.instruction_manager = InstructionManager()
         self.session_summarizer = SessionSummarizer(
             self.embedding_client,
@@ -149,44 +132,35 @@ class TwoLevelIndexer:
         self.entity_extractor = EntityExtractor(
             enable_learning=enable_entity_learning,
             enable_natasha=True,
-            enable_llm_validation=True,  # Включить LLM валидацию для лучшего качества
+            enable_llm_validation=True,
         )
         
-        # Инициализация TimeProcessor для анализа временных паттернов
         self.time_processor = TimeProcessor() if enable_time_analysis else None
-        
-        # Инициализация словаря сущностей для автоматического обучения
         self.entity_dictionary = get_entity_dictionary() if enable_entity_learning else None
         
         self.markdown_renderer = MarkdownRenderer(self.reports_path)
 
-        # Кластеризация (инициализируется после коллекций)
         self.session_clusterer = None
         self.cluster_summarizer = None
-
-        # Коллекции
         self.sessions_collection = None
         self.messages_collection = None
         self.tasks_collection = None
         self.clusters_collection = None
-        self.progress_collection = None  # Новая коллекция для отслеживания прогресса
+        self.progress_collection = None
 
         self._initialize_collections()
 
-        # Инициализируем кластеризацию после коллекций
         if self.enable_clustering:
             self.session_clusterer = SessionClusterer(
                 similarity_threshold=self.clustering_threshold,
                 min_cluster_size=self.min_cluster_size,
-                use_hdbscan=False,  # Используем threshold-based для детерминизма
+                use_hdbscan=False,
             )
             self.cluster_summarizer = ClusterSummarizer(
                 embedding_client=self.embedding_client
             )
 
-        # Инициализируем умный агрегатор
         if self.enable_smart_aggregation:
-            # Отложенный импорт для избежания циклических зависимостей
             from ..analysis.smart_rolling_aggregator import SmartRollingAggregator
             self.smart_aggregator = SmartRollingAggregator(
                 chats_dir=Path("chats"),
@@ -195,7 +169,6 @@ class TwoLevelIndexer:
         else:
             self.smart_aggregator = None
 
-        # Инициализация графа памяти для синхронизации
         self.graph = graph
         if self.graph:
             from ..memory.ingest import MemoryIngestor
@@ -237,7 +210,6 @@ class TwoLevelIndexer:
                     self.embedding_client._embedding_dimension = dimension
                 return dimension
             except RuntimeError:
-                # Если цикл уже запущен, возвращаем None - размерность определится позже
                 return None
         except Exception as e:
             logger.debug(f"Не удалось определить размерность эмбеддингов: {e}")
@@ -250,12 +222,9 @@ class TwoLevelIndexer:
         try:
             collection = self.chroma_client.get_collection(collection_name)
             
-            # Проверяем размерность коллекции
             if expected_dimension:
                 try:
-                    # Получаем информацию о коллекции
                     collection_info = collection.get()
-                    # Проверяем размерность по первому эмбеддингу, если есть
                     if collection_info.get("embeddings") and len(collection_info["embeddings"]) > 0:
                         existing_dimension = len(collection_info["embeddings"][0])
                         if existing_dimension != expected_dimension:
@@ -271,13 +240,11 @@ class TwoLevelIndexer:
                                 f"(размерность: {existing_dimension})"
                             )
                     else:
-                        # Если коллекция пустая, оставляем как есть
                         logger.info(
                             f"Найдена пустая коллекция {collection_name}"
                         )
                 except Exception as e:
                     logger.debug(f"Не удалось проверить размерность коллекции {collection_name}: {e}")
-                    # Если не удалось проверить, оставляем коллекцию как есть
                     logger.info(
                         f"Найдена коллекция {collection_name} с {collection.count()} записями"
                     )
@@ -287,7 +254,6 @@ class TwoLevelIndexer:
                 )
             
             if collection is None or force_recreate:
-                # Пересоздаём коллекцию
                 if collection:
                     self.chroma_client.delete_collection(collection_name)
                 collection = self.chroma_client.create_collection(
@@ -299,7 +265,6 @@ class TwoLevelIndexer:
             return collection
             
         except Exception:
-            # Коллекция не существует, создаём новую
             collection = self.chroma_client.create_collection(
                 name=collection_name,
                 metadata={"description": description},
@@ -308,37 +273,32 @@ class TwoLevelIndexer:
             return collection
 
     def _initialize_collections(self):
-        """Инициализация коллекций ChromaDB с проверкой размерности эмбеддингов"""
+        """Инициализирует коллекции ChromaDB с проверкой размерности эмбеддингов."""
         try:
-            # L1: Sessions
             self.sessions_collection = self._check_and_recreate_collection(
                 "chat_sessions",
                 "Саммаризации сессий для векторного поиска (L1)",
                 force_recreate=self.force
             )
 
-            # L2: Messages
             self.messages_collection = self._check_and_recreate_collection(
                 "chat_messages",
                 "Сообщения с контекстом для уточняющего поиска (L2)",
                 force_recreate=self.force
             )
 
-            # Tasks
             self.tasks_collection = self._check_and_recreate_collection(
                 "chat_tasks",
                 "Action Items из сессий",
                 force_recreate=self.force
             )
 
-            # Clusters
             self.clusters_collection = self._check_and_recreate_collection(
                 "session_clusters",
                 "Тематические кластеры сессий",
                 force_recreate=self.force
             )
 
-            # Progress tracking (не требует эмбеддингов, поэтому без проверки размерности)
             try:
                 self.progress_collection = self.chroma_client.get_collection(
                     "indexing_progress"
@@ -405,7 +365,6 @@ class TwoLevelIndexer:
                 session["messages"] = session.get("messages", raw_messages)
                 session["message_count"] = len(session.get("messages", []))
                 
-                # Добавляем анализ временных паттернов если включено
                 if self.time_processor and self.enable_time_analysis:
                     try:
                         activity_patterns = self.time_processor.analyze_activity_patterns(session.get("messages", []))
@@ -432,7 +391,6 @@ class TwoLevelIndexer:
                 session_data["messages"] = session_data.get("messages", raw_messages)
                 session_data["message_count"] = len(session_data["messages"])
                 
-                # Добавляем анализ временных паттернов если включено
                 if self.time_processor and self.enable_time_analysis:
                     try:
                         activity_patterns = self.time_processor.analyze_activity_patterns(session_data.get("messages", []))
@@ -457,7 +415,6 @@ class TwoLevelIndexer:
                 session_copy["messages"] = split_session.get("messages", raw_messages)
                 session_copy["message_count"] = len(session_copy["messages"])
                 
-                # Добавляем анализ временных паттернов если включено
                 if self.time_processor and self.enable_time_analysis:
                     try:
                         activity_patterns = self.time_processor.analyze_activity_patterns(session_copy.get("messages", []))
@@ -524,7 +481,6 @@ class TwoLevelIndexer:
                 normalized.append(segment_copy)
                 continue
 
-            # Логируем объединение сессий
             if len(group) > 1:
                 segment_sizes = [segment_len(item) for item in group]
                 logger.info(
@@ -605,7 +561,6 @@ class TwoLevelIndexer:
             progress_id = f"progress_{slugify(chat_name)}"
             now = datetime.now(ZoneInfo("UTC"))
 
-            # Форматируем даты в ISO формат
             last_date_iso = last_message_date.isoformat()
             now_iso = now.isoformat()
 

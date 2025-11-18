@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""
-Модуль для автоматического обучения словарей сущностей
-Отслеживает частоту появления терминов и автоматически добавляет их в словари
-Использует LLM для валидации сущностей перед добавлением в словарь
-"""
+"""Автоматическое обучение словарей сущностей с LLM-валидацией."""
 
 import asyncio
 import json
@@ -14,35 +10,33 @@ from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
-# Пороги для автоматического добавления в словари
 ENTITY_THRESHOLDS = {
-    "crypto_tokens": 3,      # Криптовалютные токены
-    "persons": 5,            # Имена людей
-    "organizations": 4,      # Организации
-    "locations": 4,          # Места
-    "telegram_channels": 2,  # Telegram каналы
-    "telegram_bots": 2,      # Telegram боты
-    "crypto_addresses": 2,   # Криптовалютные адреса
-    "domains": 3,            # Домены
+    "crypto_tokens": 3,
+    "persons": 5,
+    "organizations": 4,
+    "locations": 4,
+    "telegram_channels": 2,
+    "telegram_bots": 2,
+    "crypto_addresses": 2,
+    "domains": 3,
 }
 
-# Типы сущностей для отслеживания
 ENTITY_TYPES = list(ENTITY_THRESHOLDS.keys())
 
 
 class EntityDictionary:
-    """Класс для автоматического обучения словарей сущностей
-    Использует LLM для валидации сущностей перед добавлением в словарь
+    """Автоматическое обучение словарей сущностей с LLM-валидацией.
+    
+    Отслеживает частоту появления терминов и добавляет их в словари после валидации.
     """
 
     def __init__(
         self, 
         storage_path: Path = Path("config/entity_dictionaries"),
         enable_llm_validation: bool = True,
-        llm_client: Optional[Any] = None,  # LMStudioEmbeddingClient или OllamaEmbeddingClient
+        llm_client: Optional[Any] = None,
     ):
-        """
-        Инициализация словаря сущностей
+        """Инициализирует словарь сущностей.
 
         Args:
             storage_path: Путь к директории для хранения словарей
@@ -52,40 +46,27 @@ class EntityDictionary:
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         
-        # Счетчики частоты появления сущностей
         self.entity_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        
-        # Счетчики по чатам для контекстного анализа
         self.chat_entity_counts: Dict[str, Dict[str, Dict[str, int]]] = defaultdict(
             lambda: defaultdict(lambda: defaultdict(int))
         )
-        
-        # Связи имен и никнеймов внутри чатов: {chat_name: {username: [display_names]}}
         self.username_to_names: Dict[str, Dict[str, Set[str]]] = defaultdict(
             lambda: defaultdict(set)
         )
-        
-        # Обратные связи: {chat_name: {display_name: [usernames]}}
         self.name_to_usernames: Dict[str, Dict[str, Set[str]]] = defaultdict(
             lambda: defaultdict(set)
         )
-        
-        # Загруженные словари
         self.learned_dictionaries: Dict[str, Set[str]] = {
             entity_type: set() for entity_type in ENTITY_TYPES
         }
-        
-        # LLM для валидации
         self.enable_llm_validation = enable_llm_validation
         self._llm_client = llm_client
         self._llm_client_initialized = False
         
-        # Загружаем существующие словари
         self.load_dictionaries()
 
     def link_username_to_name(self, chat_name: str, username: str, display_name: str) -> None:
-        """
-        Связывание никнейма с именем пользователя внутри чата
+        """Связывает никнейм с отображаемым именем пользователя в чате.
         
         Args:
             chat_name: Название чата
@@ -104,8 +85,7 @@ class EntityDictionary:
             logger.debug(f"Связан никнейм @{username_normalized} с именем '{display_name_normalized}' в чате '{chat_name}'")
 
     def is_username_in_chat(self, chat_name: str, value: str) -> bool:
-        """
-        Проверка, является ли значение никнеймом пользователя из чата
+        """Проверяет, является ли значение никнеймом пользователя из чата.
         
         Args:
             chat_name: Название чата
@@ -118,8 +98,7 @@ class EntityDictionary:
         return normalized_value in self.username_to_names.get(chat_name, {})
 
     def track_entity(self, entity_type: str, value: str, chat_name: str, author_username: Optional[str] = None, author_display_name: Optional[str] = None) -> bool:
-        """
-        Отслеживание появления сущности
+        """Отслеживает появление сущности и добавляет в словарь при достижении порога.
 
         Args:
             entity_type: Тип сущности
@@ -138,20 +117,15 @@ class EntityDictionary:
         if not value or not value.strip():
             return False
 
-        # Связываем имя автора с никнеймом, если доступны
         if author_username and author_display_name:
             self.link_username_to_name(chat_name, author_username, author_display_name)
 
-        # Нормализуем значение
         normalized_value = self._normalize_entity_value(value)
         if not normalized_value:
             return False
-
-        # Увеличиваем счетчики
         self.entity_counts[entity_type][normalized_value] += 1
         self.chat_entity_counts[chat_name][entity_type][normalized_value] += 1
 
-        # Проверяем, нужно ли добавить в словарь
         threshold = ENTITY_THRESHOLDS[entity_type]
         total_count = self.entity_counts[entity_type][normalized_value]
 

@@ -22,24 +22,21 @@ from ..config import get_settings
 from .adapters import MemoryServiceAdapter
 from ..memory.artifacts_reader import ArtifactsReader
 from .schema import (
-    StartBackgroundIndexingRequest,
     StartBackgroundIndexingResponse,
-    StopBackgroundIndexingRequest,
     StopBackgroundIndexingResponse,
-    GetBackgroundIndexingStatusRequest,
     GetBackgroundIndexingStatusResponse,
     AnalyzeEntitiesRequest,
     AnalyzeEntitiesResponse,
+    BackgroundIndexingRequest,
+    BackgroundIndexingResponse,
+    BatchOperationsRequest,
+    BatchOperationsResponse,
     BatchUpdateRecordsRequest,
     BatchUpdateRecordsResponse,
     BuildInsightGraphRequest,
     BuildInsightGraphResponse,
-    DeleteRecordRequest,
-    DeleteRecordResponse,
     ExportRecordsRequest,
     ExportRecordsResponse,
-    FetchRequest,
-    FetchResponse,
     FindGraphPathRequest,
     FindGraphPathResponse,
     GenerateEmbeddingRequest,
@@ -50,18 +47,17 @@ from .schema import (
     GetIndexingProgressResponse,
     GetRelatedRecordsRequest,
     GetRelatedRecordsResponse,
-    IndexChatRequest,
-    IndexChatResponse,
-    GetAvailableChatsRequest,
-    GetAvailableChatsResponse,
-    GetSignalPerformanceRequest,
-    GetSignalPerformanceResponse,
+    GetStatisticsRequest,
     GetStatisticsResponse,
     GetTagsStatisticsResponse,
     GetTimelineRequest,
     GetTimelineResponse,
+    GraphQueryRequest,
+    GraphQueryResponse,
     ImportRecordsRequest,
     ImportRecordsResponse,
+    IndexChatRequest,
+    IndexChatResponse,
     IngestRequest,
     IngestResponse,
     ReviewSummariesRequest,
@@ -83,6 +79,11 @@ from .schema import (
     SearchFeedback,
     StoreTradingSignalRequest,
     StoreTradingSignalResponse,
+    SummariesRequest,
+    SummariesResponse,
+    UnifiedSearchRequest,
+    UnifiedSearchResponse,
+    UnifiedStatisticsResponse,
     UpdateRecordRequest,
     UpdateRecordResponse,
     UpdateSummariesRequest,
@@ -110,14 +111,18 @@ logger.info(f"MCP сервер '{server.name}' создан, начинаем р
 
 ToolResponse = Tuple[List[TextContent], Dict[str, Any]]
 
+# Глобальные сервисы с ленивой инициализацией
 _adapter: MemoryServiceAdapter | None = None
-_smart_search_engine: Any | None = None  # SmartSearchEngine (ленивый импорт)
-_indexing_tracker: Any | None = None  # IndexingJobTracker (ленивая инициализация)
+_smart_search_engine: Any | None = None
+_indexing_tracker: Any | None = None
 _background_indexing_service = None
 
 
 def _get_adapter() -> MemoryServiceAdapter:
-    """Ленивая инициализация адаптера памяти."""
+    """Инициализирует адаптер памяти при первом обращении.
+    
+    Резолвит относительный путь к БД относительно корня проекта (pyproject.toml).
+    """
     global _adapter
     if _adapter is None:
         settings = get_settings()
@@ -140,31 +145,31 @@ def _get_adapter() -> MemoryServiceAdapter:
 
 
 def _get_indexing_tracker():
-    """Ленивая инициализация трекера задач индексации."""
+    """Инициализирует трекер задач индексации при первом обращении."""
     global _indexing_tracker
     if _indexing_tracker is None:
         from ..core.indexing_tracker import IndexingJobTracker
         from ..config import get_settings
         
         settings = get_settings()
-        # Используем путь относительно корня проекта
         storage_path = "data/indexing_jobs.json"
         _indexing_tracker = IndexingJobTracker(storage_path=storage_path)
     return _indexing_tracker
 
 
 def _get_smart_search_engine():
-    """Ленивая инициализация интерактивного поискового движка."""
+    """Инициализирует интерактивный поисковый движок при первом обращении.
+    
+    Использует ленивый импорт для избежания циклических зависимостей.
+    """
     global _smart_search_engine
     if _smart_search_engine is None:
-        # Ленивый импорт для избежания циклических зависимостей
         from ..search import SmartSearchEngine, SearchSessionStore
         
         settings = get_settings()
         adapter = _get_adapter()
         artifacts_reader = ArtifactsReader(artifacts_dir=settings.artifacts_path)
         
-        # Путь к БД сессий
         session_db_path = os.getenv("SMART_SEARCH_SESSION_STORE_PATH", "data/search_sessions.db")
         if not os.path.isabs(session_db_path):
             current_dir = Path(__file__).parent
@@ -190,7 +195,7 @@ def _get_smart_search_engine():
 
 
 def _to_serializable(value: Any) -> Any:
-    """Рекурсивно конвертирует Pydantic модели и итерируемые объекты в обычные Python данные."""
+    """Рекурсивно конвертирует Pydantic модели и datetime в JSON-сериализуемые типы."""
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, BaseModel):
@@ -219,11 +224,13 @@ def _format_tool_response(payload: Any, *, root_key: str = "result") -> ToolResp
 
 
 def _parse_date_safe(date_str: str | None) -> datetime | None:
-    """Безопасный парсинг даты из ISO строки с обработкой ошибок."""
+    """Парсит ISO 8601 дату с обработкой ошибок.
+    
+    Поддерживает формат с 'Z' (UTC), заменяя его на '+00:00' для fromisoformat.
+    """
     if not date_str:
         return None
     try:
-        # Заменяем Z на +00:00 для совместимости с fromisoformat
         normalized = date_str.replace("Z", "+00:00")
         return datetime.fromisoformat(normalized)
     except (ValueError, AttributeError) as e:
@@ -246,121 +253,155 @@ async def list_tools() -> List[Tool]:
             description="Return server version and enabled capabilities.",
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
+        # Новые универсальные инструменты
         Tool(
-            name="ingest_records",
-            description="Ingest a batch of memory records into the unified memory store.",
+            name="search",
+            description="Universal search tool supporting hybrid, smart, embedding, similar, and trading search types. Use search_type parameter to specify the search mode.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "search_type": {
+                        "type": "string",
+                        "enum": ["hybrid", "smart", "embedding", "similar", "trading"],
+                        "default": "hybrid",
+                        "description": "Тип поиска: hybrid (FTS+вектор), smart (LLM-assisted), embedding (по вектору), similar (похожие записи), trading (торговые паттерны)",
+                    },
+                    "query": {"type": "string", "description": "Поисковый запрос (требуется для hybrid, smart, trading)"},
+                    "embedding": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Вектор эмбеддинга (требуется для embedding)",
+                    },
+                    "record_id": {"type": "string", "description": "ID записи (требуется для similar)"},
+                    "top_k": {"type": "integer", "description": "Максимальное количество результатов", "default": 5},
+                    "source": {"type": "string", "description": "Фильтр по источнику"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Фильтр по тегам"},
+                    "date_from": {"type": "string", "description": "Фильтр: дата не раньше (ISO format)"},
+                    "date_to": {"type": "string", "description": "Фильтр: дата не позже (ISO format)"},
+                    "include_embeddings": {"type": "boolean", "description": "Возвращать ли эмбеддинги", "default": False},
+                    "session_id": {"type": "string", "description": "ID сессии для smart search"},
+                    "feedback": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Обратная связь для smart search",
+                    },
+                    "clarify": {"type": "boolean", "description": "Запросить уточняющие вопросы для smart search", "default": False},
+                    "artifact_types": {"type": "array", "items": {"type": "string"}, "description": "Фильтр по типам артифактов для smart search"},
+                    "symbol": {"type": "string", "description": "Торговая пара для trading search"},
+                    "limit": {"type": "integer", "description": "Лимит результатов для trading search"},
+                },
+                "required": [],
+            },
+        ),
+        Tool(
+            name="batch_operations",
+            description="Universal batch operations tool supporting update, delete, and fetch operations. Use operation parameter to specify the operation type.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["update", "delete", "fetch"],
+                        "description": "Тип операции: update, delete, fetch",
+                    },
+                    "updates": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Список обновлений (требуется для update)",
+                    },
+                    "record_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Список ID записей (требуется для delete и fetch)",
+                    },
+                },
+                "required": ["operation"],
+            },
+        ),
+        Tool(
+            name="graph_query",
+            description="Universal graph query tool supporting neighbors, path, and related queries. Use query_type parameter to specify the query type.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query_type": {
+                        "type": "string",
+                        "enum": ["neighbors", "path", "related"],
+                        "description": "Тип запроса: neighbors (соседи узла), path (путь между узлами), related (связанные записи)",
+                    },
+                    "node_id": {"type": "string", "description": "ID узла (требуется для neighbors и related)"},
+                    "edge_type": {"type": "string", "description": "Фильтр по типу рёбер (для neighbors)"},
+                    "direction": {"type": "string", "enum": ["out", "in", "both"], "default": "both", "description": "Направление (для neighbors)"},
+                    "source_id": {"type": "string", "description": "ID исходного узла (требуется для path)"},
+                    "target_id": {"type": "string", "description": "ID целевого узла (требуется для path)"},
+                    "max_length": {"type": "integer", "description": "Максимальная длина пути (для path)", "default": 5},
+                    "record_id": {"type": "string", "description": "ID записи (альтернатива node_id для related)"},
+                    "max_depth": {"type": "integer", "description": "Максимальная глубина поиска (для related)", "default": 1},
+                    "limit": {"type": "integer", "description": "Максимальное количество результатов (для related)", "default": 10},
+                },
+                "required": ["query_type"],
+            },
+        ),
+        Tool(
+            name="background_indexing",
+            description="Universal background indexing management tool supporting start, stop, and status actions. Use action parameter to specify the action.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["start", "stop", "status"],
+                        "description": "Действие: start (запустить), stop (остановить), status (получить статус)",
+                    },
+                },
+                "required": ["action"],
+            },
+        ),
+        Tool(
+            name="summaries",
+            description="Universal summaries management tool supporting update and review actions. Use action parameter to specify the action.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["update", "review"],
+                        "description": "Действие: update (обновить), review (проверить)",
+                    },
+                    "chat": {"type": "string", "description": "Обработать только конкретный чат"},
+                    "force": {"type": "boolean", "description": "Принудительно пересоздать существующие артефакты (для update)", "default": False},
+                    "dry_run": {"type": "boolean", "description": "Только анализ, без изменения файлов (для review)", "default": False},
+                    "limit": {"type": "integer", "description": "Максимальное количество файлов для обработки (для review)"},
+                },
+                "required": ["action"],
+            },
+        ),
+        Tool(
+            name="ingest",
+            description="Universal ingest tool supporting records and scraped content. Use source_type parameter to specify the source type.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "records": {
                         "type": "array",
-                        "description": "Список записей для загрузки",
+                        "description": "Список записей для загрузки (требуется для source_type=records)",
                         "items": {"type": "object"},
-                    }
+                    },
+                    "source_type": {
+                        "type": "string",
+                        "enum": ["records", "scraped"],
+                        "default": "records",
+                        "description": "Тип источника: records (обычные записи), scraped (скрапленный контент)",
+                    },
+                    "url": {"type": "string", "description": "URL скрапленной страницы (для scraped)"},
+                    "title": {"type": "string", "description": "Заголовок страницы (для scraped)"},
+                    "content": {"type": "string", "description": "Основной текстовый контент (для scraped)"},
+                    "metadata": {"type": "object", "description": "Дополнительные метаданные (для scraped)"},
+                    "source": {"type": "string", "description": "Источник скраппинга (для scraped)", "default": "bright_data"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Теги для классификации (для scraped)"},
+                    "entities": {"type": "array", "items": {"type": "string"}, "description": "Извлеченные сущности (для scraped)"},
                 },
-                "required": ["records"],
-            },
-        ),
-        Tool(
-            name="search_memory",
-            description="Search memory for relevant records using hybrid FTS + vector search.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Поисковый запрос"},
-                    "top_k": {
-                        "type": "integer",
-                        "description": "Максимальное количество результатов",
-                        "default": 5,
-                    },
-                    "source": {
-                        "type": "string",
-                        "description": "Фильтр по источнику (опционально)",
-                    },
-                    "tags": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Фильтр по тегам",
-                    },
-                    "date_from": {
-                        "type": "string",
-                        "description": "Фильтр: дата не раньше (ISO format)",
-                    },
-                    "date_to": {
-                        "type": "string",
-                        "description": "Фильтр: дата не позже (ISO format)",
-                    },
-                    "include_embeddings": {
-                        "type": "boolean",
-                        "description": "Возвращать ли эмбеддинги",
-                        "default": False,
-                    },
-                },
-                "required": ["query"],
-            },
-        ),
-        Tool(
-            name="smart_search",
-            description="Interactive smart search across all available artifacts (DB + files) with LLM-powered query refinement.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Поисковый запрос (естественный язык)"},
-                    "session_id": {
-                        "type": "string",
-                        "description": "ID сессии для многошагового диалога (опционально)",
-                    },
-                    "feedback": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "record_id": {"type": "string"},
-                                "artifact_path": {"type": "string"},
-                                "relevance": {
-                                    "type": "string",
-                                    "enum": ["relevant", "irrelevant", "partially_relevant"],
-                                },
-                                "comment": {"type": "string"},
-                            },
-                            "required": ["record_id", "relevance"],
-                        },
-                        "description": "Обратная связь по предыдущим результатам (опционально)",
-                    },
-                    "clarify": {
-                        "type": "boolean",
-                        "description": "Запросить уточняющие вопросы, если результаты неоднозначны",
-                        "default": False,
-                    },
-                    "top_k": {
-                        "type": "integer",
-                        "description": "Максимальное количество результатов",
-                        "default": 10,
-                    },
-                    "source": {
-                        "type": "string",
-                        "description": "Фильтр по источнику (опционально)",
-                    },
-                    "tags": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Фильтр по тегам",
-                    },
-                    "date_from": {
-                        "type": "string",
-                        "description": "Фильтр: дата не раньше (ISO format)",
-                    },
-                    "date_to": {
-                        "type": "string",
-                        "description": "Фильтр: дата не позже (ISO format)",
-                    },
-                    "artifact_types": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Фильтр по типам артифактов (chat_context, now_summary, report, aggregation_state)",
-                    },
-                },
-                "required": ["query"],
+                "required": [],
             },
         ),
         Tool(
@@ -441,48 +482,6 @@ async def list_tools() -> List[Tool]:
             },
         ),
         Tool(
-            name="ingest_scraped_content",
-            description="Ingest scraped web content into memory.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "URL скрапленной страницы",
-                    },
-                    "title": {
-                        "type": "string",
-                        "description": "Заголовок страницы (опционально)",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Основной текстовый контент страницы",
-                    },
-                    "metadata": {
-                        "type": "object",
-                        "description": "Дополнительные метаданные (автор, дата публикации и т.д.)",
-                        "additionalProperties": True,
-                    },
-                    "source": {
-                        "type": "string",
-                        "description": "Источник скраппинга (по умолчанию 'bright_data')",
-                        "default": "bright_data",
-                    },
-                    "tags": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Теги для классификации контента",
-                    },
-                    "entities": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Извлеченные сущности (имена, организации и т.д.)",
-                    },
-                },
-                "required": ["url", "content"],
-            },
-        ),
-        Tool(
             name="generate_embedding",
             description="Generate embedding vector for arbitrary text.",
             inputSchema={
@@ -539,162 +538,21 @@ async def list_tools() -> List[Tool]:
         ),
         Tool(
             name="get_statistics",
-            description="Get system statistics (graph, sources, tags, database size).",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        ),
-        Tool(
-            name="get_indexing_progress",
-            description="Get indexing progress from ChromaDB collection.",
+            description="Get system statistics (graph, sources, tags, database size). Supports filtering by type: general, tags, or indexing. If type is not specified, returns all statistics.",
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": ["general", "tags", "indexing"],
+                        "description": "Тип статистики: general (общая), tags (по тегам), indexing (прогресс индексации). Если не указан, возвращается вся статистика.",
+                    },
                     "chat": {
                         "type": "string",
-                        "description": "Фильтр по конкретному чату (опционально)",
+                        "description": "Фильтр по конкретному чату (для type='indexing')",
                     },
                 },
                 "required": [],
-            },
-        ),
-        Tool(
-            name="get_graph_neighbors",
-            description="Get neighboring nodes for a graph node.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "node_id": {
-                        "type": "string",
-                        "description": "ID узла",
-                    },
-                    "edge_type": {
-                        "type": "string",
-                        "description": "Фильтр по типу рёбер (опционально)",
-                    },
-                    "direction": {
-                        "type": "string",
-                        "description": "Направление: 'out', 'in', 'both'",
-                        "enum": ["out", "in", "both"],
-                        "default": "both",
-                    },
-                },
-                "required": ["node_id"],
-            },
-        ),
-        Tool(
-            name="find_graph_path",
-            description="Find shortest path between two nodes in the graph.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "source_id": {
-                        "type": "string",
-                        "description": "ID исходного узла",
-                    },
-                    "target_id": {
-                        "type": "string",
-                        "description": "ID целевого узла",
-                    },
-                    "max_length": {
-                        "type": "integer",
-                        "description": "Максимальная длина пути",
-                        "default": 5,
-                        "minimum": 1,
-                        "maximum": 20,
-                    },
-                },
-                "required": ["source_id", "target_id"],
-            },
-        ),
-        Tool(
-            name="get_related_records",
-            description="Get related records through graph connections.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "record_id": {
-                        "type": "string",
-                        "description": "ID записи",
-                    },
-                    "max_depth": {
-                        "type": "integer",
-                        "description": "Максимальная глубина поиска",
-                        "default": 1,
-                        "minimum": 1,
-                        "maximum": 3,
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Максимальное количество результатов",
-                        "default": 10,
-                        "minimum": 1,
-                        "maximum": 50,
-                    },
-                },
-                "required": ["record_id"],
-            },
-        ),
-        Tool(
-            name="search_by_embedding",
-            description="Search memory by embedding vector directly (without text query).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "embedding": {
-                        "type": "array",
-                        "items": {"type": "number"},
-                        "description": "Вектор эмбеддинга для поиска",
-                    },
-                    "top_k": {
-                        "type": "integer",
-                        "description": "Максимальное количество результатов",
-                        "default": 5,
-                        "minimum": 1,
-                        "maximum": 50,
-                    },
-                    "source": {
-                        "type": "string",
-                        "description": "Фильтр по источнику (опционально)",
-                    },
-                    "tags": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Фильтр по тегам",
-                    },
-                    "date_from": {
-                        "type": "string",
-                        "description": "Фильтр: дата не раньше (ISO format)",
-                    },
-                    "date_to": {
-                        "type": "string",
-                        "description": "Фильтр: дата не позже (ISO format)",
-                    },
-                },
-                "required": ["embedding"],
-            },
-        ),
-        Tool(
-            name="similar_records",
-            description="Find similar records to a given record by embedding similarity.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "record_id": {
-                        "type": "string",
-                        "description": "ID записи для поиска похожих",
-                    },
-                    "top_k": {
-                        "type": "integer",
-                        "description": "Максимальное количество результатов",
-                        "default": 5,
-                        "minimum": 1,
-                        "maximum": 50,
-                    },
-                },
-                "required": ["record_id"],
             },
         ),
         Tool(
@@ -718,15 +576,6 @@ async def list_tools() -> List[Tool]:
                     },
                 },
                 "required": ["query", "record_id"],
-            },
-        ),
-        Tool(
-            name="get_tags_statistics",
-            description="Get statistics about tags usage in records.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": [],
             },
         ),
         Tool(
@@ -775,83 +624,6 @@ async def list_tools() -> List[Tool]:
                     },
                 },
                 "required": ["text"],
-            },
-        ),
-        Tool(
-            name="batch_update_records",
-            description="Update multiple records in a single batch operation.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "updates": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "record_id": {
-                                    "type": "string",
-                                    "description": "ID записи для обновления",
-                                },
-                                "content": {
-                                    "type": "string",
-                                    "description": "Новый контент (опционально)",
-                                },
-                                "source": {
-                                    "type": "string",
-                                    "description": "Новый источник (опционально)",
-                                },
-                                "tags": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                    "description": "Новые теги (опционально)",
-                                },
-                                "entities": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                    "description": "Новые сущности (опционально)",
-                                },
-                                "metadata": {
-                                    "type": "object",
-                                    "description": "Новые метаданные (опционально)",
-                                    "additionalProperties": True,
-                                },
-                            },
-                            "required": ["record_id"],
-                        },
-                        "description": "Список обновлений записей",
-                    },
-                },
-                "required": ["updates"],
-            },
-        ),
-        Tool(
-            name="batch_delete_records",
-            description="Delete multiple records in a single batch operation.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "record_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Список идентификаторов записей для удаления",
-                    },
-                },
-                "required": ["record_ids"],
-            },
-        ),
-        Tool(
-            name="batch_fetch_records",
-            description="Fetch multiple records in a single batch operation.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "record_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Список идентификаторов записей для получения",
-                    },
-                },
-                "required": ["record_ids"],
             },
         ),
         Tool(
@@ -915,48 +687,6 @@ async def list_tools() -> List[Tool]:
                     },
                 },
                 "required": ["format", "content"],
-            },
-        ),
-        Tool(
-            name="update_summaries",
-            description="Update markdown summaries without full re-indexing.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "chat": {
-                        "type": "string",
-                        "description": "Обновить отчеты только для конкретного чата (опционально)",
-                    },
-                    "force": {
-                        "type": "boolean",
-                        "description": "Принудительно пересоздать существующие артефакты",
-                        "default": False,
-                    },
-                },
-                "required": [],
-            },
-        ),
-        Tool(
-            name="review_summaries",
-            description="Review and fix summaries with -needs-review suffix.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "dry_run": {
-                        "type": "boolean",
-                        "description": "Только анализ, без изменения файлов",
-                        "default": False,
-                    },
-                    "chat": {
-                        "type": "string",
-                        "description": "Обработать только конкретный чат (опционально)",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Максимальное количество файлов для обработки (опционально)",
-                    },
-                },
-                "required": [],
             },
         ),
         Tool(
@@ -1117,33 +847,6 @@ async def list_tools() -> List[Tool]:
                 "required": [],
             },
         ),
-        Tool(
-            name="start_background_indexing",
-            description="Start background indexing service that periodically checks input directory for new messages and indexes them.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        ),
-        Tool(
-            name="stop_background_indexing",
-            description="Stop background indexing service.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        ),
-        Tool(
-            name="get_background_indexing_status",
-            description="Get status of background indexing service.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        ),
     ]
     logger.info(f"Зарегистрировано {len(tools)} инструментов: {[t.name for t in tools]}")
     return tools
@@ -1151,7 +854,7 @@ async def list_tools() -> List[Tool]:
 
 @server.call_tool()  # type: ignore[misc]
 async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
-    """Выполняет вызов инструмента и форматирует результат."""
+    """Обрабатывает вызов MCP инструмента и возвращает форматированный ответ."""
     try:
         logger.info(f"Вызов инструмента: {name} с аргументами: {arguments}")
 
@@ -1165,22 +868,10 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
         adapter = _get_adapter()
 
-        if name == "ingest_records":
-            from .schema import MemoryRecordPayload
-
-            records_data = arguments.get("records", [])
-            records = [MemoryRecordPayload(**item) for item in records_data]
-            result = adapter.ingest(records)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "search_memory":
-            request = SearchRequest(**arguments)
-            result = adapter.search(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "smart_search":
+        # Новые универсальные инструменты
+        if name == "search":
             try:
-                # Парсим feedback, если есть
+                # Парсим feedback для smart search
                 feedback_data = arguments.get("feedback")
                 feedback_list = None
                 if feedback_data:
@@ -1190,24 +881,166 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
                 date_from = _parse_date_safe(arguments.get("date_from"))
                 date_to = _parse_date_safe(arguments.get("date_to"))
 
-                request = SmartSearchRequest(
-                    query=arguments["query"],
-                    session_id=arguments.get("session_id"),
-                    feedback=feedback_list,
-                    clarify=arguments.get("clarify", False),
-                    top_k=arguments.get("top_k", 10),
-                    source=arguments.get("source"),
-                    tags=arguments.get("tags", []),
-                    date_from=date_from,
-                    date_to=date_to,
-                    artifact_types=arguments.get("artifact_types"),
-                )
+                search_type = arguments.get("search_type", "hybrid")
+                
+                if search_type == "smart":
+                    # Smart search требует SmartSearchEngine
+                    request = SmartSearchRequest(
+                        query=arguments.get("query", ""),
+                        session_id=arguments.get("session_id"),
+                        feedback=feedback_list,
+                        clarify=arguments.get("clarify", False),
+                        top_k=arguments.get("top_k", 10),
+                        source=arguments.get("source"),
+                        tags=arguments.get("tags", []),
+                        date_from=date_from,
+                        date_to=date_to,
+                        artifact_types=arguments.get("artifact_types"),
+                    )
+                    engine = _get_smart_search_engine()
+                    result = await engine.search(request)
+                    # Преобразуем SmartSearchResponse в UnifiedSearchResponse
+                    unified_result = UnifiedSearchResponse(
+                        search_type="smart",
+                        results=result.results,
+                        total_matches=result.total_matches,
+                        clarifying_questions=result.clarifying_questions,
+                        suggested_refinements=result.suggested_refinements,
+                        session_id=result.session_id,
+                        confidence_score=result.confidence_score,
+                        artifacts_found=result.artifacts_found,
+                        db_records_found=result.db_records_found,
+                    )
+                    return _format_tool_response(unified_result.model_dump())
+                else:
+                    # Остальные типы поиска через адаптер
+                    unified_request = UnifiedSearchRequest(
+                        search_type=search_type,
+                        query=arguments.get("query"),
+                        embedding=arguments.get("embedding"),
+                        record_id=arguments.get("record_id"),
+                        top_k=arguments.get("top_k", 5),
+                        source=arguments.get("source"),
+                        tags=arguments.get("tags", []),
+                        date_from=date_from,
+                        date_to=date_to,
+                        include_embeddings=arguments.get("include_embeddings", False),
+                        session_id=arguments.get("session_id"),
+                        feedback=feedback_list,
+                        clarify=arguments.get("clarify", False),
+                        artifact_types=arguments.get("artifact_types"),
+                        symbol=arguments.get("symbol"),
+                        limit=arguments.get("limit"),
+                    )
+                    result = await adapter.unified_search(unified_request)
+                    return _format_tool_response(result.model_dump())
+            except Exception as e:
+                logger.exception(f"search failed: {e}")
+                raise RuntimeError(format_error_message(e)) from e
 
-                engine = _get_smart_search_engine()
-                result = await engine.search(request)
+        elif name == "batch_operations":
+            try:
+                from .schema import BatchUpdateRecordItem
+                
+                operation = arguments.get("operation")
+                if operation == "update":
+                    updates_data = arguments.get("updates", [])
+                    updates = [BatchUpdateRecordItem(**item) for item in updates_data]
+                    request = BatchOperationsRequest(operation="update", updates=updates)
+                elif operation in ("delete", "fetch"):
+                    record_ids = arguments.get("record_ids", [])
+                    request = BatchOperationsRequest(operation=operation, record_ids=record_ids)
+                else:
+                    raise ValueError(f"Unknown operation: {operation}")
+                
+                result = adapter.batch_operations(request)
                 return _format_tool_response(result.model_dump())
             except Exception as e:
-                logger.exception(f"smart_search failed: {e}")
+                logger.exception(f"batch_operations failed: {e}")
+                raise RuntimeError(format_error_message(e)) from e
+
+        elif name == "graph_query":
+            try:
+                request = GraphQueryRequest(**arguments)
+                result = adapter.graph_query(request)
+                return _format_tool_response(result.model_dump())
+            except Exception as e:
+                logger.exception(f"graph_query failed: {e}")
+                raise RuntimeError(format_error_message(e)) from e
+
+        elif name == "background_indexing":
+            try:
+                request = BackgroundIndexingRequest(**arguments)
+                action = request.action
+                
+                if action == "start":
+                    result_obj = await _start_background_indexing(adapter)
+                    return _format_tool_response(BackgroundIndexingResponse(
+                        action="start",
+                        success=result_obj.success,
+                        message=result_obj.message,
+                    ).model_dump())
+                elif action == "stop":
+                    result_obj = await _stop_background_indexing()
+                    return _format_tool_response(BackgroundIndexingResponse(
+                        action="stop",
+                        success=result_obj.success,
+                        message=result_obj.message,
+                    ).model_dump())
+                elif action == "status":
+                    result_obj = _get_background_indexing_status()
+                    return _format_tool_response(BackgroundIndexingResponse(
+                        action="status",
+                        message=result_obj.message,
+                        running=result_obj.running,
+                        check_interval=result_obj.check_interval,
+                        last_check_time=result_obj.last_check_time,
+                        input_path=result_obj.input_path,
+                        chats_path=result_obj.chats_path,
+                    ).model_dump())
+                else:
+                    raise ValueError(f"Unknown action: {action}")
+            except Exception as e:
+                logger.exception(f"background_indexing failed: {e}")
+                raise RuntimeError(format_error_message(e)) from e
+
+        elif name == "summaries":
+            try:
+                request = SummariesRequest(**arguments)
+                result = await adapter.summaries(request)
+                return _format_tool_response(result.model_dump())
+            except Exception as e:
+                logger.exception(f"summaries failed: {e}")
+                raise RuntimeError(format_error_message(e)) from e
+
+        elif name == "ingest":
+            try:
+                from .schema import MemoryRecordPayload
+                
+                source_type = arguments.get("source_type", "records")
+                if source_type == "scraped":
+                    # Преобразуем аргументы в IngestRequest для scraped
+                    request = IngestRequest(
+                        records=[],
+                        source_type="scraped",
+                        url=arguments.get("url"),
+                        title=arguments.get("title"),
+                        content=arguments.get("content"),
+                        metadata=arguments.get("metadata"),
+                        source=arguments.get("source", "bright_data"),
+                        tags=arguments.get("tags", []),
+                        entities=arguments.get("entities", []),
+                    )
+                else:
+                    # Обычная индексация записей
+                    records_data = arguments.get("records", [])
+                    records = [MemoryRecordPayload(**item) for item in records_data]
+                    request = IngestRequest(records=records, source_type="records")
+                
+                result = adapter.ingest_unified(request)
+                return _format_tool_response(result.model_dump())
+            except Exception as e:
+                logger.exception(f"ingest failed: {e}")
                 raise RuntimeError(format_error_message(e)) from e
 
         elif name == "store_trading_signal":
@@ -1229,25 +1062,18 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
             result = adapter.get_signal_performance(request)
             return _format_tool_response(result.model_dump())
 
-        elif name == "ingest_scraped_content":
-            request = ScrapedContentRequest(**arguments)
-            result = adapter.ingest_scraped_content(request)
-            return _format_tool_response(result.model_dump())
-
         elif name == "generate_embedding":
             try:
                 request = GenerateEmbeddingRequest(**arguments)
                 result = adapter.generate_embedding(request)
                 return _format_tool_response(result.model_dump())
             except ValueError as e:
-                # Сохраняем оригинальное сообщение об ошибке
                 original_msg = str(e)
                 error_msg = format_error_message(e)
                 logger.warning(
                     f"generate_embedding failed: {error_msg} (original: {original_msg})",
                     exc_info=True,
                 )
-                # Используем оригинальное сообщение в RuntimeError для сохранения контекста
                 raise RuntimeError(f"{error_msg} (original: {original_msg})") from e
 
         elif name == "update_record":
@@ -1256,75 +1082,14 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
             return _format_tool_response(result.model_dump())
 
         elif name == "get_statistics":
-            result = adapter.get_statistics()
-            return _format_tool_response(result.model_dump())
-
-        elif name == "get_indexing_progress":
-            try:
-                request = GetIndexingProgressRequest(**arguments)
-                result = adapter.get_indexing_progress(request)
-                # Логируем результат для отладки
-                progress_count = len(result.progress) if result.progress else 0
-                if request.chat:
-                    logger.info(
-                        f"get_indexing_progress для чата '{request.chat}': "
-                        f"найдено {progress_count} записей прогресса, "
-                        f"сообщение: {result.message or 'OK'}"
-                    )
-                else:
-                    logger.info(
-                        f"get_indexing_progress: найдено {progress_count} записей прогресса, "
-                        f"сообщение: {result.message or 'OK'}"
-                    )
-                return _format_tool_response(result.model_dump())
-            except Exception as e:
-                logger.exception(f"get_indexing_progress failed: {e}")
-                raise RuntimeError(format_error_message(e)) from e
-
-        elif name == "get_graph_neighbors":
-            request = GetGraphNeighborsRequest(**arguments)
-            result = adapter.get_graph_neighbors(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "find_graph_path":
-            request = FindGraphPathRequest(**arguments)
-            result = adapter.find_graph_path(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "get_related_records":
-            request = GetRelatedRecordsRequest(**arguments)
-            result = adapter.get_related_records(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "search_by_embedding":
-            if "date_from" in arguments and arguments["date_from"]:
-                parsed_date = _parse_date_safe(arguments["date_from"])
-                if parsed_date is not None:
-                    arguments["date_from"] = parsed_date
-                else:
-                    del arguments["date_from"]
-            if "date_to" in arguments and arguments["date_to"]:
-                parsed_date = _parse_date_safe(arguments["date_to"])
-                if parsed_date is not None:
-                    arguments["date_to"] = parsed_date
-                else:
-                    del arguments["date_to"]
-            request = SearchByEmbeddingRequest(**arguments)
-            result = adapter.search_by_embedding(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "similar_records":
-            request = SimilarRecordsRequest(**arguments)
-            result = adapter.similar_records(request)
+            # Поддержка нового универсального формата
+            request = GetStatisticsRequest(**arguments) if arguments else GetStatisticsRequest()
+            result = adapter.get_statistics_unified(request)
             return _format_tool_response(result.model_dump())
 
         elif name == "search_explain":
             request = SearchExplainRequest(**arguments)
             result = adapter.search_explain(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "get_tags_statistics":
-            result = adapter.get_tags_statistics()
             return _format_tool_response(result.model_dump())
 
         elif name == "get_timeline":
@@ -1349,26 +1114,6 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
             result = adapter.analyze_entities(request)
             return _format_tool_response(result.model_dump())
 
-        elif name == "batch_update_records":
-            updates_data = arguments.get("updates", [])
-            from .schema import BatchUpdateRecordItem
-            updates = [BatchUpdateRecordItem(**item) for item in updates_data]
-            request = BatchUpdateRecordsRequest(updates=updates)
-            result = adapter.batch_update_records(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "batch_delete_records":
-            from .schema import BatchDeleteRecordsRequest
-            request = BatchDeleteRecordsRequest(**arguments)
-            result = adapter.batch_delete_records(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "batch_fetch_records":
-            from .schema import BatchFetchRecordsRequest
-            request = BatchFetchRecordsRequest(**arguments)
-            result = adapter.batch_fetch_records(request)
-            return _format_tool_response(result.model_dump())
-
         elif name == "export_records":
             if "date_from" in arguments and arguments["date_from"]:
                 parsed_date = _parse_date_safe(arguments["date_from"])
@@ -1391,16 +1136,6 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
             result = adapter.import_records(request)
             return _format_tool_response(result.model_dump())
 
-        elif name == "update_summaries":
-            request = UpdateSummariesRequest(**arguments)
-            result = await adapter.update_summaries(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "review_summaries":
-            request = ReviewSummariesRequest(**arguments)
-            result = await adapter.review_summaries(request)
-            return _format_tool_response(result.model_dump())
-
         elif name == "build_insight_graph":
             request = BuildInsightGraphRequest(**arguments)
             result = await adapter.build_insight_graph(request)
@@ -1414,21 +1149,6 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
         elif name == "get_available_chats":
             request = GetAvailableChatsRequest(**arguments)
             result = adapter.get_available_chats(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "start_background_indexing":
-            request = StartBackgroundIndexingRequest(**arguments)
-            result = await _start_background_indexing(adapter)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "stop_background_indexing":
-            request = StopBackgroundIndexingRequest(**arguments)
-            result = await _stop_background_indexing()
-            return _format_tool_response(result.model_dump())
-
-        elif name == "get_background_indexing_status":
-            request = GetBackgroundIndexingStatusRequest(**arguments)
-            result = _get_background_indexing_status()
             return _format_tool_response(result.model_dump())
 
         else:
@@ -1447,7 +1167,7 @@ async def _run_indexing_job(
     request: "IndexChatRequest",
     adapter: MemoryServiceAdapter,
 ) -> None:
-    """Запуск индексации в фоновом режиме."""
+    """Выполняет индексацию чата в фоновом режиме с отслеживанием прогресса."""
     tracker = _get_indexing_tracker()
     
     from ..core.indexer import TwoLevelIndexer
@@ -1514,9 +1234,8 @@ async def _run_indexing_job(
         
         tracker.update_job(job_id=job_id, current_stage="Загрузка сообщений")
         
-        # Определяем callback функцию для обновления прогресса
         def progress_callback(job_id: str, event: str, data: Dict[str, Any]) -> None:
-            """Callback для обновления прогресса индексации."""
+            """Обновляет статус задачи индексации на основе событий от индексатора."""
             try:
                 if event == "chat_started":
                     tracker.update_job(
@@ -1567,7 +1286,6 @@ async def _run_indexing_job(
             except Exception as e:
                 logger.warning(f"Ошибка при обновлении прогресса: {e}")
         
-        # Устанавливаем callback в индексатор
         indexer.progress_callback = progress_callback
         
         stats = await indexer.build_index(
@@ -1581,7 +1299,6 @@ async def _run_indexing_job(
         
         logger.info(f"Индексация чата '{request.chat}' завершена успешно (job_id: {job_id})")
         
-        # Выполняем оптимизации после индексации
         run_optimizations = request.run_optimizations if request.run_optimizations is not None else True
         if run_optimizations:
             try:
@@ -1590,10 +1307,9 @@ async def _run_indexing_job(
                 
                 optimization_results = {}
                 
-                # Получаем путь к БД из адаптера
                 db_path = str(adapter.graph.db_path) if hasattr(adapter.graph, 'db_path') else str(adapter.graph.conn.execute("PRAGMA database_list").fetchone()[2])
                 
-                # 1. Оптимизация базы данных
+                # Оптимизация базы данных
                 try:
                     tracker.update_job(job_id=job_id, current_stage="Оптимизация: VACUUM/ANALYZE")
                     opt_result = _optimize_database(db_path)
@@ -1603,7 +1319,7 @@ async def _run_indexing_job(
                     logger.warning(f"⚠️ Ошибка при оптимизации БД: {e}", exc_info=True)
                     optimization_results["optimize_database"] = {"error": str(e)}
                 
-                # 2. Пересчёт важности записей
+                # Пересчёт важности записей
                 try:
                     tracker.update_job(job_id=job_id, current_stage="Обновление важности записей")
                     importance_result = _update_importance_scores(adapter.graph)
@@ -1613,7 +1329,7 @@ async def _run_indexing_job(
                     logger.warning(f"⚠️ Ошибка при пересчёте важности: {e}", exc_info=True)
                     optimization_results["update_importance"] = {"error": str(e)}
                 
-                # 3. Проверка целостности (опционально, только валидация)
+                # Проверка целостности
                 try:
                     tracker.update_job(job_id=job_id, current_stage="Проверка целостности")
                     validation_result = _validate_database(db_path)
@@ -1626,7 +1342,7 @@ async def _run_indexing_job(
                     logger.warning(f"⚠️ Ошибка при проверке целостности: {e}", exc_info=True)
                     optimization_results["validate_database"] = {"error": str(e)}
                 
-                # 4. Проверка необходимости очистки памяти
+                # Проверка необходимости очистки памяти
                 try:
                     tracker.update_job(job_id=job_id, current_stage="Проверка очистки памяти")
                     prune_result = _check_prune_memory(adapter.graph)
@@ -1662,14 +1378,16 @@ async def _start_indexing_job(
     request: "IndexChatRequest",
     adapter: MemoryServiceAdapter,
 ) -> "IndexChatResponse":
-    """Запустить задачу индексации в фоновом режиме."""
+    """Создаёт и запускает задачу индексации в фоновом режиме.
+    
+    Предотвращает параллельные индексации одного чата.
+    """
     tracker = _get_indexing_tracker()
     
     from datetime import timezone
     
     job_id = f"index_{uuid.uuid4().hex[:12]}"
     
-    # Проверяем, нет ли уже запущенной задачи для этого чата
     existing_jobs = tracker.get_all_jobs(status="running", chat=request.chat)
     if existing_jobs:
         existing_job = existing_jobs[0]
@@ -1680,7 +1398,6 @@ async def _start_indexing_job(
             message=f"Индексация чата '{request.chat}' уже выполняется (job_id: {existing_job['job_id']})",
         )
     
-    # Создаем новую задачу
     tracker.create_job(
         job_id=job_id,
         scope="chat",
@@ -1706,7 +1423,7 @@ async def _start_indexing_job(
 
 
 def _optimize_database(db_path: str) -> Dict[str, Any]:
-    """Оптимизация базы данных (VACUUM, ANALYZE, FTS5)."""
+    """Выполняет оптимизацию SQLite БД: VACUUM, ANALYZE и оптимизацию FTS5 индекса."""
     import sqlite3
     import time
     from pathlib import Path
@@ -1760,7 +1477,7 @@ def _optimize_database(db_path: str) -> Dict[str, Any]:
 
 
 def _update_importance_scores(graph) -> Dict[str, Any]:
-    """Пересчёт важности записей."""
+    """Пересчитывает важность всех узлов графа на основе метрик использования."""
     import json
     import sqlite3
     from ..memory.importance_scoring import ImportanceScorer
@@ -1821,7 +1538,7 @@ def _update_importance_scores(graph) -> Dict[str, Any]:
 
 
 def _validate_database(db_path: str) -> Dict[str, Any]:
-    """Проверка целостности базы данных."""
+    """Проверяет целостность БД: SQLite integrity, внешние ключи, сиротские узлы/рёбра."""
     import sqlite3
     from pathlib import Path
     
@@ -1916,7 +1633,7 @@ def _validate_database(db_path: str) -> Dict[str, Any]:
 
 
 def _check_prune_memory(graph) -> Dict[str, Any]:
-    """Проверка необходимости очистки памяти."""
+    """Проверяет, требуется ли очистка памяти на основе порога количества записей."""
     import json
     import sqlite3
     from ..memory.importance_scoring import MemoryPruner, EvictionScorer
@@ -1973,7 +1690,7 @@ def _check_prune_memory(graph) -> Dict[str, Any]:
 
 
 def get_health_payload() -> Dict[str, Any]:
-    """Возвращает информацию о состоянии сервера."""
+    """Возвращает статус здоровья сервера и доступности сервисов."""
     from datetime import datetime
 
     status = "healthy"
@@ -2009,7 +1726,7 @@ def get_health_payload() -> Dict[str, Any]:
 
 
 def get_version_payload() -> Dict[str, Any]:
-    """Возвращает информацию о версии сервера."""
+    """Возвращает версию сервера и список доступных функций."""
     from importlib import metadata
 
     try:
@@ -2020,38 +1737,28 @@ def get_version_payload() -> Dict[str, Any]:
     features = [
         "health",
         "version",
-        "ingest_records",
-        "search_memory",
+        # Универсальные инструменты
+        "search",
+        "batch_operations",
+        "graph_query",
+        "background_indexing",
+        "summaries",
+        "ingest",
+        # Специализированные инструменты
         "store_trading_signal",
         "search_trading_patterns",
         "get_signal_performance",
-        "ingest_scraped_content",
         "generate_embedding",
         "update_record",
         "get_statistics",
-        "get_indexing_progress",
-        "get_graph_neighbors",
-        "find_graph_path",
-        "get_related_records",
-        "search_by_embedding",
-        "similar_records",
         "search_explain",
-        "get_tags_statistics",
         "get_timeline",
         "analyze_entities",
-        "batch_update_records",
-        "batch_delete_records",
-        "batch_fetch_records",
         "export_records",
         "import_records",
-        "update_summaries",
-        "review_summaries",
         "build_insight_graph",
         "index_chat",
         "get_available_chats",
-        "start_background_indexing",
-        "stop_background_indexing",
-        "get_background_indexing_status",
     ]
 
     return {
@@ -2059,6 +1766,128 @@ def get_version_payload() -> Dict[str, Any]:
         "version": version,
         "features": features,
     }
+
+
+async def _start_background_indexing(adapter: MemoryServiceAdapter) -> "StartBackgroundIndexingResponse":
+    """Запускает фоновый сервис периодической индексации новых сообщений."""
+    global _background_indexing_service
+    from .schema import StartBackgroundIndexingResponse
+    from ..config import get_settings
+    
+    try:
+        settings = get_settings()
+        
+        if _background_indexing_service and _background_indexing_service.is_running():
+            return StartBackgroundIndexingResponse(
+                success=False,
+                message="Фоновая индексация уже запущена"
+            )
+        
+        # Инициализируем сервис
+        from ..core.background_indexing import BackgroundIndexingService
+        
+        if not _background_indexing_service:
+            _background_indexing_service = BackgroundIndexingService(
+                input_path=settings.input_path,
+                chats_path=settings.chats_path,
+                chroma_path=settings.chroma_path,
+                check_interval=settings.background_indexing_interval,
+            )
+            
+            async def index_chat_callback(request: "IndexChatRequest"):
+                return await _start_indexing_job(request, adapter)
+            
+            _background_indexing_service.set_index_chat_callback(index_chat_callback)
+        
+        _background_indexing_service.start()
+        logger.info("Фоновая индексация запущена")
+        
+        return StartBackgroundIndexingResponse(
+            success=True,
+            message="Фоновая индексация успешно запущена"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при запуске фоновой индексации: {e}", exc_info=True)
+        return StartBackgroundIndexingResponse(
+            success=False,
+            message=f"Ошибка при запуске: {str(e)}"
+        )
+
+
+async def _stop_background_indexing() -> "StopBackgroundIndexingResponse":
+    """Остановить фоновую индексацию."""
+    global _background_indexing_service
+    from .schema import StopBackgroundIndexingResponse
+    
+    try:
+        if not _background_indexing_service:
+            return StopBackgroundIndexingResponse(
+                success=False,
+                message="Фоновая индексация не запущена"
+            )
+        
+        if not _background_indexing_service.is_running():
+            return StopBackgroundIndexingResponse(
+                success=False,
+                message="Фоновая индексация уже остановлена"
+            )
+        
+        # Останавливаем сервис
+        await _background_indexing_service.stop_async()
+        logger.info("Фоновая индексация остановлена")
+        
+        return StopBackgroundIndexingResponse(
+            success=True,
+            message="Фоновая индексация успешно остановлена"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при остановке фоновой индексации: {e}", exc_info=True)
+        return StopBackgroundIndexingResponse(
+            success=False,
+            message=f"Ошибка при остановке: {str(e)}"
+        )
+
+
+def _get_background_indexing_status() -> "GetBackgroundIndexingStatusResponse":
+    """Получить статус фоновой индексации."""
+    global _background_indexing_service
+    from .schema import GetBackgroundIndexingStatusResponse
+    from ..config import get_settings
+    
+    try:
+        settings = get_settings()
+        
+        if not _background_indexing_service:
+            return GetBackgroundIndexingStatusResponse(
+                running=False,
+                check_interval=settings.background_indexing_interval,
+                last_check_time=None,
+                input_path=settings.input_path,
+                chats_path=settings.chats_path,
+                message="Фоновая индексация не инициализирована"
+            )
+        
+        status = _background_indexing_service.get_status()
+        is_running = _background_indexing_service.is_running()
+        
+        return GetBackgroundIndexingStatusResponse(
+            running=is_running,
+            check_interval=settings.background_indexing_interval,
+            last_check_time=status.get("last_check_time"),
+            input_path=settings.input_path,
+            chats_path=settings.chats_path,
+            message=status.get("message", "Фоновая индексация работает" if is_running else "Фоновая индексация остановлена")
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при получении статуса фоновой индексации: {e}", exc_info=True)
+        return GetBackgroundIndexingStatusResponse(
+            running=False,
+            check_interval=60,
+            last_check_time=None,
+            input_path="",
+            chats_path="",
+            message=f"Ошибка: {str(e)}"
+        )
 
 
 def _start_background_indexing_if_enabled():

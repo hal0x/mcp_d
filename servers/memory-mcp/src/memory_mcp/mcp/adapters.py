@@ -23,12 +23,16 @@ from .schema import (
     AnalyzeEntitiesRequest,
     AnalyzeEntitiesResponse,
     AttachmentPayload,
+    BackgroundIndexingRequest,
+    BackgroundIndexingResponse,
     BatchDeleteRecordsRequest,
     BatchDeleteRecordsResponse,
     BatchDeleteResult,
     BatchFetchRecordsRequest,
     BatchFetchRecordsResponse,
     BatchFetchResult,
+    BatchOperationsRequest,
+    BatchOperationsResponse,
     BatchUpdateRecordItem,
     BatchUpdateRecordsRequest,
     BatchUpdateRecordsResponse,
@@ -52,6 +56,14 @@ from .schema import (
     GetIndexingProgressResponse,
     GetRelatedRecordsRequest,
     GetRelatedRecordsResponse,
+    GetStatisticsRequest,
+    GetStatisticsResponse,
+    GetTagsStatisticsResponse,
+    GetTimelineRequest,
+    GetTimelineResponse,
+    GraphNeighborItem,
+    GraphQueryRequest,
+    GraphQueryResponse,
     IndexChatRequest,
     IndexChatResponse,
     GetAvailableChatsRequest,
@@ -59,15 +71,11 @@ from .schema import (
     ChatInfo,
     GetSignalPerformanceRequest,
     GetSignalPerformanceResponse,
-    GetStatisticsResponse,
-    GetTagsStatisticsResponse,
-    GetTimelineRequest,
-    GetTimelineResponse,
-    GraphNeighborItem,
     ImportRecordsRequest,
     ImportRecordsResponse,
     IndexingProgressItem,
     InsightItem,
+    IngestRequest,
     IngestResponse,
     MemoryRecordPayload,
     ReviewSummariesRequest,
@@ -78,6 +86,7 @@ from .schema import (
     SearchByEmbeddingResponse,
     SearchExplainRequest,
     SearchExplainResponse,
+    SearchFeedback,
     SearchRequest,
     SearchResponse,
     SearchResultItem,
@@ -86,10 +95,17 @@ from .schema import (
     SimilarRecordsRequest,
     SimilarRecordsResponse,
     SignalPerformance,
+    SmartSearchRequest,
+    SmartSearchResponse,
     StoreTradingSignalRequest,
     StoreTradingSignalResponse,
+    SummariesRequest,
+    SummariesResponse,
     TimelineItem,
     TradingSignalRecord,
+    UnifiedSearchRequest,
+    UnifiedSearchResponse,
+    UnifiedStatisticsResponse,
     UpdateRecordRequest,
     UpdateRecordResponse,
     UpdateSummariesRequest,
@@ -100,11 +116,12 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_timestamp(value: str | None) -> datetime:
-    """Парсинг временной метки."""
+    """Парсит временную метку с fallback на текущее UTC время."""
     return parse_datetime_utc(value, default=datetime.now(timezone.utc))
 
 
 def _payload_to_record(payload: MemoryRecordPayload) -> MemoryRecord:
+    """Преобразует MCP payload в внутренний формат MemoryRecord."""
     return MemoryRecord(
         record_id=payload.record_id,
         source=payload.source,
@@ -129,6 +146,7 @@ def _payload_to_record(payload: MemoryRecordPayload) -> MemoryRecord:
 def _node_to_payload(
     graph: TypedGraphMemory, node_id: str, data: dict
 ) -> MemoryRecordPayload:
+    """Преобразует узел графа в MCP payload, включая вложения и эмбеддинги."""
     props = dict(data.get("properties") or {})
     tags = list(props.get("tags", []))
     entities = list(props.get("entities", []))
@@ -153,10 +171,8 @@ def _node_to_payload(
 
     timestamp = _parse_timestamp(data.get("timestamp"))
     
-    # Получаем эмбеддинг из данных узла
     embedding = data.get("embedding")
     if embedding is not None:
-        # Преобразуем numpy массив в список, если нужно
         if hasattr(embedding, 'tolist'):
             embedding = embedding.tolist()
         elif not isinstance(embedding, list):
@@ -166,7 +182,6 @@ def _node_to_payload(
                 logger.debug(f"Не удалось преобразовать эмбеддинг в список для узла {node_id}")
                 embedding = None
     else:
-        # Логируем, если эмбеддинг отсутствует
         logger.debug(f"Эмбеддинг отсутствует для узла {node_id}")
 
     return MemoryRecordPayload(
@@ -184,7 +199,10 @@ def _node_to_payload(
 
 
 class MemoryServiceAdapter:
-    """High-level wrapper exposing ingest/search/fetch for MCP tools."""
+    """Адаптер для работы с памятью: индексация, поиск, получение записей.
+    
+    Объединяет граф памяти, векторное хранилище и эмбеддинги для гибридного поиска.
+    """
 
     def __init__(self, db_path: str = "data/memory_graph.db") -> None:
         self.graph = TypedGraphMemory(db_path=db_path)
@@ -198,61 +216,51 @@ class MemoryServiceAdapter:
         ):
             self.vector_store.ensure_collection(self.embedding_service.dimension)
         self.trading_memory = TradingMemory(self.graph)
-        # Веса для гибридного поиска (FTS + векторный)
-        # Увеличиваем приоритет FTS5 результатов для лучшего ранжирования
+        
+        # Параметры гибридного поиска: FTS5 (0.8) + векторный (0.2)
         _fts_weight_raw = 0.8
         _vector_weight_raw = 0.2
         _total_weight = _fts_weight_raw + _vector_weight_raw
         self._fts_weight = _fts_weight_raw / _total_weight
         self._vector_weight = _vector_weight_raw / _total_weight
-        # Параметр для Reciprocal Rank Fusion (стандартное значение 60)
-        self._rrf_k = 60
-        # Использовать RRF для объединения результатов (True) или простое объединение с весами (False)
+        self._rrf_k = 60  # Reciprocal Rank Fusion параметр
         self._use_rrf = True
-        # Инициализация читателя артифактов
+        
         from ..config import get_settings
         settings = get_settings()
         self.artifacts_reader = ArtifactsReader(artifacts_dir=settings.artifacts_path)
     
     def _find_node_id(self, record_id: str) -> Optional[str]:
-        """
-        Находит node_id в графе по разным форматам record_id.
+        """Находит node_id в графе по различным форматам record_id.
         
-        Поддерживает форматы:
+        Поддерживает:
         - Точное совпадение: "telegram:Семья:257859"
         - Формат индексатора: "Семья-S0006-M0068"
-        - Частичное совпадение
+        - Частичное совпадение через LIKE
         
         Returns:
             Найденный node_id или None
         """
-        # Сначала пробуем точное совпадение
         if record_id in self.graph.graph:
             return record_id
         
-        # Пробуем найти в БД
         cursor = self.graph.conn.cursor()
         
-        # Если record_id в формате "Семья-S0006-M0068", пробуем найти по формату "telegram:Семья:message_id"
         if "-" in record_id and "M" in record_id:
             parts = record_id.split("-")
             if len(parts) >= 3:
                 chat_name = parts[0]
-                # Извлекаем номер сообщения из формата M####
                 msg_part = parts[-1]
                 if msg_part.startswith("M"):
                     try:
                         msg_num = int(msg_part[1:])
-                        # Ищем все узлы для этого чата, отсортированные по ID
                         cursor.execute(
                             "SELECT id FROM nodes WHERE id LIKE ? ORDER BY id",
                             (f"telegram:{chat_name}:%",)
                         )
                         all_rows = cursor.fetchall()
-                        # Пробуем найти узел по порядковому номеру (msg_num - 1, так как нумерация с 1)
                         if msg_num > 0 and msg_num <= len(all_rows):
                             found_id = all_rows[msg_num - 1]["id"]
-                            # Загружаем узел в граф, если его там нет
                             if found_id not in self.graph.graph:
                                 cursor.execute(
                                     "SELECT id, type, label, properties, embedding FROM nodes WHERE id = ?",
@@ -286,7 +294,6 @@ class MemoryServiceAdapter:
                         logger.debug(f"Ошибка при поиске узла по номеру для {record_id}: {e}")
                         pass
         
-        # Пробуем поиск по частичному совпадению
         cursor.execute(
             "SELECT id FROM nodes WHERE id LIKE ? LIMIT 1",
             (f"%{record_id}%",)
@@ -294,7 +301,6 @@ class MemoryServiceAdapter:
         row = cursor.fetchone()
         if row:
             found_id = row["id"]
-            # Загружаем узел в граф, если его там нет
             if found_id not in self.graph.graph:
                 cursor.execute(
                     "SELECT id, type, label, properties, embedding FROM nodes WHERE id = ?",
@@ -338,7 +344,7 @@ class MemoryServiceAdapter:
             self.vector_store.close()
 
     def clear_chat_data(self, chat_name: str) -> Dict[str, int]:
-        """Очистка всех данных конкретного чата из всех хранилищ."""
+        """Удаляет все данные чата из графа, Qdrant и ChromaDB."""
         stats = {
             "nodes_deleted": 0,
             "vectors_deleted": 0,
@@ -399,10 +405,8 @@ class MemoryServiceAdapter:
 
         return stats
 
-    # Ingest
     def _build_embedding_text(self, payload: MemoryRecordPayload) -> str:
-        """
-        Формирует расширенный текст для эмбеддингов, включая метаданные.
+        """Формирует расширенный текст для эмбеддингов, включая метаданные.
         
         Args:
             payload: Запись памяти с метаданными
@@ -413,14 +417,12 @@ class MemoryServiceAdapter:
         parts = [payload.content]
         metadata_parts = []
         
-        # Добавляем username отправителя, если есть
         sender_username = payload.metadata.get("sender_username")
         if sender_username:
             metadata_parts.append(f"Автор: @{sender_username}")
         elif payload.author:
             metadata_parts.append(f"Автор: {payload.author}")
         
-        # Добавляем реакции, если есть
         reactions = payload.metadata.get("reactions")
         if reactions and isinstance(reactions, list) and len(reactions) > 0:
             reaction_strs = []
@@ -429,7 +431,6 @@ class MemoryServiceAdapter:
                     emoji = reaction.get("emoji", "")
                     count = reaction.get("count", 0)
                     if emoji and count > 0:
-                        # Извлекаем emoji из строки вида "ReactionEmoji(emoticon='👍')"
                         if "emoticon=" in str(emoji):
                             try:
                                 emoji_value = str(emoji).split("emoticon=")[1].split("'")[1]
@@ -441,12 +442,10 @@ class MemoryServiceAdapter:
             if reaction_strs:
                 metadata_parts.append(f"Реакции: {', '.join(reaction_strs)}")
         
-        # Добавляем информацию о редактировании, если есть
         edited_utc = payload.metadata.get("edited_utc")
         if edited_utc:
             metadata_parts.append(f"Отредактировано: {edited_utc}")
         
-        # Объединяем все части
         if metadata_parts:
             parts.append("\n[Метаданные]")
             parts.extend(metadata_parts)
@@ -458,7 +457,6 @@ class MemoryServiceAdapter:
         records = [_payload_to_record(item) for item in payload_list]
         stats = self.ingestor.ingest(records)
         if self.embedding_service and self.vector_store and payload_list:
-            # Собираем тексты для батчевой обработки
             embedding_texts = []
             payload_indices = []
             for i, payload in enumerate(payload_list):
@@ -467,11 +465,9 @@ class MemoryServiceAdapter:
                     embedding_texts.append(embedding_text)
                     payload_indices.append(i)
             
-            # Генерируем эмбеддинги батчем
             if embedding_texts:
                 vectors = self.embedding_service.embed_batch(embedding_texts)
                 
-                # Сохраняем эмбеддинги для каждого payload
                 for vec_idx, payload_idx in enumerate(payload_indices):
                     vector = vectors[vec_idx] if vec_idx < len(vectors) else None
                     if not vector:
@@ -490,9 +486,7 @@ class MemoryServiceAdapter:
                     if isinstance(chat_name, str):
                         payload_data["chat"] = chat_name
                     try:
-                        # Сохраняем эмбеддинг в Qdrant
                         self.vector_store.upsert(payload.record_id, vector, payload_data)
-                        # Сохраняем эмбеддинг в граф
                         self.graph.update_node(
                             payload.record_id,
                             embedding=vector,
@@ -527,16 +521,13 @@ class MemoryServiceAdapter:
         
         for results in result_lists:
             for rank, item in enumerate(results, start=1):
-                # RRF score = 1 / (k + rank)
                 rrf_score = 1.0 / (k + rank)
-                # Суммируем scores для одинаковых record_id
                 rrf_scores[item.record_id] = rrf_scores.get(item.record_id, 0.0) + rrf_score
         
         return rrf_scores
 
-    # Search
     def search(self, request: SearchRequest) -> SearchResponse:
-        # 1. FTS5 поиск
+        """Выполняет гибридный поиск: FTS5 + векторный + ChromaDB с объединением через RRF."""
         rows, total_fts = self.graph.search_text(
             request.query,
             limit=request.top_k * 2,  # Берем больше для RRF
@@ -3029,3 +3020,277 @@ class MemoryServiceAdapter:
             }
             for r in results
         ]
+
+    # --------------------------- Unified methods for tool optimization ---------------------------
+
+    async def unified_search(self, request: UnifiedSearchRequest) -> UnifiedSearchResponse:
+        """Универсальный метод поиска, объединяющий все типы поиска."""
+        if request.search_type == "hybrid":
+            if not request.query:
+                raise ValueError("query is required for hybrid search")
+            search_req = SearchRequest(
+                query=request.query,
+                top_k=request.top_k,
+                source=request.source,
+                tags=request.tags,
+                date_from=request.date_from,
+                date_to=request.date_to,
+                include_embeddings=request.include_embeddings,
+            )
+            result = self.search(search_req)
+            return UnifiedSearchResponse(
+                search_type="hybrid",
+                results=result.results,
+                total_matches=result.total_matches,
+            )
+        
+        elif request.search_type == "smart":
+            if not request.query:
+                raise ValueError("query is required for smart search")
+            # Smart search требует SmartSearchEngine, который вызывается из server.py
+            # Здесь мы возвращаем ошибку, так как это async операция
+            raise NotImplementedError("smart search should be called through server.py with SmartSearchEngine")
+        
+        elif request.search_type == "embedding":
+            if not request.embedding:
+                raise ValueError("embedding is required for embedding search")
+            search_req = SearchByEmbeddingRequest(
+                embedding=request.embedding,
+                top_k=request.top_k,
+                source=request.source,
+                tags=request.tags,
+                date_from=request.date_from,
+                date_to=request.date_to,
+            )
+            result = self.search_by_embedding(search_req)
+            return UnifiedSearchResponse(
+                search_type="embedding",
+                results=result.results,
+                total_matches=result.total_matches,
+            )
+        
+        elif request.search_type == "similar":
+            if not request.record_id:
+                raise ValueError("record_id is required for similar search")
+            search_req = SimilarRecordsRequest(
+                record_id=request.record_id,
+                top_k=request.top_k,
+            )
+            result = self.similar_records(search_req)
+            return UnifiedSearchResponse(
+                search_type="similar",
+                results=result.results,
+                total_matches=len(result.results),
+            )
+        
+        elif request.search_type == "trading":
+            if not request.query:
+                raise ValueError("query is required for trading search")
+            search_req = SearchTradingPatternsRequest(
+                query=request.query,
+                symbol=request.symbol,
+                limit=request.limit or request.top_k,
+            )
+            result = self.search_trading_patterns(search_req)
+            return UnifiedSearchResponse(
+                search_type="trading",
+                signals=result.signals,
+            )
+        
+        else:
+            raise ValueError(f"Unknown search_type: {request.search_type}")
+
+    def batch_operations(self, request: BatchOperationsRequest) -> BatchOperationsResponse:
+        """Универсальный метод для batch операций."""
+        if request.operation == "update":
+            if not request.updates:
+                raise ValueError("updates is required for update operation")
+            update_req = BatchUpdateRecordsRequest(updates=request.updates)
+            result = self.batch_update_records(update_req)
+            return BatchOperationsResponse(
+                operation="update",
+                update_results=result.results,
+                total_updated=result.total_updated,
+                total_failed=result.total_failed,
+            )
+        
+        elif request.operation == "delete":
+            if not request.record_ids:
+                raise ValueError("record_ids is required for delete operation")
+            delete_req = BatchDeleteRecordsRequest(record_ids=request.record_ids)
+            result = self.batch_delete_records(delete_req)
+            return BatchOperationsResponse(
+                operation="delete",
+                delete_results=result.results,
+                total_deleted=result.total_deleted,
+            )
+        
+        elif request.operation == "fetch":
+            if not request.record_ids:
+                raise ValueError("record_ids is required for fetch operation")
+            fetch_req = BatchFetchRecordsRequest(record_ids=request.record_ids)
+            result = self.batch_fetch_records(fetch_req)
+            return BatchOperationsResponse(
+                operation="fetch",
+                fetch_results=result.results,
+                total_found=result.total_found,
+                total_not_found=result.total_not_found,
+            )
+        
+        else:
+            raise ValueError(f"Unknown operation: {request.operation}")
+
+    def get_statistics_unified(self, request: Optional[GetStatisticsRequest] = None) -> UnifiedStatisticsResponse:
+        """Универсальный метод получения статистики."""
+        if request is None or request.type is None:
+            # Возвращаем всю статистику
+            general_stats = self.get_statistics()
+            tags_stats = self.get_tags_statistics()
+            indexing_req = GetIndexingProgressRequest(chat=request.chat if request else None)
+            indexing_stats = self.get_indexing_progress(indexing_req)
+            
+            return UnifiedStatisticsResponse(
+                graph_stats=general_stats.graph_stats,
+                sources_count=general_stats.sources_count,
+                tags_count=general_stats.tags_count,
+                database_size_bytes=general_stats.database_size_bytes,
+                total_tags=tags_stats.total_tags,
+                total_tagged_records=tags_stats.total_tagged_records,
+                indexing_progress=indexing_stats.progress,
+                indexing_message=indexing_stats.message,
+            )
+        
+        elif request.type == "general":
+            general_stats = self.get_statistics()
+            return UnifiedStatisticsResponse(
+                graph_stats=general_stats.graph_stats,
+                sources_count=general_stats.sources_count,
+                tags_count=general_stats.tags_count,
+                database_size_bytes=general_stats.database_size_bytes,
+            )
+        
+        elif request.type == "tags":
+            tags_stats = self.get_tags_statistics()
+            return UnifiedStatisticsResponse(
+                tags_count=tags_stats.tags_count,
+                total_tags=tags_stats.total_tags,
+                total_tagged_records=tags_stats.total_tagged_records,
+            )
+        
+        elif request.type == "indexing":
+            indexing_req = GetIndexingProgressRequest(chat=request.chat)
+            indexing_stats = self.get_indexing_progress(indexing_req)
+            return UnifiedStatisticsResponse(
+                indexing_progress=indexing_stats.progress,
+                indexing_message=indexing_stats.message,
+            )
+        
+        else:
+            raise ValueError(f"Unknown statistics type: {request.type}")
+
+    def graph_query(self, request: GraphQueryRequest) -> GraphQueryResponse:
+        """Универсальный метод запросов к графу."""
+        if request.query_type == "neighbors":
+            if not request.node_id:
+                raise ValueError("node_id is required for neighbors query")
+            neighbors_req = GetGraphNeighborsRequest(
+                node_id=request.node_id,
+                edge_type=request.edge_type,
+                direction=request.direction or "both",
+            )
+            result = self.get_graph_neighbors(neighbors_req)
+            return GraphQueryResponse(
+                query_type="neighbors",
+                neighbors=result.neighbors,
+            )
+        
+        elif request.query_type == "path":
+            if not request.source_id or not request.target_id:
+                raise ValueError("source_id and target_id are required for path query")
+            path_req = FindGraphPathRequest(
+                source_id=request.source_id,
+                target_id=request.target_id,
+                max_length=request.max_length or 5,
+            )
+            result = self.find_graph_path(path_req)
+            return GraphQueryResponse(
+                query_type="path",
+                path=result.path,
+                total_weight=result.total_weight,
+                found=result.found,
+            )
+        
+        elif request.query_type == "related":
+            node_id = request.node_id or request.record_id
+            if not node_id:
+                raise ValueError("node_id or record_id is required for related query")
+            related_req = GetRelatedRecordsRequest(
+                record_id=node_id,
+                max_depth=request.max_depth or 1,
+                limit=request.limit or 10,
+            )
+            result = self.get_related_records(related_req)
+            return GraphQueryResponse(
+                query_type="related",
+                records=result.records,
+            )
+        
+        else:
+            raise ValueError(f"Unknown query_type: {request.query_type}")
+
+    def ingest_unified(self, request: IngestRequest) -> IngestResponse:
+        """Универсальный метод индексации, поддерживающий records и scraped."""
+        if request.source_type == "scraped":
+            # Преобразуем IngestRequest в ScrapedContentRequest
+            if not request.url or not request.content:
+                raise ValueError("url and content are required for scraped source_type")
+            scraped_req = ScrapedContentRequest(
+                url=request.url,
+                title=request.title,
+                content=request.content,
+                metadata=request.metadata or {},
+                source=request.source or "bright_data",
+                tags=request.tags or [],
+                entities=request.entities or [],
+            )
+            result = self.ingest_scraped_content(scraped_req)
+            # Преобразуем ScrapedContentResponse в IngestResponse
+            return IngestResponse(
+                records_ingested=1 if result.status == "success" else 0,
+                attachments_ingested=0,
+                duplicates_skipped=0,
+            )
+        else:
+            # Обычная индексация записей
+            return self.ingest(request.records)
+
+    async def summaries(self, request: SummariesRequest) -> SummariesResponse:
+        """Универсальный метод управления саммаризацией."""
+        if request.action == "update":
+            update_req = UpdateSummariesRequest(
+                chat=request.chat,
+                force=request.force or False,
+            )
+            result = await self.update_summaries(update_req)
+            return SummariesResponse(
+                action="update",
+                message=result.message,
+                chats_updated=result.chats_updated,
+            )
+        
+        elif request.action == "review":
+            review_req = ReviewSummariesRequest(
+                dry_run=request.dry_run or False,
+                chat=request.chat,
+                limit=request.limit,
+            )
+            result = await self.review_summaries(review_req)
+            return SummariesResponse(
+                action="review",
+                message=result.message,
+                files_processed=result.files_processed,
+                files_fixed=result.files_fixed,
+            )
+        
+        else:
+            raise ValueError(f"Unknown action: {request.action}")

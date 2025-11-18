@@ -12,8 +12,7 @@
 
 ## Обзор
 
-**Memory MCP** — сервер Model Context Protocol для индексации и поиска по унифицированной памяти
-(Telegram, файлы и другие источники), поддерживающий полнотекстовый и векторный поиск.
+**Memory MCP** — сервер Model Context Protocol для индексации и поиска по унифицированной памяти (Telegram, файлы и другие источники), поддерживающий полнотекстовый и векторный поиск.
 
 ```
 memory-mcp/
@@ -22,9 +21,10 @@ memory-mcp/
 │   ├── indexing/            # Индексаторы источников (Telegram и др.)
 │   ├── memory/              # Граф памяти, FTS, векторное хранилище
 │   ├── mcp/                 # MCP schema, adapters и сервер
-│   ├── core/                # Основные компоненты (lmstudio_client, ollama_client)
+│   ├── core/                # Основные компоненты (lmstudio_client, ollama_client, indexer)
 │   ├── analysis/            # Анализ данных и саммаризация
 │   ├── quality_analyzer/    # Анализ качества поиска
+│   ├── search/              # Smart Search и гибридный поиск
 │   └── utils/               # Утилиты
 ├── tests/                   # Тесты
 ├── scripts/                 # Скрипты и утилиты
@@ -43,9 +43,11 @@ memory-mcp/
 ## Основные компоненты
 
 ### MCP сервер (`src/memory_mcp/mcp/server.py`)
+
 - Использует стандартный MCP Server (`mcp.server.Server`), регистрирует инструменты через `@server.list_tools()` и `@server.call_tool()`.
 - Располагает `MemoryServiceAdapter`, который объединяет FTS и Qdrant-поиск.
 - Читает настройки из `Settings` (`MEMORY_MCP_*`): пути БД/артефактов, LM Studio, embeddings и Qdrant.
+- Поддерживает ленивую инициализацию компонентов для ускорения запуска.
 
 #### Почему используется стандартный MCP Server
 
@@ -87,36 +89,47 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 ```
 
 ### Адаптер памяти (`src/memory_mcp/mcp/adapters.py`)
+
 - Инжестирует записи (`MemoryRecordPayload`) в `TypedGraphMemory` и в Qdrant.
 - Выполняет гибридный поиск: FTS5 + векторное ANN (при наличии Qdrant/эмбеддингов).
 - Предоставляет `fetch` для чтения оригинальной записи с вложениями.
+- Поддерживает торговые сигналы и специализированные запросы.
 
 ### Граф памяти (`src/memory_mcp/memory/typed_graph.py`)
+
 - SQLite + NetworkX; FTS5 таблица `node_search`.
 - Добавляет/обновляет узлы (`DocChunkNode`, `EventNode` и др.).
 - Предоставляет метод `search_text` (BM25/snippet).
+- Поддерживает типизированные связи между узлами.
 
 ### Векторное хранилище (`src/memory_mcp/memory/vector_store.py`)
+
 - Обёртка над Qdrant (создание коллекции, upsert, поиск).
 - Конфигурируется через `MEMORY_MCP_QDRANT_URL`; gracefully выключается, если Qdrant недоступен.
+- Поддерживает фильтрацию по метаданным.
 
 ### Embed-сервис (`src/memory_mcp/memory/embeddings.py`)
+
 - HTTP клиент для `text-embeddings-inference` (или совместимых сервисов).
 - Функция `build_embedding_service_from_env()` читает `MEMORY_MCP_EMBEDDINGS_URL` или параметры LM Studio.
+- Поддерживает батчинг для эффективной обработки.
 
 ### Индексаторы (`src/memory_mcp/indexing/*`)
+
 - Unified интерфейс `BaseIndexer`.
 - `TelegramIndexer` → нормализованные `MemoryRecord`.
 - CLI команда `ingest-telegram` вызывает индексатор + `MemoryIngestor`.
 
 ### Smart Search движок (`src/memory_mcp/search/*`)
+
 - `SmartSearchEngine` объединяет адаптер памяти, `ArtifactsReader` и `SearchSessionStore` для интерактивного поиска.
 - Сессии многократного поиска сохраняются в `data/search_sessions.db` (настраивается `SMART_SEARCH_SESSION_STORE_PATH`) и позволяют применять обратную связь (`feedback`).
 - `hybrid_search.py` и `search_explainer.py` обеспечивают подсветку источников (граф, Qdrant, артефакты) и пояснения к результатам.
 - Порог уверенности и стратегия уточняющих вопросов управляются через `SMART_SEARCH_MIN_CONFIDENCE` и связанные настройки `QualityAnalysis`.
 
 ### Менеджмент фоновой индексации
-- `_active_indexing_jobs` в `mcp.server` отслеживает жизненный цикл индексаций (`start_background_indexing`, `stop_background_indexing`, `get_background_indexing_status`).
+
+- `IndexingJobTracker` в `core/indexing_tracker.py` отслеживает жизненный цикл индексаций (`start_background_indexing`, `stop_background_indexing`, `get_background_indexing_status`).
 - Стадии включают очистку старых данных, загрузку чатов, оптимизацию SQLite (VACUUM/ANALYZE) и проверку целостности, чтобы диагностировать узкие места.
 - `MemoryServiceAdapter` и CLI используют общий менеджер для чтения/обновления статусов, что позволяет отображать прогресс и предотвращать параллельные full-rebuild для одного чата.
 - Настройки фоновой индексации (`MEMORY_MCP_BACKGROUND_INDEXING_ENABLED`, `MEMORY_MCP_BACKGROUND_INDEXING_INTERVAL`) включают периодический обход `input/` и безопасное завершение при остановке сервера.
@@ -125,55 +138,94 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
 ### Категории и назначение
 
-Все инструменты описаны и регистрируются в `src/memory_mcp/mcp/server.py::list_tools()`. Параметры и схемы запросов
-синхронизированы с обработчиками в `call_tool()`, поэтому при добавлении нового инструмента нужно обновлять оба места
-(и тесты `tests/test_mcp_server*.py`).
+Все инструменты описаны и регистрируются в `src/memory_mcp/mcp/server.py::list_tools()`. Параметры и схемы запросов синхронизированы с обработчиками в `call_tool()`, поэтому при добавлении нового инструмента нужно обновлять оба места (и тесты `tests/test_mcp_server*.py`).
 
-**Системные**
+#### Системные
+
 - `health` — проверка зависимостей, конфигурации и доступности базы данных/векторного стора.
 - `version` — версия сервера, список включённых features; используется клиентами для capability detection.
 
-**Индексация и управление данными**
-- `ingest_records`, `ingest_scraped_content`, `index_chat`, `start_background_indexing`, `stop_background_indexing`,
-  `get_background_indexing_status`, `get_available_chats` — загрузка данных (Telegram, веб, incremental input) и контроль фоновых задач.
-- `import_records`, `export_records` — массовые операции ввода/вывода в форматах JSONL/архив с вложениями.
-- `update_record`, `batch_update_records`, `batch_delete_records`, `batch_fetch_records` —
-  редактирование и выборки без повторного конфигурирования MCP клиента.
-- `update_summaries`, `review_summaries` — пересборка саммаризаций и QA workflow для готовых обзоров.
+#### Индексация и управление данными
 
-**Поиск и аналитика**
-- `search_memory` (гибрид BM25+вектор), `smart_search` (LLM-assisted, сессии, feedback), `search_by_embedding`,
-  `similar_records`, `search_explain`.
-- `get_statistics`, `get_indexing_progress` — покрытие источников, свежесть данных, прогресс индексации.
-- `analyze_entities`, `search_trading_patterns`, `get_signal_performance`, `store_trading_signal` — аналитика и оценка торговых паттернов.
+- `ingest_records` — приём пачки `MemoryRecordPayload` в унифицированное хранилище.
+- `ingest_scraped_content` — индексация веб-контента (скрапленные страницы).
+- `index_chat` — индексация конкретного Telegram чата с отслеживанием прогресса (фоновый режим).
+- `get_available_chats` — получение списка доступных чатов для индексации.
+- `start_background_indexing` — запуск фоновой индексации (периодическая проверка `input/`).
+- `stop_background_indexing` — остановка фоновой индексации.
+- `get_background_indexing_status` — статус фоновой индексации.
+- `get_indexing_progress` — прогресс индексации конкретного чата или всех чатов.
+- `import_records` — массовый импорт записей из JSON/CSV.
+- `export_records` — массовый экспорт записей в JSON/CSV/Markdown.
+- `update_record` — обновление одной записи (контент, метаданные, теги).
+- `batch_update_records` — пакетное обновление записей.
+- `batch_delete_records` — пакетное удаление записей.
+- `batch_fetch_records` — пакетное получение записей.
+- `update_summaries` — пересборка markdown-отчётов без полной индексации.
+- `review_summaries` — автоматическое ревью и исправление саммаризаций.
 
-**Граф знаний и навигация**
-- `get_graph_neighbors`, `find_graph_path`, `get_related_records`, `build_insight_graph` — traversal по `TypedGraphMemory`,
-  построение insight-графов и получение соседей/путей для объяснения связей.
+#### Поиск и аналитика
 
-**Дополнительные сервисы**
-- `get_tags_statistics`, `get_timeline` — временные и теговые отчёты для UX.
+- `search_memory` — гибридный поиск (BM25 + векторный) по памяти.
+- `smart_search` — интерактивный LLM-assisted поиск с сессиями и обратной связью.
+- `search_by_embedding` — поиск по вектору эмбеддинга напрямую.
+- `similar_records` — поиск похожих записей по эмбеддингам.
+- `search_explain` — объяснение релевантности результата поиска с декомпозицией scores.
+- `get_statistics` — статистика системы (граф, источники, теги, размер БД).
+- `get_tags_statistics` — статистика использования тегов.
+- `get_timeline` — временная шкала записей, отсортированная по timestamp.
+- `analyze_entities` — извлечение и анализ сущностей из текста.
+
+#### Граф знаний и навигация
+
+- `get_graph_neighbors` — получение соседних узлов для узла графа.
+- `find_graph_path` — поиск кратчайшего пути между двумя узлами.
+- `get_related_records` — получение связанных записей через граф.
+- `build_insight_graph` — построение графа инсайтов из markdown-саммаризаций.
+
+#### Торговые сигналы
+
+- `store_trading_signal` — сохранение торгового сигнала в память.
+- `search_trading_patterns` — поиск по сохранённым торговым паттернам и сигналам.
+- `get_signal_performance` — метрики производительности торгового сигнала.
+
+#### Дополнительные сервисы
+
 - `generate_embedding` — прямой вызов сервиса эмбеддингов; упрощает отладку и внешние интеграции.
 
-> ⚠️ **Советы**: перечисленные инструменты имеют строгие схемы (`schema.py`). Перед изменением аргументов синхронизируйте:
-> 1. `Tool.inputSchema`
-> 2. Pydantic модель запроса/ответа
-> 3. Документацию в этом файле и `README.md`
-> 4. Смежные тесты (`tests/test_mcp_server*.py`, `tests/test_trading_memory.py`, `tests/test_smart_search.py`)
-
-### Роадмап
-
-Актуальный список инициатив фиксируется в `QUALITY_IMPROVEMENT_PLAN.md`. В фокусе 2024Q2:
-- вынесение декларативного реестра инструментов (единый источник правды для `list_tools`, `call_tool`, документации),
-- нормализаторы аргументов (ISO даты, массивы тегов, агрегаторы) для всех CLI/MCP потоков,
-- менеджер фоновых задач с атомарными статусами и диагностикой,
-- авто-проверки документации (CI убедится, что новые инструменты описаны в `AGENTS.md` и `README.md`).
+> ⚠️ **Важно**: Перечисленные инструменты имеют строгие схемы (`schema.py`). Перед изменением аргументов синхронизируйте:
+> 1. `Tool.inputSchema` в `list_tools()`
+> 2. Pydantic модель запроса/ответа в `schema.py`
+> 3. Обработчик в `call_tool()`
+> 4. Документацию в этом файле и `README.md`
+> 5. Смежные тесты (`tests/test_mcp_server*.py`, `tests/test_trading_memory.py`, `tests/test_smart_search.py`)
 
 ### Стандарт описания инструментов
+
 - **Первая строка**: лаконичное действие на английском (≤90 символов), начинаем с глагола.
 - **Где хранится**: описания находятся в `src/memory_mcp/mcp/server.py` в функции `list_tools()` через объекты `Tool()` с полем `description`.
 - **Детали**: разворачиваем во втором предложении/абзаце docstring, чтобы `list_tools` оставался компактным.
 - **Единый подход**: новые инструменты должны следовать тем же правилам, чтобы клиенты видели консистентные подсказки.
+
+### Краткая справка по инструментам
+
+| Инструмент | Назначение | Ключевые параметры |
+|------------|------------|-------------------|
+| `ingest_records` | Приём пачки `MemoryRecordPayload` | `records[]`, `upsert`, `include_embeddings` |
+| `search_memory` | Гибридный поиск (BM25 + вектор) | `query`, `top_k`, фильтры `source/tags/date` |
+| `smart_search` | Интерактивный поиск с обратной связью | `query`, `session_id`, `feedback[]`, `clarify` |
+| `index_chat` | Индексация Telegram чата (фоновый режим) | `chat`, `aggregation_strategy`, фильтры дат, `enable_smart_aggregation` |
+| `get_indexing_progress` | Прогресс индексации | `chat` (опционально) |
+| `export_records` | Экспорт записей/вложений | `source`, `tags`, `date_from`, `include_embeddings`, `format` |
+| `import_records` | Импорт JSONL/директорий с вложениями | `format`, `content`, `source` |
+| `generate_embedding` | Получение векторов без записи в БД | `text`, `model` (опционально) |
+| `store_trading_signal` | Сохранение торгового сигнала | `symbol`, `signal_type`, `direction`, `entry`, `confidence` |
+| `search_trading_patterns` | Поиск по торговым сигналам | `query`, `symbol`, `limit` |
+| `start_background_indexing` | Запуск фонового ingest по входной директории | (без параметров) |
+| `get_background_indexing_status` | Статус фоновой индексации | (без параметров) |
+| `get_available_chats` | Список доступных чатов | `include_stats` (опционально) |
+
+**Примечание**: Подробные описания параметров и примеры использования см. в `src/memory_mcp/mcp/server.py` и разделе [Сценарии использования](#сценарии-использования).
 
 ### Диагностика проблем
 
@@ -202,63 +254,79 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
 **Примечание**: `list_tools()` вызывается только при запросе списка инструментов клиентом, не при запуске сервера.
 
-### Краткая справка по инструментам
-
-| Инструмент | Назначение | Ключевые параметры |
-|------------|------------|-------------------|
-| `ingest_records` | Приём пачки `MemoryRecordPayload` | `records[]`, `upsert`, `include_embeddings` |
-| `search_memory` | Гибридный поиск (BM25 + вектор) | `query`, `top_k`, фильтры `source/tags/date` |
-| `smart_search` | Интерактивный поиск с обратной связью | `query`, `session_id`, `feedback[]`, `clarify` |
-| `index_chat` | Индексация Telegram чата | `chat`, `aggregation_strategy`, фильтры дат, `enable_smart_aggregation` |
-| `export_records` | Экспорт записей/вложений | `source`, `tags`, `date_from`, `include_embeddings`, `format` |
-| `import_records` | Импорт JSONL/директорий с вложениями | `records`, `attachments_dir`, `conflict_policy` |
-| `generate_embedding` | Получение векторов без записи в БД | `texts[]`, `model_override`, `normalize` |
-| `store_trading_signal` | Сохранение торгового сигнала | `symbol`, `signal_type`, `direction`, `entry`, `confidence` |
-| `search_trading_patterns` | Поиск по торговым сигналам | `query`, `symbol`, `limit`, `min_confidence` |
-| `start_background_indexing` | Запуск фонового ingest по входной директории | `job_id`, `source_path`, `force_full` |
-
-**Примечание**: Подробные описания параметров и примеры использования см. в `src/memory_mcp/mcp/server.py` и разделе [Сценарии использования](#сценарии-использования).
-
-### Документация инструментов — best practices
-
-- **Обязательные/взаимоисключающие параметры**: явно указывайте `code` XOR `script_path`, `steps` как массив
-- **Примеры вызова**: предоставляйте рабочие фрагменты (как сформировать `records`, как делать поиск)
-- **Форматы полей**:
-  - `env` — список строк `KEY=VALUE`
-  - `steps` — список строк
-  - `memory`/`cpus` — Docker-совместимые строки (`256m`, `1g`, `0.5`)
-  - `tags`/`entities` — массивы строк
-  - `timestamp` — ISO 8601 строка (`"2024-01-15T14:30:00Z"`)
-- **Сериализация datetime**: Автоматически в ISO 8601 формат при возврате результатов
-- **Подсказки/use cases**: добавляйте bullet tips (зависимости, multi-step сценарии, фильтры)
-- **Troubleshooting**: перечисляйте частые ошибки (пустой `steps`, неправильный формат `env`, отсутствие `records`)
-- **CI guard**: тесты `tests/test_mcp_server.py` и линтеры проверяют наличие документации; PR без обновления `AGENTS.md`
-  для новых инструментов считается неполным.
-
 ## Конфигурация и запуск
 
 ### Переменные окружения
 
 Основные настройки читаются через `pydantic.BaseSettings` с префиксом `MEMORY_MCP_`.
 
+#### Основные настройки
+
 | Переменная | По умолчанию | Описание |
 |------------|--------------|----------|
 | `MEMORY_MCP_DB_PATH` | `data/memory_graph.db` | Путь к SQLite БД. Относительный путь резолвится от `pyproject.toml`. |
+| `MEMORY_MCP_CHROMA_PATH` | `./chroma_db` | Путь к базе ChromaDB. |
+| `MEMORY_MCP_CHATS_PATH` | `./chats` | Путь к директории с чатами. |
+| `MEMORY_MCP_ARTIFACTS_PATH` | `./artifacts` | Путь к артефактам (отчёты, саммаризации). |
+| `MEMORY_MCP_INPUT_PATH` | `input` | Путь к директории input с новыми сообщениями. |
+
+#### Настройки сервера
+
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
 | `MEMORY_MCP_HOST` | `127.0.0.1` | HTTP-хост для FastAPI транспорта. |
-| `MEMORY_MCP_PORT` | `8050` | HTTP-порт сервера / CLI RPC. |
+| `MEMORY_MCP_PORT` | `8000` | HTTP-порт сервера / CLI RPC. |
 | `MEMORY_MCP_LOG_LEVEL` | `INFO` | Уровень логирования MCP. |
 | `MEMORY_MCP_TRANSPORT` | `stdio` | Транспорт запуска (`stdio`, `streamable-http`). |
+| `MEMORY_MCP_DEBUG` | `False` | Включение расширенного логгирования. |
+
+#### Настройки эмбеддингов и LLM
+
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
+| `MEMORY_MCP_EMBEDDINGS_URL` | - | URL внешнего сервиса эмбеддингов (приоритетнее LM Studio). |
 | `MEMORY_MCP_LMSTUDIO_HOST` | `127.0.0.1` | LM Studio (эмбеддинги/LLM) хост. |
 | `MEMORY_MCP_LMSTUDIO_PORT` | `1234` | LM Studio порт. |
 | `MEMORY_MCP_LMSTUDIO_MODEL` | `text-embedding-qwen3-embedding-0.6b` | Модель для `/v1/embeddings`. |
 | `MEMORY_MCP_LMSTUDIO_LLM_MODEL` | `gpt-oss-20b` | LLM для `/v1/chat/completions`; если не задан, используется Ollama. |
-| `MEMORY_MCP_EMBEDDINGS_URL` | - | URL внешнего сервиса эмбеддингов (приоритетнее LM Studio). |
+
+#### Настройки векторного хранилища
+
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
 | `MEMORY_MCP_QDRANT_URL` | - | URL Qdrant. Если пуст, векторный поиск не активен. |
+
+#### Настройки фоновой индексации
+
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
 | `MEMORY_MCP_BACKGROUND_INDEXING_ENABLED` | `False` | Авто-запуск фоновой индексации при старте. |
 | `MEMORY_MCP_BACKGROUND_INDEXING_INTERVAL` | `60` | Интервал проверки `input/` (сек). |
+
+#### Настройки Smart Search
+
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
 | `SMART_SEARCH_SESSION_STORE_PATH` | `data/search_sessions.db` | Расположение БД для `SmartSearchEngine`. |
 | `SMART_SEARCH_MIN_CONFIDENCE` | `0.5` | Порог уверенности для LLM-уточнений. |
+
+#### Настройки больших контекстов
+
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
+| `MEMORY_MCP_LARGE_CONTEXT_MAX_TOKENS` | `131072` | Максимальный контекст модели (токенов). |
+| `MEMORY_MCP_LARGE_CONTEXT_PROMPT_RESERVE` | `5000` | Резерв токенов для промпта. |
+| `MEMORY_MCP_LARGE_CONTEXT_HIERARCHICAL_THRESHOLD` | `100000` | Порог для включения иерархической обработки (токенов). |
+| `MEMORY_MCP_LARGE_CONTEXT_ENABLE_HIERARCHICAL` | `True` | Включить иерархическую обработку. |
+| `MEMORY_MCP_LARGE_CONTEXT_USE_SMART_SEARCH` | `True` | Использовать smart_search для анализа контекста. |
+| `MEMORY_MCP_LARGE_CONTEXT_CACHE_SIZE` | `100` | Размер кэша для промежуточных результатов. |
+
+#### Настройки анализа качества (QUALITY_ANALYSIS_*)
+
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
 | `QUALITY_ANALYSIS_OLLAMA_MODEL` | `gpt-oss-20b:latest` | Модель Ollama для анализа качества (fallback, если нет LM Studio LLM). |
+| `QUALITY_ANALYSIS_OLLAMA_BASE_URL` | `http://localhost:11434` | URL Ollama сервера. |
 
 **Приоритет конфигурации эмбеддингов:**
 1. `MEMORY_MCP_EMBEDDINGS_URL` — прямой HTTP endpoint.
@@ -280,7 +348,7 @@ MEMORY_MCP_EMBEDDINGS_URL=http://embeddings:80
 MEMORY_MCP_LMSTUDIO_HOST=127.0.0.1
 MEMORY_MCP_LMSTUDIO_PORT=1234
 MEMORY_MCP_LMSTUDIO_MODEL=text-embedding-qwen3-embedding-0.6b  # для эмбеддингов
-MEMORY_MCP_LMSTUDIO_LLM_MODEL=                                  # для LLM (опционально, если не указана, используется Ollama)
+MEMORY_MCP_LMSTUDIO_LLM_MODEL=gpt-oss-20b                       # для LLM (опционально)
 
 # Для Docker
 MEMORY_MCP_DB_PATH=/app/data/memory_graph.db
@@ -353,6 +421,13 @@ pip install -e .
 
 # Инжест Telegram чатов
 python -m memory_mcp.cli.main ingest-telegram --chats-dir chats --db-path data/memory_graph.db
+
+# Основные команды
+memory_mcp check              # Проверка системы
+memory_mcp index              # Инкрементальная индексация
+memory_mcp index --force-full # Полная переиндексация
+memory_mcp search "query"     # Поиск
+memory_mcp stats              # Статистика
 ```
 
 ## Тестирование
@@ -360,6 +435,7 @@ python -m memory_mcp.cli.main ingest-telegram --chats-dir chats --db-path data/m
 - **Unit tests**: `pytest tests -q`
 - **CLI тесты**: сценарии в `tests/test_cli.py`
 - **Гибридный поиск**: `tests/test_mcp_server.py` проверяет FTS/ingest/search.
+- **Smart Search**: `tests/test_smart_search.py` проверяет интерактивный поиск.
 
 ## Стратегии группировки сообщений
 
@@ -425,6 +501,18 @@ mcp_client.call_tool("ingest_scraped_content", {
     "content": "Основной текст...",
     "title": "Заголовок"
 })
+
+# Индексация чата (фоновый режим)
+mcp_client.call_tool("index_chat", {
+    "chat": "MyChat",
+    "force_full": False,
+    "enable_smart_aggregation": True
+})
+
+# Проверка прогресса
+progress = mcp_client.call_tool("get_indexing_progress", {
+    "chat": "MyChat"  # опционально
+})
 ```
 
 **Процесс:** Валидация → Создание узлов графа → Генерация эмбеддингов → Сохранение в Qdrant
@@ -439,6 +527,29 @@ result = mcp_client.call_tool("search_memory", {
     "source": "telegram",  # опционально
     "tags": ["crypto"],     # опционально
     "date_from": "2024-01-01T00:00:00Z"
+})
+```
+
+**Smart Search (интерактивный):**
+```python
+# Первый запрос
+result1 = mcp_client.call_tool("smart_search", {
+    "query": "обсуждение криптовалют",
+    "top_k": 10
+})
+
+# Уточнение с обратной связью
+result2 = mcp_client.call_tool("smart_search", {
+    "query": "обсуждение криптовалют",
+    "session_id": result1["session_id"],
+    "feedback": [
+        {
+            "record_id": "msg-001",
+            "relevance": "relevant",
+            "comment": "Именно то, что нужно"
+        }
+    ],
+    "clarify": True
 })
 ```
 
@@ -459,18 +570,34 @@ MEMORY_MCP_LMSTUDIO_PORT=1234
 MEMORY_MCP_LMSTUDIO_MODEL=text-embedding-qwen3-embedding-0.6b
 ```
 
-**Использование:** Автоматически при индексации, при поиске с `include_embeddings=True`, или через `EmbeddingService.embed(text)`
+**Использование:** Автоматически при индексации, при поиске с `include_embeddings=True`, или через `generate_embedding` инструмент.
 
 ### Специализированные сценарии
 
 **Торговые сигналы:**
 ```python
-mcp_client.call_tool("store_trading_signal", {"symbol": "BTCUSDT", "signal_type": "momentum", "direction": "long"})
-mcp_client.call_tool("search_trading_patterns", {"query": "momentum"})
-mcp_client.call_tool("get_signal_performance", {"signal_id": "signal-001"})
+mcp_client.call_tool("store_trading_signal", {
+    "symbol": "BTCUSDT",
+    "signal_type": "momentum",
+    "direction": "long",
+    "entry": 50000.0,
+    "confidence": 85
+})
+mcp_client.call_tool("search_trading_patterns", {
+    "query": "momentum",
+    "symbol": "BTCUSDT"
+})
+mcp_client.call_tool("get_signal_performance", {
+    "signal_id": "signal-001"
+})
 ```
 
-**Мониторинг:** `mcp_client.call_tool("health", {})`, `mcp_client.call_tool("version", {})`
+**Мониторинг:** 
+```python
+health = mcp_client.call_tool("health", {})
+version = mcp_client.call_tool("version", {})
+stats = mcp_client.call_tool("get_statistics", {})
+```
 
 ### Схема потока данных
 

@@ -4,6 +4,150 @@
 
 ## [Unreleased]
 
+## [2.0.0] - 2025-01-XX
+
+### Удалено 🗑️
+
+#### Удаление deprecated инструментов (Breaking Change)
+
+**Удалены следующие deprecated инструменты:**
+- `ingest_records` → используйте `ingest` с `source_type='records'`
+- `ingest_scraped_content` → используйте `ingest` с `source_type='scraped'`
+- `search_memory` → используйте `search` с `search_type='hybrid'`
+- `smart_search` → используйте `search` с `search_type='smart'`
+- `search_by_embedding` → используйте `search` с `search_type='embedding'`
+- `similar_records` → используйте `search` с `search_type='similar'`
+- `batch_update_records` → используйте `batch_operations` с `operation='update'`
+- `batch_delete_records` → используйте `batch_operations` с `operation='delete'`
+- `batch_fetch_records` → используйте `batch_operations` с `operation='fetch'`
+- `get_graph_neighbors` → используйте `graph_query` с `query_type='neighbors'`
+- `find_graph_path` → используйте `graph_query` с `query_type='path'`
+- `get_related_records` → используйте `graph_query` с `query_type='related'`
+- `start_background_indexing` → используйте `background_indexing` с `action='start'`
+- `stop_background_indexing` → используйте `background_indexing` с `action='stop'`
+- `get_background_indexing_status` → используйте `background_indexing` с `action='status'`
+- `update_summaries` → используйте `summaries` с `action='update'`
+- `review_summaries` → используйте `summaries` с `action='review'`
+- `get_tags_statistics` → используйте `get_statistics` с `type='tags'`
+- `get_indexing_progress` → используйте `get_statistics` с `type='indexing'`
+
+**Результаты:**
+- Количество инструментов: 32 → 22 (сокращение на ~30%)
+- Упрощенный API с универсальными инструментами
+- Улучшенный выбор инструментов для LLM
+
+**Миграция:**
+Все старые инструменты были помечены как deprecated в версии 1.1.0. Для миграции используйте новые универсальные инструменты согласно таблице выше.
+
+**Файлы:**
+- `src/memory_mcp/mcp/server.py` — удалены deprecated инструменты из `list_tools()` и `call_tool()`
+- `pyproject.toml` — обновлена версия до 2.0.0
+
+## [1.1.0] - 2025-01-XX
+
+### Добавлено ✨
+
+#### Оптимизация инструментов MCP сервера (2025-01-XX)
+
+**Новые универсальные инструменты:**
+- **`search`** — универсальный инструмент поиска, объединяющий:
+  - `search_memory` (hybrid search)
+  - `smart_search` (LLM-assisted search)
+  - `search_by_embedding` (vector search)
+  - `similar_records` (similarity search)
+  - `search_trading_patterns` (trading patterns search)
+- **`batch_operations`** — универсальный инструмент для batch операций:
+  - `batch_update_records` (update)
+  - `batch_delete_records` (delete)
+  - `batch_fetch_records` (fetch)
+- **`graph_query`** — универсальный инструмент запросов к графу:
+  - `get_graph_neighbors` (neighbors)
+  - `find_graph_path` (path)
+  - `get_related_records` (related)
+- **`background_indexing`** — универсальный инструмент управления фоновой индексацией:
+  - `start_background_indexing` (start)
+  - `stop_background_indexing` (stop)
+  - `get_background_indexing_status` (status)
+- **`summaries`** — универсальный инструмент управления саммаризацией:
+  - `update_summaries` (update)
+  - `review_summaries` (review)
+- **`ingest`** — расширенный инструмент индексации:
+  - `ingest_records` (source_type='records')
+  - `ingest_scraped_content` (source_type='scraped')
+- **`get_statistics`** — расширенный инструмент статистики с поддержкой фильтрации:
+  - `get_statistics` (type='general')
+  - `get_tags_statistics` (type='tags')
+  - `get_indexing_progress` (type='indexing')
+
+**Обратная совместимость:**
+- Все старые инструменты помечены как `[DEPRECATED]` в описаниях
+- Старые инструменты продолжают работать и логируют предупреждения
+- План удаления deprecated инструментов: версия 2.0.0
+
+**Результаты оптимизации:**
+- Количество активных инструментов: 32 → 22 (сокращение на ~30%)
+- Улучшенная группировка логически связанных операций
+- Упрощенный выбор для LLM (меньше вариантов для выбора)
+- Полная обратная совместимость через deprecated алиасы
+
+**Технические детали:**
+- Добавлены новые универсальные схемы в `schema.py`:
+  - `UnifiedSearchRequest/Response`
+  - `BatchOperationsRequest/Response`
+  - `GraphQueryRequest/Response`
+  - `BackgroundIndexingRequest/Response`
+  - `SummariesRequest/Response`
+  - Расширен `IngestRequest` для поддержки `source_type`
+  - Расширен `GetStatisticsRequest` для поддержки `type`
+- Реализованы универсальные методы в `adapters.py`:
+  - `unified_search()`
+  - `batch_operations()`
+  - `graph_query()`
+  - `summaries()`
+  - `ingest_unified()`
+  - `get_statistics_unified()`
+- Обновлена регистрация инструментов в `server.py`:
+  - Добавлены новые универсальные инструменты
+  - Добавлены deprecated алиасы с логированием предупреждений
+  - Обновлен список features в `get_version_payload()`
+
+**Файлы:**
+- `src/memory_mcp/mcp/schema.py` — добавлены универсальные схемы
+- `src/memory_mcp/mcp/adapters.py` — реализованы универсальные методы
+- `src/memory_mcp/mcp/server.py` — обновлена регистрация инструментов
+- `pyproject.toml` — обновлена версия до 1.1.0
+
+### Изменено 📝
+
+- Все старые инструменты помечены как `[DEPRECATED]` в описаниях
+- Добавлено логирование предупреждений при использовании deprecated инструментов
+- Обновлен список features в `get_version_payload()` для включения новых инструментов
+
+### Устарело ⚠️
+
+Следующие инструменты помечены как deprecated и будут удалены в версии 2.0.0:
+- `ingest_records` → используйте `ingest` с `source_type='records'`
+- `ingest_scraped_content` → используйте `ingest` с `source_type='scraped'`
+- `search_memory` → используйте `search` с `search_type='hybrid'`
+- `smart_search` → используйте `search` с `search_type='smart'`
+- `search_by_embedding` → используйте `search` с `search_type='embedding'`
+- `similar_records` → используйте `search` с `search_type='similar'`
+- `batch_update_records` → используйте `batch_operations` с `operation='update'`
+- `batch_delete_records` → используйте `batch_operations` с `operation='delete'`
+- `batch_fetch_records` → используйте `batch_operations` с `operation='fetch'`
+- `get_graph_neighbors` → используйте `graph_query` с `query_type='neighbors'`
+- `find_graph_path` → используйте `graph_query` с `query_type='path'`
+- `get_related_records` → используйте `graph_query` с `query_type='related'`
+- `start_background_indexing` → используйте `background_indexing` с `action='start'`
+- `stop_background_indexing` → используйте `background_indexing` с `action='stop'`
+- `get_background_indexing_status` → используйте `background_indexing` с `action='status'`
+- `update_summaries` → используйте `summaries` с `action='update'`
+- `review_summaries` → используйте `summaries` с `action='review'`
+- `get_tags_statistics` → используйте `get_statistics` с `type='tags'`
+- `get_indexing_progress` → используйте `get_statistics` с `type='indexing'`
+
+## [Unreleased]
+
 ### Добавлено ✨
 
 #### Инструмент index_chat для MCP сервера (2025-01-09)
