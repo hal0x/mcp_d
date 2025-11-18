@@ -70,9 +70,14 @@ servers/memory-mcp/chats/
 servers/memory-mcp/artifacts/
 servers/memory-mcp/chroma_db/
 servers/memory-mcp/wheels/
+servers/memory-mcp/backups/
 
 # Бэкапы и данные halv1
 halv1/db/*
+
+# Все бэкапы (общее правило)
+**/backups/
+**/backup_*/
 
 # Состояние приложения и чувствительные данные
 halv1/bot_state.json
