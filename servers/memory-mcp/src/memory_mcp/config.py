@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -22,20 +21,16 @@ class Settings(BaseSettings):
     background_indexing_enabled: bool = Field(False, description="Включить фоновую индексацию при старте")
     background_indexing_interval: int = Field(60, description="Интервал проверки input директории в секундах")
 
-    host: str = Field(
-        "127.0.0.1", description="HTTP хост для streamable-http транспорта"
-    )
+    host: str = Field("127.0.0.1", description="HTTP хост для streamable-http транспорта")
     port: int = Field(8000, description="HTTP порт для streamable-http транспорта")
     log_level: str = Field("INFO", description="Уровень логирования")
     transport: Literal["stdio", "streamable-http"] = Field(
         "stdio", description="Транспорт для запуска MCP сервера"
     )
     debug: bool = Field(False, description="Включение расширенного логгирования")
-    
+
     # LM Studio настройки
-    lmstudio_host: str = Field(
-        "127.0.0.1", description="Хост LM Studio Server"
-    )
+    lmstudio_host: str = Field("127.0.0.1", description="Хост LM Studio Server")
     lmstudio_port: int = Field(1234, description="Порт LM Studio Server")
     lmstudio_model: str = Field(
         "text-embedding-qwen3-embedding-0.6b", description="Модель для эмбеддингов в LM Studio"
@@ -43,19 +38,19 @@ class Settings(BaseSettings):
     lmstudio_llm_model: str | None = Field(
         "gpt-oss-20b", description="Модель LLM для генерации текста в LM Studio (если None, используется Ollama)"
     )
-    
+
     # Дополнительные настройки
     db_path: str = Field("data/memory_graph.db", description="Путь к SQLite базе данных")
-    embeddings_url: SecretStr | None = Field(None, description="URL сервиса эмбеддингов (приоритет над LM Studio)")
-    qdrant_url: SecretStr | None = Field(None, description="URL Qdrant векторной базы данных")
-    
+    embeddings_url: SecretStr | None = Field(
+        None, description="URL сервиса эмбеддингов (приоритет над LM Studio)"
+    )
+    qdrant_url: SecretStr | None = Field(
+        None, description="URL Qdrant векторной базы данных"
+    )
+
     # Настройки больших контекстов
-    large_context_max_tokens: int = Field(
-        131072, description="Максимальный контекст модели (токенов)"
-    )
-    large_context_prompt_reserve: int = Field(
-        5000, description="Резерв токенов для промпта"
-    )
+    large_context_max_tokens: int = Field(131072, description="Максимальный контекст модели (токенов)")
+    large_context_prompt_reserve: int = Field(5000, description="Резерв токенов для промпта")
     large_context_hierarchical_threshold: int = Field(
         100000, description="Порог для включения иерархической обработки (токенов)"
     )
@@ -65,9 +60,7 @@ class Settings(BaseSettings):
     large_context_use_smart_search: bool = Field(
         True, description="Использовать smart_search для анализа контекста"
     )
-    large_context_cache_size: int = Field(
-        100, description="Размер кэша для промежуточных результатов"
-    )
+    large_context_cache_size: int = Field(100, description="Размер кэша для промежуточных результатов")
 
     model_config = SettingsConfigDict(
         env_prefix="MEMORY_MCP_",
@@ -75,13 +68,13 @@ class Settings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
-    
+
     def get_embeddings_url(self) -> str | None:
         """Получить URL эмбеддингов как строку (безопасно)."""
         if self.embeddings_url is None:
             return None
         return self.embeddings_url.get_secret_value()
-    
+
     def get_qdrant_url(self) -> str | None:
         """Получить URL Qdrant как строку (безопасно)."""
         if self.qdrant_url is None:
@@ -232,7 +225,6 @@ class QualityAnalysisSettings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     """Кэшированный доступ к настройкам."""
-    _apply_env_aliases()
     return Settings()
 
 
@@ -282,42 +274,3 @@ def get_quality_analysis_settings(config_path: Path | None = None) -> QualityAna
 
 
 __all__ = ["Settings", "QualityAnalysisSettings", "get_settings", "get_quality_analysis_settings"]
-
-
-def _apply_env_aliases() -> None:
-    """
-    Обеспечивает обратную совместимость со старыми именами переменных.
-    
-    Логика работы:
-    - Если целевая переменная (например, MEMORY_MCP_HOST) уже установлена, она используется как есть.
-    - Если целевая переменная не установлена, проверяются старые имена (алиасы) в порядке приоритета.
-    - Первое найденное значение из алиасов копируется в целевую переменную.
-    
-    Приоритет: новые переменные (MEMORY_MCP_*) > старые переменные (TG_DUMP_*, MEMORY_*, и т.д.)
-    """
-    alias_map = {
-        "MEMORY_MCP_HOST": ["TG_DUMP_HOST", "HOST"],
-        "MEMORY_MCP_PORT": ["TG_DUMP_PORT", "PORT"],
-        "MEMORY_MCP_LOG_LEVEL": ["MEMORY_LOG_LEVEL", "TG_DUMP_LOG_LEVEL", "LOG_LEVEL"],
-        "MEMORY_MCP_TRANSPORT": ["TG_DUMP_TRANSPORT", "TRANSPORT"],
-        "MEMORY_MCP_DB_PATH": ["MEMORY_DB_PATH"],
-        "MEMORY_MCP_LMSTUDIO_HOST": ["LMSTUDIO_HOST"],
-        "MEMORY_MCP_LMSTUDIO_PORT": ["LMSTUDIO_PORT"],
-        "MEMORY_MCP_LMSTUDIO_MODEL": ["LMSTUDIO_MODEL"],
-        "MEMORY_MCP_EMBEDDINGS_URL": ["EMBEDDINGS_URL"],
-        "MEMORY_MCP_QDRANT_URL": ["QDRANT_URL"],
-        "MEMORY_MCP_LARGE_CONTEXT_MAX_TOKENS": ["LARGE_CONTEXT_MAX_TOKENS"],
-        "MEMORY_MCP_LARGE_CONTEXT_ENABLE_HIERARCHICAL": ["LARGE_CONTEXT_ENABLE_HIERARCHICAL"],
-        "MEMORY_MCP_LARGE_CONTEXT_USE_SMART_SEARCH": ["LARGE_CONTEXT_USE_SMART_SEARCH"],
-    }
-
-    for target, candidates in alias_map.items():
-        # Если целевая переменная уже установлена, пропускаем
-        if os.getenv(target):
-            continue
-        # Ищем значение в старых переменных (алиасах)
-        for legacy in candidates:
-            value = os.getenv(legacy)
-            if value:
-                os.environ[target] = value
-                break

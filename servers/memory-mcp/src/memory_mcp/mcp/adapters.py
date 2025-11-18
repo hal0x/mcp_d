@@ -868,7 +868,7 @@ class MemoryServiceAdapter:
         if not self.embedding_service:
             raise ValueError(
                 "Embedding service is not configured. "
-                "Please set EMBEDDINGS_URL or LMSTUDIO_HOST/LMSTUDIO_PORT/LMSTUDIO_MODEL environment variables."
+                "Please set MEMORY_MCP_EMBEDDINGS_URL or MEMORY_MCP_LMSTUDIO_HOST/PORT/MODEL environment variables."
             )
         
         if not request.text or not request.text.strip():

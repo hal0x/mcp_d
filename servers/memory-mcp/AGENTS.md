@@ -98,7 +98,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
 ### Векторное хранилище (`src/memory_mcp/memory/vector_store.py`)
 - Обёртка над Qdrant (создание коллекции, upsert, поиск).
-- Конфигурируется через `QDRANT_URL`; gracefully выключается, если Qdrant недоступен.
+- Конфигурируется через `MEMORY_MCP_QDRANT_URL`; gracefully выключается, если Qdrant недоступен.
 
 ### Embed-сервис (`src/memory_mcp/memory/embeddings.py`)
 - HTTP клиент для `text-embeddings-inference` (или совместимых сервисов).

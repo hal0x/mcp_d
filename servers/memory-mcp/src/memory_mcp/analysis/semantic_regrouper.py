@@ -70,59 +70,24 @@ class SemanticRegrouper:
         prompt = self._create_regroup_prompt(sessions, chat_name, accumulative_context)
 
         # Отправляем запрос в LLM
-        try:
-            if not self.embedding_client:
-                logger.warning("LLM клиент не доступен, возвращаем оригинальные сессии")
-                return sessions
+        if not self.embedding_client:
+            raise ValueError("LLM клиент не доступен для семантической перегруппировки")
 
-            async with self.embedding_client:
-                # Проверяем, есть ли LLM модель для генерации текста
-                if isinstance(self.embedding_client, LMStudioEmbeddingClient):
-                    if not self.embedding_client.llm_model_name:
-                        # Используем Ollama как fallback
-                        logger.warning(
-                            "LLM модель не настроена в LM Studio, используем Ollama для перегруппировки"
-                        )
-                        from ..core.ollama_client import OllamaEmbeddingClient
-                        from ..config import get_quality_analysis_settings
-                        
-                        qa_settings = get_quality_analysis_settings()
-                        ollama_client = OllamaEmbeddingClient(
-                            llm_model_name=qa_settings.ollama_model,
-                        )
-                        async with ollama_client:
-                            response = await ollama_client.generate_summary(
-                                prompt=prompt,
-                                temperature=0.3,
-                                max_tokens=8192,
-                            )
-                    else:
-                        response = await self.embedding_client.generate_summary(
-                            prompt=prompt,
-                            temperature=0.3,
-                            max_tokens=8192,
-                        )
-                else:
-                    # Используем generate_summary для генерации текста
-                    response = await self.embedding_client.generate_summary(
-                        prompt=prompt,
-                        temperature=0.3,
-                        max_tokens=8192,
-                    )
-
-            # Парсим ответ от LLM
-            regrouped_sessions = self._parse_llm_response(response, sessions)
-
-            logger.info(
-                f"Перегруппировано {len(sessions)} сессий в {len(regrouped_sessions)} групп"
+        async with self.embedding_client:
+            response = await self.embedding_client.generate_summary(
+                prompt=prompt,
+                temperature=0.3,
+                max_tokens=8192,
             )
 
-            return regrouped_sessions
+        # Парсим ответ от LLM
+        regrouped_sessions = self._parse_llm_response(response, sessions)
 
-        except Exception as e:
-            logger.error(f"Ошибка при семантической перегруппировке: {e}")
-            # В случае ошибки возвращаем оригинальные сессии
-            return sessions
+        logger.info(
+            f"Перегруппировано {len(sessions)} сессий в {len(regrouped_sessions)} групп"
+        )
+
+        return regrouped_sessions
 
     def _create_regroup_prompt(
         self,

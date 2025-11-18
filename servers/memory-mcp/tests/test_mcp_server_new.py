@@ -20,9 +20,9 @@ from memory_mcp.mcp.server import get_health_payload, get_version_payload, call_
 def test_health_tool():
     """Test the health tool."""
     # Временно устанавливаем путь к БД для теста
-    original_db_path = os.environ.get("MEMORY_DB_PATH")
+    original_db_path = os.environ.get("MEMORY_MCP_DB_PATH")
     try:
-        os.environ["MEMORY_DB_PATH"] = ":memory:"  # Используем in-memory БД
+        os.environ["MEMORY_MCP_DB_PATH"] = ":memory:"  # Используем in-memory БД
         
         result = get_health_payload()
         assert result is not None
@@ -32,9 +32,9 @@ def test_health_tool():
         assert "config" in result
     finally:
         if original_db_path:
-            os.environ["MEMORY_DB_PATH"] = original_db_path
-        elif "MEMORY_DB_PATH" in os.environ:
-            del os.environ["MEMORY_DB_PATH"]
+            os.environ["MEMORY_MCP_DB_PATH"] = original_db_path
+        elif "MEMORY_MCP_DB_PATH" in os.environ:
+            del os.environ["MEMORY_MCP_DB_PATH"]
 
 
 def test_version_tool():
@@ -213,4 +213,3 @@ async def test_call_tool_unknown_tool():
     """Test that unknown tool raises an error."""
     with pytest.raises(RuntimeError, match="Неизвестный инструмент"):
         await call_tool("unknown_tool", {})
-

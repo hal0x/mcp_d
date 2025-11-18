@@ -624,56 +624,20 @@ class LargeContextProcessor:
     ) -> str:
         """Генерация саммаризации через LLM."""
         if not self.embedding_client:
-            logger.warning("LLM клиент не настроен, возвращаем пустую саммаризацию")
-            return ""
+            raise ValueError("LLM клиент не настроен для генерации саммаризации")
 
         full_prompt = f"{prompt or self._create_default_prompt(chat_name)}\n\n{context}"
 
-        try:
-            async with self.embedding_client:
-                if isinstance(self.embedding_client, LMStudioEmbeddingClient):
-                    # Проверяем, есть ли LLM модель для генерации текста
-                    if not self.embedding_client.llm_model_name:
-                        # Используем Ollama как fallback
-                        logger.warning(
-                            "LLM модель не настроена в LM Studio, используем Ollama"
-                        )
-                        from ..core.ollama_client import OllamaEmbeddingClient
-                        from ..config import get_quality_analysis_settings
-                        
-                        qa_settings = get_quality_analysis_settings()
-                        ollama_client = OllamaEmbeddingClient(
-                            llm_model_name=qa_settings.ollama_model,
-                        )
-                        async with ollama_client:
-                            summary = await ollama_client.generate_summary(
-                                prompt=full_prompt,
-                                temperature=0.3,
-                                max_tokens=131072,
-                                top_p=0.9,
-                                presence_penalty=0.1,
-                            )
-                    else:
-                        summary = await self.embedding_client.generate_summary(
-                            prompt=full_prompt,
-                            temperature=0.3,
-                            max_tokens=131072,  # Максимальный лимит
-                            top_p=0.9,
-                            presence_penalty=0.1,
-                        )
-                else:  # OllamaEmbeddingClient
-                    summary = await self.embedding_client.generate_summary(
-                        prompt=full_prompt,
-                        temperature=0.3,
-                        max_tokens=131072,
-                        top_p=0.9,
-                        presence_penalty=0.1,
-                    )
+        async with self.embedding_client:
+            summary = await self.embedding_client.generate_summary(
+                prompt=full_prompt,
+                temperature=0.3,
+                max_tokens=131072,  # Максимальный лимит
+                top_p=0.9,
+                presence_penalty=0.1,
+            )
 
-                return summary.strip()
-        except Exception as e:
-            logger.error(f"Ошибка генерации саммаризации: {e}", exc_info=True)
-            return f"Ошибка генерации саммаризации: {str(e)}"
+        return summary.strip()
 
     def _combine_summaries(self, summaries: List[Dict[str, Any]]) -> str:
         """Объединение нескольких саммаризаций в одну."""
