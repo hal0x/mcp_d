@@ -194,6 +194,10 @@ class MemoryServiceAdapter:
         _total_weight = _fts_weight_raw + _vector_weight_raw
         self._fts_weight = _fts_weight_raw / _total_weight
         self._vector_weight = _vector_weight_raw / _total_weight
+        # Параметр для Reciprocal Rank Fusion (стандартное значение 60)
+        self._rrf_k = 60
+        # Использовать RRF для объединения результатов (True) или простое объединение с весами (False)
+        self._use_rrf = True
 
     def close(self) -> None:
         try:
@@ -361,18 +365,47 @@ class MemoryServiceAdapter:
             duplicates_skipped=duplicates,
         )
 
+    def _reciprocal_rank_fusion(
+        self,
+        result_lists: list[list[SearchResultItem]],
+        k: int = 60,
+    ) -> dict[str, float]:
+        """
+        Объединяет результаты из разных источников используя Reciprocal Rank Fusion (RRF).
+        
+        Args:
+            result_lists: Список списков результатов из разных источников (FTS5, Vector, ChromaDB)
+            k: Параметр RRF (стандартное значение 60)
+            
+        Returns:
+            Словарь {record_id: rrf_score} отсортированный по убыванию score
+        """
+        rrf_scores: dict[str, float] = {}
+        
+        for results in result_lists:
+            for rank, item in enumerate(results, start=1):
+                # RRF score = 1 / (k + rank)
+                rrf_score = 1.0 / (k + rank)
+                # Суммируем scores для одинаковых record_id
+                rrf_scores[item.record_id] = rrf_scores.get(item.record_id, 0.0) + rrf_score
+        
+        return rrf_scores
+
     # Search
     def search(self, request: SearchRequest) -> SearchResponse:
+        # 1. FTS5 поиск
         rows, total_fts = self.graph.search_text(
             request.query,
-            limit=request.top_k,
+            limit=request.top_k * 2,  # Берем больше для RRF
             source=request.source,
             tags=request.tags,
             date_from=request.date_from,
             date_to=request.date_to,
         )
 
-        combined: dict[str, SearchResultItem] = {}
+        fts_results: list[SearchResultItem] = []
+        all_items: dict[str, SearchResultItem] = {}
+        
         for row in rows:
             # Получаем эмбеддинг из графа, если доступен
             embedding = None
@@ -404,9 +437,9 @@ class MemoryServiceAdapter:
                     except Exception:
                         pass
             
-            combined[row["node_id"]] = SearchResultItem(
+            item = SearchResultItem(
                 record_id=row["node_id"],
-                score=row["score"] * self._fts_weight,
+                score=row["score"],  # Оригинальный score, RRF пересчитает
                 content=row["snippet"],
                 source=row["source"],
                 timestamp=row["timestamp"],
@@ -414,42 +447,49 @@ class MemoryServiceAdapter:
                 metadata=row.get("metadata", {}),
                 embedding=embedding,
             )
+            fts_results.append(item)
+            all_items[row["node_id"]] = item
 
-        vector_results = []
+        # 2. Векторный поиск (Qdrant)
+        vector_results: list[SearchResultItem] = []
         if self.embedding_service and self.vector_store:
             query_vector = self.embedding_service.embed(request.query)
             if query_vector:
-                vector_results = self.vector_store.search(
+                vector_matches = self.vector_store.search(
                     query_vector,
-                    limit=request.top_k,
+                    limit=request.top_k * 2,  # Берем больше для RRF
                     source=request.source,
                     tags=request.tags,
                     date_from=request.date_from,
                     date_to=request.date_to,
                 )
 
-        for match in vector_results:
-            record_id = match.record_id
-            score = match.score * self._vector_weight
-            existing = combined.get(record_id)
-            if existing:
-                existing.score = max(existing.score, score)
-                continue
-            payload = match.payload or {}
-            snippet = None
-            preview = payload.get("content_preview")
-            if isinstance(preview, str) and preview.strip():
-                snippet = preview
-            new_item = self._build_item_from_graph(
-                record_id,
-                score,
-                snippet=snippet,
-            )
-            if new_item:
-                combined[record_id] = new_item
+                for match in vector_matches:
+                    record_id = match.record_id
+                    payload = match.payload or {}
+                    snippet = None
+                    preview = payload.get("content_preview")
+                    if isinstance(preview, str) and preview.strip():
+                        snippet = preview
+                    
+                    # Пытаемся получить полные данные из графа или используем данные из payload
+                    item = self._build_item_from_graph(
+                        record_id,
+                        match.score,  # Оригинальный score, RRF пересчитает
+                        snippet=snippet,
+                    )
+                    if item:
+                        vector_results.append(item)
+                        # Сохраняем в all_items, если еще нет (или обновляем, если векторный результат лучше)
+                        if record_id not in all_items:
+                            all_items[record_id] = item
+                        elif not all_items[record_id].embedding and item.embedding:
+                            # Обновляем эмбеддинг, если его не было
+                            all_items[record_id].embedding = item.embedding
 
-        # Поиск в ChromaDB коллекциях (chat_messages, chat_sessions, chat_tasks)
-        chromadb_results = self._search_chromadb_collections(
+        # 3. Поиск в ChromaDB коллекциях
+        chromadb_results: list[SearchResultItem] = []
+        chromadb_matches = self._search_chromadb_collections(
             request.query,
             limit=request.top_k,
             source=request.source,
@@ -458,51 +498,106 @@ class MemoryServiceAdapter:
             date_to=request.date_to,
         )
         
-        for match in chromadb_results:
+        for match in chromadb_matches:
             record_id = match.record_id
-            score = match.score * 0.05  # Очень низкий вес для ChromaDB результатов (дополнительный источник)
-            existing = combined.get(record_id)
-            if existing:
-                # FTS5 результаты имеют приоритет - не перезаписываем их ChromaDB результатами
-                # Только если это не FTS5 результат (score < 0.2) и ChromaDB результат значительно лучше
-                if existing.score < 0.2 and score > existing.score * 2.0:
-                    existing.score = score
-                # Если в ChromaDB результате нет эмбеддинга, но есть в существующем, сохраняем его
-                if existing.embedding and not match.embedding:
-                    pass  # Оставляем существующий эмбеддинг
-                continue
-            # Создаем новый элемент из ChromaDB результата только если его еще нет в combined
-            # Не перезаписываем результаты из FTS5, так как они более точные
-            if record_id not in combined:
-                # Пытаемся получить эмбеддинг из графа, если его нет в ChromaDB результате
-                if not match.embedding and record_id in self.graph.graph:
-                    node_data = self.graph.graph.nodes[record_id]
-                    emb_from_graph = node_data.get("embedding")
-                    if emb_from_graph is not None:
-                        # Преобразуем numpy массив в список, если нужно
-                        if hasattr(emb_from_graph, 'tolist'):
-                            emb_from_graph = emb_from_graph.tolist()
-                        elif not isinstance(emb_from_graph, list):
-                            try:
-                                emb_from_graph = list(emb_from_graph)
-                            except (TypeError, ValueError):
-                                emb_from_graph = None
-                        if emb_from_graph:
-                            # Создаем новый SearchResultItem с эмбеддингом из графа
-                            match = SearchResultItem(
-                                record_id=match.record_id,
-                                score=match.score,
-                                content=match.content,
-                                source=match.source,
-                                timestamp=match.timestamp,
-                                author=match.author,
-                                metadata=match.metadata,
-                                embedding=emb_from_graph,
-                            )
-                combined[record_id] = match
+            # Пытаемся получить эмбеддинг из графа, если его нет в ChromaDB результате
+            if not match.embedding and record_id in self.graph.graph:
+                node_data = self.graph.graph.nodes[record_id]
+                emb_from_graph = node_data.get("embedding")
+                if emb_from_graph is not None:
+                    # Преобразуем numpy массив в список, если нужно
+                    if hasattr(emb_from_graph, 'tolist'):
+                        emb_from_graph = emb_from_graph.tolist()
+                    elif not isinstance(emb_from_graph, list):
+                        try:
+                            emb_from_graph = list(emb_from_graph)
+                        except (TypeError, ValueError):
+                            emb_from_graph = None
+                    if emb_from_graph:
+                        # Создаем новый SearchResultItem с эмбеддингом из графа
+                        match = SearchResultItem(
+                            record_id=match.record_id,
+                            score=match.score,  # Оригинальный score, RRF пересчитает
+                            content=match.content,
+                            source=match.source,
+                            timestamp=match.timestamp,
+                            author=match.author,
+                            metadata=match.metadata,
+                            embedding=emb_from_graph,
+                        )
+            chromadb_results.append(match)
+            # Добавляем в all_items, если еще нет
+            if record_id not in all_items:
+                all_items[record_id] = match
 
-        total_combined = max(total_fts, len(combined))
-        results = sorted(combined.values(), key=lambda item: item.score, reverse=True)
+        # 4. Boost для точных совпадений в FTS5 результатах
+        query_words = set(request.query.lower().split())
+        for item in fts_results:
+            # Проверяем, содержатся ли все слова запроса в контенте
+            content_lower = item.content.lower()
+            matched_words = sum(1 for word in query_words if word in content_lower)
+            if matched_words == len(query_words) and len(query_words) > 0:
+                # Все слова найдены - добавляем boost 20%
+                item.score *= 1.2
+
+        # 5. Объединение результатов с помощью RRF или простого объединения
+        if self._use_rrf and (fts_results or vector_results or chromadb_results):
+            # Применяем RRF для объединения результатов
+            result_lists = []
+            if fts_results:
+                result_lists.append(fts_results)
+            if vector_results:
+                result_lists.append(vector_results)
+            if chromadb_results:
+                result_lists.append(chromadb_results)
+            
+            rrf_scores = self._reciprocal_rank_fusion(result_lists, k=self._rrf_k)
+            
+            # Обновляем scores в all_items на основе RRF
+            for record_id, rrf_score in rrf_scores.items():
+                if record_id in all_items:
+                    all_items[record_id].score = rrf_score
+            
+            # Сортируем по RRF score
+            results = sorted(all_items.values(), key=lambda item: item.score, reverse=True)
+        else:
+            # Простое объединение с весами (старая логика)
+            combined: dict[str, SearchResultItem] = {}
+            
+            # FTS5 результаты с весом
+            for item in fts_results:
+                item.score = item.score * self._fts_weight
+                combined[item.record_id] = item
+            
+            # Vector результаты с весом
+            for item in vector_results:
+                score = item.score * self._vector_weight
+                existing = combined.get(item.record_id)
+                if existing:
+                    existing.score = max(existing.score, score)
+                    # Обновляем эмбеддинг, если его не было
+                    if not existing.embedding and item.embedding:
+                        existing.embedding = item.embedding
+                else:
+                    item.score = score
+                    combined[item.record_id] = item
+            
+            # ChromaDB результаты с низким весом
+            for item in chromadb_results:
+                score = item.score * 0.05
+                existing = combined.get(item.record_id)
+                if existing:
+                    if existing.score < 0.2 and score > existing.score * 2.0:
+                        existing.score = score
+                    if not existing.embedding and item.embedding:
+                        existing.embedding = item.embedding
+                else:
+                    item.score = score
+                    combined[item.record_id] = item
+            
+            results = sorted(combined.values(), key=lambda item: item.score, reverse=True)
+
+        total_combined = max(total_fts, len(all_items))
         return SearchResponse(
             results=results[: request.top_k],
             total_matches=total_combined,
