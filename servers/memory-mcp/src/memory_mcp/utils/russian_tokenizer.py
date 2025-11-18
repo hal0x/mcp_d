@@ -277,10 +277,13 @@ class RussianTokenizer:
             return word.lower()
 
         try:
-            # Получаем нормальную форму слова через natasha
-            normalized = self.morph_vocab[word.lower()]
-            if normalized:
-                return normalized
+            # Получаем лексему (все формы слова) через natasha
+            # Первый элемент лексемы - это нормальная форма
+            lexeme = self.morph_vocab.get_lexeme(word.lower())
+            if lexeme and len(lexeme) > 0:
+                normalized = lexeme[0]
+                if normalized:
+                    return normalized
         except Exception as e:
             logger.debug(f"Ошибка нормализации слова '{word}': {e}")
 
@@ -407,18 +410,27 @@ class RussianTokenizer:
         """Основной метод токенизации"""
         return self.extract_tokens(text)
 
+    @lru_cache(maxsize=10000)
     def get_word_variants(self, word: str) -> Set[str]:
-        """Получение вариантов слова (основа + окончания)"""
-        variants = {word.lower()}
+        """Получение вариантов слова (исходное слово + нормальная форма)
+        
+        Возвращает множество вариантов слова для расширения поисковых запросов.
+        Включает исходное слово и его нормальную форму (лемму).
+        """
+        word_lower = word.lower()
+        variants = {word_lower}
 
         if not self.use_morphology or not self.morph_vocab:
             return variants
 
         try:
-            # Добавляем нормальную форму
-            normalized = self.morph_vocab[word.lower()]
-            if normalized:
-                variants.add(normalized)
+            # Получаем лексему (все формы слова) через natasha
+            # Первый элемент лексемы - это нормальная форма
+            lexeme = self.morph_vocab.get_lexeme(word_lower)
+            if lexeme and len(lexeme) > 0:
+                normalized = lexeme[0]
+                if normalized and normalized != word_lower:
+                    variants.add(normalized)
         except Exception as e:
             logger.debug(f"Ошибка получения вариантов для '{word}': {e}")
 

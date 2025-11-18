@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import networkx as nx
 
+from ..utils.russian_tokenizer import get_tokenizer, get_word_variants
 from .graph_types import EdgeType, GraphEdge, GraphNode, GraphPath, GraphStats, NodeType
 
 logger = logging.getLogger(__name__)
@@ -615,6 +616,30 @@ class TypedGraphMemory:
 
         # Формируем расширенный контент для FTS5
         extended_content = content or ""
+        
+        # Добавляем нормализованные формы слов для улучшения поиска
+        if extended_content:
+            try:
+                tokenizer = get_tokenizer()
+                # Токенизируем контент
+                tokens = tokenizer.tokenize(extended_content)
+                # Собираем нормализованные формы
+                normalized_forms = []
+                for token in tokens:
+                    # Получаем варианты слова (исходное + нормальная форма)
+                    variants = get_word_variants(token)
+                    # Добавляем нормализованные формы, отличные от исходного слова
+                    for variant in variants:
+                        if variant != token.lower():
+                            normalized_forms.append(variant)
+                
+                # Добавляем нормализованные формы к контенту
+                if normalized_forms:
+                    extended_content = f"{extended_content} {' '.join(normalized_forms)}"
+            except Exception as e:
+                # Если морфологическая обработка не удалась, продолжаем без неё
+                logger.debug(f"Ошибка при добавлении нормализованных форм для {node_id}: {e}")
+        
         if metadata_parts:
             extended_content = f"{extended_content}\n{' '.join(metadata_parts)}"
 
@@ -636,19 +661,43 @@ class TypedGraphMemory:
         self.conn.commit()
 
     def _prepare_match_expression(self, query: str) -> str:
-        """Подготовка выражения для FTS5 поиска.
+        """Подготовка выражения для FTS5 поиска с морфологическим расширением.
         
+        Использует морфологию для расширения запросов нормальными формами слов.
+        Для каждого слова добавляет его варианты (исходное + нормальная форма).
         Использует AND для нескольких токенов, чтобы найти документы,
         содержащие все слова из запроса (более строгий поиск).
         """
-        tokens = [token.strip() for token in query.replace('"', "").split() if token.strip()]
+        # Токенизируем запрос с помощью russian_tokenizer
+        tokenizer = get_tokenizer()
+        tokens = tokenizer.tokenize(query)
+        
         if not tokens:
+            # Fallback на простую токенизацию, если russian_tokenizer не работает
+            tokens = [token.strip() for token in query.replace('"', "").split() if token.strip()]
+            if not tokens:
+                return ""
+        
+        # Расширяем каждый токен его вариантами (исходное слово + нормальная форма)
+        expanded_tokens = []
+        for token in tokens:
+            variants = get_word_variants(token)
+            if len(variants) > 1:
+                # Если есть варианты, создаем OR выражение
+                variants_list = " OR ".join(f'"{v}"' for v in sorted(variants))
+                expanded_tokens.append(f"({variants_list})")
+            else:
+                # Если вариантов нет, используем исходное слово
+                expanded_tokens.append(f'"{token}"')
+        
+        if not expanded_tokens:
             return ""
-        if len(tokens) == 1:
-            return f'"{tokens[0]}"'
-        # Используем AND вместо OR для более релевантных результатов
-        # FTS5 поддерживает AND через пробел или явный оператор AND
-        return " AND ".join(f'"{token}"' for token in tokens)
+        
+        if len(expanded_tokens) == 1:
+            return expanded_tokens[0]
+        
+        # Объединяем все токены через AND
+        return " AND ".join(expanded_tokens)
 
     def _get_node_attrs(self, node_id: str) -> Dict[str, Any]:
         if node_id in self.graph:
@@ -703,7 +752,24 @@ class TypedGraphMemory:
         ).fetchall()
 
         results: List[Dict[str, Any]] = []
+        # Собираем все BM25 scores для нормализации
+        bm25_scores = []
         for row in rows:
+            bm25_score = row["score"] if row["score"] is not None else 0.0
+            bm25_scores.append(bm25_score)
+        
+        # Вычисляем min/max для нормализации
+        if bm25_scores:
+            min_bm25 = min(bm25_scores)
+            max_bm25 = max(bm25_scores)
+            bm25_range = max_bm25 - min_bm25 if max_bm25 != min_bm25 else 1.0
+        else:
+            min_bm25 = 0.0
+            max_bm25 = 0.0
+            bm25_range = 1.0
+        
+        result_count = 0  # Счетчик добавленных результатов (после фильтрации)
+        for idx, row in enumerate(rows):
             node_id = row["node_id"]
             attrs = self._get_node_attrs(node_id)
             props = attrs.get("properties") if isinstance(attrs.get("properties"), dict) else {}
@@ -748,22 +814,29 @@ class TypedGraphMemory:
             # BM25 score нормализуем: отрицательные значения (лучше релевантность) -> выше score
             # BM25 обычно возвращает отрицательные значения, где более отрицательные = лучше
             bm25_score = row["score"] if row["score"] is not None else 0.0
-            # Нормализуем BM25: если отрицательный, инвертируем и нормализуем к [0, 1]
-            # Используем более чувствительную нормализацию для сохранения различий
-            if bm25_score < 0:
-                # Отрицательные значения BM25 означают лучшую релевантность
-                # Преобразуем с сохранением различий: -20 -> 0.95, -10 -> 0.85, -5 -> 0.7, -1 -> 0.5, 0 -> 0.0
-                # Используем экспоненциальную нормализацию для лучшего распределения
-                abs_score = abs(bm25_score)
-                # Масштабируем: чем больше abs_score, тем выше релевантность
-                # Используем формулу: 1 - exp(-abs_score / scale), где scale = 5
-                score = 1.0 - (1.0 / (1.0 + abs_score / 3.0))
-                # Ограничиваем снизу для очень слабых совпадений
-                if score < 0.1:
-                    score = 0.1
+            
+            # Нормализуем BM25 с учетом диапазона scores для лучшего различения
+            if bm25_range > 0.001:
+                # Есть различия в scores - используем нормализацию по диапазону
+                if bm25_score < 0:
+                    # Отрицательные значения: более отрицательные = лучше
+                    # Нормализуем к [0.5, 1.0] с учетом позиции в диапазоне
+                    normalized = (bm25_score - min_bm25) / bm25_range
+                    score = 0.5 + (1.0 - normalized) * 0.5  # Инвертируем, так как меньшие значения лучше
+                else:
+                    # Положительные значения (редко)
+                    normalized = (bm25_score - min_bm25) / bm25_range
+                    score = 0.5 + normalized * 0.5
             else:
-                # Положительные значения (редко) обрабатываем как обычно
-                score = 1.0 / (1.0 + bm25_score) if bm25_score > 0 else 0.0
+                # Все scores одинаковые - используем позицию для различения
+                # FTS5 уже отсортировал результаты, первые результаты более релевантны
+                # Используем индекс в исходном списке для различения
+                # Нормализуем индекс к [0, 1] и используем для создания различий в scores
+                if len(rows) > 1:
+                    position_factor = 1.0 - (idx / (len(rows) - 1))  # От 1.0 (первый) до 0.0 (последний)
+                else:
+                    position_factor = 1.0  # Если только один результат
+                score = 0.5 + position_factor * 0.2  # Score от 0.7 (первый) до 0.5 (последний)
 
             snippet = row["snippet"] or ""
             content = row["content"] or props.get("content") or attrs.get("content") or ""
@@ -780,6 +853,7 @@ class TypedGraphMemory:
                     "metadata": dict(props) if props else dict(attrs),
                 }
             )
+            result_count += 1  # Увеличиваем счетчик после добавления результата
 
         total = len(results)
         results.sort(key=lambda item: item["score"], reverse=True)

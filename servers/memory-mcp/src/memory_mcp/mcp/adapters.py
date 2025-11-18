@@ -145,6 +145,18 @@ def _node_to_payload(
             )
 
     timestamp = _parse_timestamp(data.get("timestamp"))
+    
+    # Получаем эмбеддинг из данных узла
+    embedding = data.get("embedding")
+    if embedding is not None:
+        # Преобразуем numpy массив в список, если нужно
+        if hasattr(embedding, 'tolist'):
+            embedding = embedding.tolist()
+        elif not isinstance(embedding, list):
+            try:
+                embedding = list(embedding)
+            except (TypeError, ValueError):
+                embedding = None
 
     return MemoryRecordPayload(
         record_id=node_id,
@@ -156,6 +168,7 @@ def _node_to_payload(
         entities=entities,
         attachments=attachments,
         metadata=props,
+        embedding=embedding,
     )
 
 
@@ -458,33 +471,35 @@ class MemoryServiceAdapter:
                 if existing.embedding and not match.embedding:
                     pass  # Оставляем существующий эмбеддинг
                 continue
-            # Создаем новый элемент из ChromaDB результата
-            # Но пытаемся получить эмбеддинг из графа, если его нет в ChromaDB результате
-            if not match.embedding and record_id in self.graph.graph:
-                node_data = self.graph.graph.nodes[record_id]
-                emb_from_graph = node_data.get("embedding")
-                if emb_from_graph is not None:
-                    # Преобразуем numpy массив в список, если нужно
-                    if hasattr(emb_from_graph, 'tolist'):
-                        emb_from_graph = emb_from_graph.tolist()
-                    elif not isinstance(emb_from_graph, list):
-                        try:
-                            emb_from_graph = list(emb_from_graph)
-                        except (TypeError, ValueError):
-                            emb_from_graph = None
-                    if emb_from_graph:
-                        # Создаем новый SearchResultItem с эмбеддингом из графа
-                        match = SearchResultItem(
-                            record_id=match.record_id,
-                            score=match.score,
-                            content=match.content,
-                            source=match.source,
-                            timestamp=match.timestamp,
-                            author=match.author,
-                            metadata=match.metadata,
-                            embedding=emb_from_graph,
-                        )
-            combined[record_id] = match
+            # Создаем новый элемент из ChromaDB результата только если его еще нет в combined
+            # Не перезаписываем результаты из FTS5, так как они более точные
+            if record_id not in combined:
+                # Пытаемся получить эмбеддинг из графа, если его нет в ChromaDB результате
+                if not match.embedding and record_id in self.graph.graph:
+                    node_data = self.graph.graph.nodes[record_id]
+                    emb_from_graph = node_data.get("embedding")
+                    if emb_from_graph is not None:
+                        # Преобразуем numpy массив в список, если нужно
+                        if hasattr(emb_from_graph, 'tolist'):
+                            emb_from_graph = emb_from_graph.tolist()
+                        elif not isinstance(emb_from_graph, list):
+                            try:
+                                emb_from_graph = list(emb_from_graph)
+                            except (TypeError, ValueError):
+                                emb_from_graph = None
+                        if emb_from_graph:
+                            # Создаем новый SearchResultItem с эмбеддингом из графа
+                            match = SearchResultItem(
+                                record_id=match.record_id,
+                                score=match.score,
+                                content=match.content,
+                                source=match.source,
+                                timestamp=match.timestamp,
+                                author=match.author,
+                                metadata=match.metadata,
+                                embedding=emb_from_graph,
+                            )
+                combined[record_id] = match
 
         total_combined = max(total_fts, len(combined))
         results = sorted(combined.values(), key=lambda item: item.score, reverse=True)
@@ -579,6 +594,7 @@ class MemoryServiceAdapter:
                                         "chat": chat_name,
                                         **metadata,
                                     },
+                                    embedding=embedding,
                                 )
                                 
                                 # Если эмбеддинг есть, но записи нет в графе, синхронизируем

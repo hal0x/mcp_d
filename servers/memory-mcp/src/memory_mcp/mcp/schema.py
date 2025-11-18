@@ -41,6 +41,9 @@ class MemoryRecordPayload(BaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict, description="Произвольные дополнительные данные"
     )
+    embedding: Optional[list[float]] = Field(
+        None, description="Эмбеддинг записи, если доступен"
+    )
 
 
 class IngestRequest(BaseModel):

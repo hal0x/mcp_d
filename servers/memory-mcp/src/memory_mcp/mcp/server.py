@@ -1115,6 +1115,19 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
             try:
                 request = GetIndexingProgressRequest(**arguments)
                 result = adapter.get_indexing_progress(request)
+                # Логируем результат для отладки
+                progress_count = len(result.progress) if result.progress else 0
+                if request.chat:
+                    logger.info(
+                        f"get_indexing_progress для чата '{request.chat}': "
+                        f"найдено {progress_count} записей прогресса, "
+                        f"сообщение: {result.message or 'OK'}"
+                    )
+                else:
+                    logger.info(
+                        f"get_indexing_progress: найдено {progress_count} записей прогресса, "
+                        f"сообщение: {result.message or 'OK'}"
+                    )
                 return _format_tool_response(result.model_dump())
             except Exception as e:
                 logger.exception(f"get_indexing_progress failed: {e}")

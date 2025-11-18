@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import chromadb
 from rank_bm25 import BM25Okapi
 
+from ..utils.russian_tokenizer import get_tokenizer
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,12 +103,10 @@ class HybridSearchEngine:
 
     def _tokenize(self, text: str) -> List[str]:
         """
-        Токенизация текста
+        Токенизация текста с использованием russian_tokenizer для улучшенной обработки русского языка.
 
-        Простая реализация. Можно улучшить:
-        - Использовать библиотеки для русского языка (pymorphy2, nltk)
-        - Удалять стоп-слова
-        - Лемматизация
+        Использует морфологическую обработку для нормализации слов.
+        Fallback на простую токенизацию, если russian_tokenizer недоступен.
 
         Args:
             text: Текст для токенизации
@@ -114,14 +114,21 @@ class HybridSearchEngine:
         Returns:
             Список токенов
         """
-        # Простая токенизация по пробелам и знакам препинания
-        import re
-
-        # Приводим к нижнему регистру и разбиваем
-        text = text.lower()
-        tokens = re.findall(r"\b\w+\b", text)
-
-        return tokens
+        if not text:
+            return []
+        
+        try:
+            # Используем russian_tokenizer для улучшенной токенизации
+            tokenizer = get_tokenizer()
+            tokens = tokenizer.tokenize(text)
+            return tokens
+        except Exception as e:
+            # Fallback на простую токенизацию
+            logger.debug(f"Ошибка при токенизации через russian_tokenizer, используем fallback: {e}")
+            import re
+            text = text.lower()
+            tokens = re.findall(r"\b\w+\b", text)
+            return tokens
 
     def _bm25_search(self, query: str, top_k: int = 200) -> List[Tuple[str, float]]:
         """
