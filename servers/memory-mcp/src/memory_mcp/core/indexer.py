@@ -24,7 +24,8 @@ from ..analysis.markdown_renderer import MarkdownRenderer
 from ..analysis.session_clustering import SessionClusterer
 from ..analysis.session_segmentation import SessionSegmenter
 from ..analysis.session_summarizer import SessionSummarizer
-from ..analysis.smart_rolling_aggregator import SmartRollingAggregator
+# Отложенный импорт для избежания циклических зависимостей
+# from ..analysis.smart_rolling_aggregator import SmartRollingAggregator
 from ..analysis.time_processor import TimeProcessor
 from ..utils.naming import slugify
 from ..utils.url_validator import validate_embedding_text
@@ -182,6 +183,8 @@ class TwoLevelIndexer:
 
         # Инициализируем умный агрегатор
         if self.enable_smart_aggregation:
+            # Отложенный импорт для избежания циклических зависимостей
+            from ..analysis.smart_rolling_aggregator import SmartRollingAggregator
             self.smart_aggregator = SmartRollingAggregator(
                 chats_dir=Path("chats"),
                 use_smart_strategy=(self.aggregation_strategy == "smart"),

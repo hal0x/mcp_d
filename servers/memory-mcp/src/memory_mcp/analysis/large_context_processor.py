@@ -160,6 +160,214 @@ class LargeContextProcessor:
 
         return result
 
+    async def process_batch_sessions(
+        self,
+        sessions: List[Dict[str, Any]],
+        chat_name: str,
+        accumulative_context: Optional[str] = None,
+        summarization_prompt: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Обработка батча сессий с накопительным контекстом.
+
+        Args:
+            sessions: Список сессий для обработки
+            chat_name: Название чата
+            accumulative_context: Накопительный контекст
+            summarization_prompt: Промпт для саммаризации (опционально)
+
+        Returns:
+            Словарь с результатами обработки:
+            - summary: Общая саммаризация
+            - detailed_summaries: Детальные саммаризации для каждой сессии
+            - groups: Группы сообщений
+            - tokens_used: Использовано токенов
+        """
+        if not sessions:
+            return {
+                "summary": "",
+                "detailed_summaries": [],
+                "groups": [],
+                "tokens_used": 0,
+            }
+
+        # Объединяем все сообщения из сессий
+        all_messages = []
+        session_boundaries = []  # Границы сессий в объединенном списке
+
+        for session in sessions:
+            session_start = len(all_messages)
+            messages = session.get("messages", [])
+            all_messages.extend(messages)
+            session_end = len(all_messages)
+            session_boundaries.append({
+                "session_id": session.get("session_id", "unknown"),
+                "start_index": session_start,
+                "end_index": session_end,
+                "original_session": session,
+            })
+
+        # Оцениваем размер накопительного контекста
+        context_tokens = self.estimate_tokens(accumulative_context) if accumulative_context else 0
+        available_for_messages = self.available_tokens - context_tokens
+
+        # Если накопительный контекст слишком большой, используем минимальный резерв
+        if available_for_messages <= 0:
+            available_for_messages = self.available_tokens // 2
+
+        # Оцениваем размер всех сообщений
+        total_tokens = self.estimate_messages_tokens(all_messages)
+
+        logger.info(
+            f"Обработка батча сессий: {len(sessions)} сессий, "
+            f"{len(all_messages)} сообщений, ~{total_tokens} токенов "
+            f"(контекст: {context_tokens} токенов, доступно: {available_for_messages})"
+        )
+
+        # Если все помещается в один запрос
+        if total_tokens <= available_for_messages:
+            logger.info(f"Батч помещается в один запрос ({total_tokens} токенов)")
+            result = await self._process_batch_single_request(
+                all_messages, sessions, session_boundaries, chat_name,
+                accumulative_context, summarization_prompt
+            )
+        elif self.should_use_hierarchical(all_messages):
+            logger.info(
+                f"Используется иерархическая обработка батча "
+                f"({total_tokens} токенов > {self.hierarchical_threshold})"
+            )
+            result = await self._process_batch_hierarchical(
+                all_messages, sessions, session_boundaries, chat_name,
+                accumulative_context, summarization_prompt
+            )
+        else:
+            # Группируем и обрабатываем по частям
+            logger.info(f"Группировка батча и обработка по частям ({total_tokens} токенов)")
+            result = await self._process_batch_grouped(
+                all_messages, sessions, session_boundaries, chat_name,
+                accumulative_context, summarization_prompt
+            )
+
+        return result
+
+    async def _process_batch_single_request(
+        self,
+        all_messages: List[Dict[str, Any]],
+        sessions: List[Dict[str, Any]],
+        session_boundaries: List[Dict[str, Any]],
+        chat_name: str,
+        accumulative_context: Optional[str],
+        prompt: Optional[str],
+    ) -> Dict[str, Any]:
+        """Обработка батча одним запросом."""
+        # Формируем текст из сообщений
+        context_text = self._format_messages_for_llm(all_messages)
+
+        # Добавляем накопительный контекст в промпт, если он есть
+        enhanced_prompt = prompt or ""
+        if accumulative_context:
+            enhanced_prompt = f"{enhanced_prompt}\n\nНакопительный контекст чата:\n{accumulative_context}\n" if prompt else f"Накопительный контекст чата:\n{accumulative_context}\n"
+
+        # Генерируем саммаризацию
+        summary = await self._generate_summary(context_text, enhanced_prompt, chat_name)
+
+        # Создаем детальные саммаризации для каждой сессии (используем общую саммаризацию)
+        detailed_summaries = [
+            {"summary": summary, "session_id": session.get("session_id", "unknown")}
+            for session in sessions
+        ]
+
+        return {
+            "summary": summary,
+            "detailed_summaries": detailed_summaries,
+            "groups": [all_messages],
+            "tokens_used": self.estimate_tokens(context_text) + self.estimate_tokens(enhanced_prompt),
+        }
+
+    async def _process_batch_hierarchical(
+        self,
+        all_messages: List[Dict[str, Any]],
+        sessions: List[Dict[str, Any]],
+        session_boundaries: List[Dict[str, Any]],
+        chat_name: str,
+        accumulative_context: Optional[str],
+        prompt: Optional[str],
+    ) -> Dict[str, Any]:
+        """Иерархическая обработка батча."""
+        # Используем стандартную иерархическую обработку
+        enhanced_prompt = prompt or ""
+        if accumulative_context:
+            enhanced_prompt = f"{enhanced_prompt}\n\nНакопительный контекст чата:\n{accumulative_context}\n" if prompt else f"Накопительный контекст чата:\n{accumulative_context}\n"
+
+        result = await self._process_hierarchical(
+            all_messages, chat_name, enhanced_prompt
+        )
+
+        # Адаптируем результат для батча сессий
+        detailed_summaries = result.get("detailed_summaries", [])
+        if len(detailed_summaries) != len(sessions):
+            # Если количество не совпадает, создаем саммаризации для каждой сессии
+            overall_summary = result.get("summary", "")
+            detailed_summaries = [
+                {"summary": overall_summary, "session_id": session.get("session_id", "unknown")}
+                for session in sessions
+            ]
+
+        return {
+            "summary": result.get("summary", ""),
+            "detailed_summaries": detailed_summaries,
+            "groups": result.get("groups", []),
+            "tokens_used": result.get("tokens_used", 0),
+        }
+
+    async def _process_batch_grouped(
+        self,
+        all_messages: List[Dict[str, Any]],
+        sessions: List[Dict[str, Any]],
+        session_boundaries: List[Dict[str, Any]],
+        chat_name: str,
+        accumulative_context: Optional[str],
+        prompt: Optional[str],
+    ) -> Dict[str, Any]:
+        """Группировка батча и обработка по частям."""
+        # Группируем сообщения
+        groups = self.grouper.group_messages_adaptively(all_messages, chat_name)
+
+        enhanced_prompt = prompt or ""
+        if accumulative_context:
+            enhanced_prompt = f"{enhanced_prompt}\n\nНакопительный контекст чата:\n{accumulative_context}\n" if prompt else f"Накопительный контекст чата:\n{accumulative_context}\n"
+
+        # Обрабатываем каждую группу
+        group_summaries = []
+        total_tokens = 0
+
+        for group in groups:
+            group_text = self._format_messages_for_llm(group)
+            group_summary = await self._generate_summary(group_text, enhanced_prompt, chat_name)
+            group_summaries.append(group_summary)
+            total_tokens += self.estimate_tokens(group_text) + self.estimate_tokens(enhanced_prompt)
+
+        # Объединяем саммаризации групп
+        overall_summary = "\n\n".join(group_summaries)
+
+        # Создаем детальные саммаризации для каждой сессии
+        # Распределяем саммаризации групп по сессиям на основе границ
+        detailed_summaries = []
+        for session in sessions:
+            session_id = session.get("session_id", "unknown")
+            # Используем общую саммаризацию для каждой сессии
+            detailed_summaries.append({
+                "summary": overall_summary,
+                "session_id": session_id,
+            })
+
+        return {
+            "summary": overall_summary,
+            "detailed_summaries": detailed_summaries,
+            "groups": groups,
+            "tokens_used": total_tokens,
+        }
+
     async def _process_single_request(
         self,
         messages: List[Dict[str, Any]],

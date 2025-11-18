@@ -22,7 +22,9 @@ from ..utils.datetime_utils import format_datetime_display
 from ..config import get_settings
 from ..core.lmstudio_client import LMStudioEmbeddingClient
 from .adaptive_message_grouper import AdaptiveMessageGrouper
+from .batch_session_processor import BatchSessionProcessor
 from .context_manager import ContextManager
+from .semantic_regrouper import SemanticRegrouper
 from .session_segmentation import SessionSegmenter
 from .session_summarizer import SessionSummarizer
 
@@ -211,7 +213,17 @@ class SmartRollingAggregator:
             enable_caching=True,
         )
 
-        logger.info("Инициализирован SmartRollingAggregator")
+        # Инициализация батч-процессора и семантического перегруппировщика
+        self.batch_processor = BatchSessionProcessor(
+            max_tokens=settings.large_context_max_tokens,
+            prompt_reserve_tokens=settings.large_context_prompt_reserve,
+            embedding_client=self.embedding_client,
+        )
+        self.semantic_regrouper = SemanticRegrouper(
+            embedding_client=self.embedding_client,
+        )
+
+        logger.info("Инициализирован SmartRollingAggregator с батч-обработкой")
 
     def _parse_date(self, date_str: str) -> Optional[datetime]:
         """Парсит дату (использует общую утилиту)."""
@@ -896,13 +908,12 @@ class SmartRollingAggregator:
             "sessions": [],  # Добавляем пустой список сессий для совместимости
         }
 
-        # Создаем сессии для индексации в правильном порядке
-        sessions = self._create_sessions_for_indexing(
+        # Создаем временно сгруппированные сессии (временная группировка)
+        temp_sessions = self._create_sessions_for_indexing(
             windowed_messages, chat_name, state.chat_type
         )
-        stats["sessions"] = sessions
 
-        # Обрабатываем NOW окно отдельно
+        # Обрабатываем NOW окно отдельно (без батч-обработки)
         if "now" in windowed_messages:
             now_stats = await self._process_now_window(
                 windowed_messages["now"], chat_name, state, dry_run
@@ -928,15 +939,18 @@ class SmartRollingAggregator:
                 "summarize": window.summarize,
             }
 
-        # Создаем сессии для основного пайплайна индексации
-        sessions = self._create_sessions_for_indexing(
-            windowed_messages, chat_name, state.chat_type
-        )
-        stats["sessions"] = sessions
+        # Батч-обработка с семантической перегруппировкой
+        if not dry_run and temp_sessions:
+            processed_sessions = await self._process_sessions_with_batching(
+                temp_sessions, chat_name
+            )
+            stats["sessions"] = processed_sessions
+        else:
+            stats["sessions"] = temp_sessions
 
-        # Создаем/обновляем накопительный контекст чата
+        # Сохраняем накопительный контекст в файл
         if not dry_run:
-            await self._update_chat_context(chat_name, sessions, state.chat_type)
+            self.context_manager.flush_accumulative_context(chat_name)
 
         # Обновляем состояние
         state.last_aggregation_time = current_date
@@ -947,6 +961,87 @@ class SmartRollingAggregator:
         logger.info(f"Умная агрегация завершена для {chat_name}")
 
         return stats
+
+    async def _process_sessions_with_batching(
+        self,
+        sessions: List[Dict[str, Any]],
+        chat_name: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Обрабатывает сессии с использованием батч-обработки и семантической перегруппировки.
+
+        Алгоритм:
+        1. Получаем накопительный контекст
+        2. Создаем батчи из сессий
+        3. Для каждого батча:
+           a) Семантическая перегруппировка через LLM
+           b) Батч-саммаризация
+           c) Обновление накопительного контекста
+        4. Возвращаем обработанные сессии
+
+        Args:
+            sessions: Список временно сгруппированных сессий
+            chat_name: Название чата
+
+        Returns:
+            Список обработанных сессий
+        """
+        if not sessions:
+            return []
+
+        logger.info(
+            f"Батч-обработка {len(sessions)} сессий для чата {chat_name}"
+        )
+
+        # Получаем накопительный контекст
+        accumulative_context = self.context_manager.get_accumulative_context(chat_name)
+
+        # Создаем батчи
+        batches = self.batch_processor.create_batches(
+            sessions, accumulative_context
+        )
+
+        processed_sessions = []
+
+        # Обрабатываем каждый батч
+        for batch_idx, batch in enumerate(batches, 1):
+            logger.info(
+                f"Обработка батча {batch_idx}/{len(batches)}: {len(batch)} сессий"
+            )
+
+            # Получаем актуальный накопительный контекст для этого батча
+            current_context = self.context_manager.get_accumulative_context(chat_name)
+
+            # Шаг 1: Семантическая перегруппировка
+            regrouped_sessions = await self.semantic_regrouper.regroup_sessions(
+                batch, chat_name, current_context
+            )
+
+            # Шаг 2: Батч-саммаризация перегруппированных сессий
+            batch_result = await self.batch_processor.process_batch(
+                regrouped_sessions,
+                chat_name,
+                current_context,
+                processing_type="summarize",
+            )
+
+            # Шаг 3: Обновляем накопительный контекст после каждого обработанного батча
+            for processed_session in batch_result.get("sessions", []):
+                session_summary = processed_session.get("summary", "")
+                self.context_manager.update_context_after_session(
+                    chat_name, processed_session, session_summary
+                )
+                processed_sessions.append(processed_session)
+
+            logger.info(
+                f"Батч {batch_idx} обработан: {len(batch_result.get('sessions', []))} сессий"
+            )
+
+        logger.info(
+            f"Батч-обработка завершена: {len(processed_sessions)} обработанных сессий"
+        )
+
+        return processed_sessions
 
     def _create_sessions_for_indexing(
         self,

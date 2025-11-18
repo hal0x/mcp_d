@@ -39,6 +39,10 @@ class ContextManager:
         self.enable_cache = enable_cache
         self._context_cache: Dict[str, Any] = {}  # Кэш для больших контекстов
         self._cache_size = cache_size
+        
+        # Промежуточный контекст в памяти во время индексации
+        self._accumulative_contexts: Dict[str, str] = {}  # chat_name -> накопительный контекст
+        self._session_summaries: Dict[str, List[Dict[str, Any]]] = {}  # chat_name -> список саммаризаций сессий
 
     def get_previous_context(
         self, chat_name: str, current_session_id: str, max_sessions: int = 10
@@ -379,6 +383,148 @@ class ContextManager:
     def clear_cache(self) -> None:
         """Очистка кэша контекста."""
         self._context_cache.clear()
+
+    def get_accumulative_context(self, chat_name: str) -> str:
+        """
+        Возвращает накопительный контекст для использования в группировке.
+
+        Args:
+            chat_name: Название чата
+
+        Returns:
+            Накопительный контекст в виде строки
+        """
+        # Сначала проверяем промежуточный контекст в памяти
+        if chat_name in self._accumulative_contexts:
+            return self._accumulative_contexts[chat_name]
+
+        # Если нет в памяти, загружаем из файла
+        chat_context = self._get_chat_context(chat_name)
+        if chat_context:
+            # Сохраняем в памяти для быстрого доступа
+            self._accumulative_contexts[chat_name] = chat_context
+            return chat_context
+
+        return ""
+
+    def update_context_after_session(
+        self,
+        chat_name: str,
+        session: Dict[str, Any],
+        session_summary: Optional[str] = None,
+    ) -> None:
+        """
+        Обновляет накопительный контекст после обработки сессии/дня.
+
+        Args:
+            chat_name: Название чата
+            session: Обработанная сессия
+            session_summary: Саммаризация сессии (опционально)
+        """
+        # Инициализируем структуры для чата, если их еще нет
+        if chat_name not in self._accumulative_contexts:
+            # Загружаем существующий контекст из файла
+            existing_context = self._get_chat_context(chat_name)
+            self._accumulative_contexts[chat_name] = existing_context or ""
+
+        if chat_name not in self._session_summaries:
+            self._session_summaries[chat_name] = []
+
+        # Добавляем саммаризацию сессии
+        session_id = session.get("session_id", "unknown")
+        time_range = session.get("time_range", "unknown")
+        window = session.get("window", "unknown")
+        message_count = session.get("message_count", len(session.get("messages", [])))
+
+        session_info = {
+            "session_id": session_id,
+            "time_range": time_range,
+            "window": window,
+            "message_count": message_count,
+            "summary": session_summary or session.get("summary", ""),
+        }
+
+        self._session_summaries[chat_name].append(session_info)
+
+        # Обновляем накопительный контекст
+        # Берем последние N саммаризаций для контекста
+        recent_summaries = self._session_summaries[chat_name][-20:]  # Последние 20 сессий
+
+        # Формируем обновленный контекст
+        context_parts = []
+
+        # Добавляем существующий контекст, если он есть
+        existing_context = self._accumulative_contexts[chat_name]
+        if existing_context:
+            context_parts.append(f"Предыдущий контекст:\n{existing_context}\n")
+
+        # Добавляем саммаризации последних сессий
+        context_parts.append("Последние сессии:\n")
+        for sess_info in recent_summaries:
+            summary = sess_info.get("summary", "")
+            if summary:
+                context_parts.append(
+                    f"- {sess_info['session_id']} ({sess_info['time_range']}, "
+                    f"окно: {sess_info['window']}): {summary[:300]}"
+                )
+
+        # Объединяем и ограничиваем размер
+        new_context = "\n".join(context_parts)
+        if len(new_context) > self.max_context_size:
+            # Обрезаем до максимального размера, оставляя последние части
+            new_context = new_context[-self.max_context_size:]
+
+        self._accumulative_contexts[chat_name] = new_context
+
+        logger.debug(
+            f"Обновлен накопительный контекст для {chat_name}: "
+            f"{len(self._session_summaries[chat_name])} сессий, "
+            f"{len(new_context)} символов"
+        )
+
+    def flush_accumulative_context(self, chat_name: str) -> None:
+        """
+        Сохраняет накопительный контекст в файл и очищает память.
+
+        Args:
+            chat_name: Название чата
+        """
+        if chat_name not in self._accumulative_contexts:
+            return
+
+        context = self._accumulative_contexts[chat_name]
+        if not context:
+            return
+
+        # Сохраняем в файл через существующий метод
+        context_dir = Path("artifacts/chat_contexts")
+        context_dir.mkdir(exist_ok=True)
+        context_file = context_dir / f"{chat_name}_context.md"
+
+        try:
+            with open(context_file, "w", encoding="utf-8") as f:
+                f.write(context)
+            logger.info(f"Накопительный контекст сохранен в {context_file}")
+
+            # Очищаем память (но оставляем в кэше)
+            del self._accumulative_contexts[chat_name]
+            if chat_name in self._session_summaries:
+                del self._session_summaries[chat_name]
+
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении накопительного контекста: {e}")
+
+    def clear_accumulative_context(self, chat_name: str) -> None:
+        """
+        Очищает накопительный контекст в памяти (не сохраняя в файл).
+
+        Args:
+            chat_name: Название чата
+        """
+        if chat_name in self._accumulative_contexts:
+            del self._accumulative_contexts[chat_name]
+        if chat_name in self._session_summaries:
+            del self._session_summaries[chat_name]
 
     def _empty_context(self) -> Dict[str, Any]:
         """Возвращает пустой контекст"""

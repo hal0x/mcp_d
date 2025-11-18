@@ -1,7 +1,9 @@
 """Analysis functionality for Telegram Dump Manager."""
 
 from .adaptive_message_grouper import AdaptiveMessageGrouper
+from .batch_session_processor import BatchSessionProcessor
 from .context_aware_processor import ContextAwareProcessor
+from .semantic_regrouper import SemanticRegrouper
 from .context_manager import ContextManager
 from .day_grouping import DayGroupingSegmenter
 from .entity_extraction import EntityExtractor
@@ -32,4 +34,6 @@ __all__ = [
     "AdaptiveMessageGrouper",
     "LargeContextProcessor",
     "ContextAwareProcessor",
+    "BatchSessionProcessor",
+    "SemanticRegrouper",
 ]

@@ -45,7 +45,7 @@ memory-mcp/
 ### MCP сервер (`src/memory_mcp/mcp/server.py`)
 - Использует стандартный MCP Server (`mcp.server.Server`), регистрирует инструменты через `@server.list_tools()` и `@server.call_tool()`.
 - Располагает `MemoryServiceAdapter`, который объединяет FTS и Qdrant-поиск.
-- Читает настройки из переменных окружения (`MEMORY_DB_PATH`, `QDRANT_URL`, `EMBEDDINGS_URL`, `LMSTUDIO_HOST`, `LMSTUDIO_PORT`, `LMSTUDIO_MODEL`).
+- Читает настройки из `Settings` (`MEMORY_MCP_*`, совместимые с `MEMORY_*`/`TG_DUMP_*` алиасами): пути БД/артефактов, LM Studio, embeddings и Qdrant.
 
 #### Почему используется стандартный MCP Server
 
@@ -102,41 +102,72 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
 ### Embed-сервис (`src/memory_mcp/memory/embeddings.py`)
 - HTTP клиент для `text-embeddings-inference` (или совместимых сервисов).
-- Функция `build_embedding_service_from_env()` подхватывает `EMBEDDINGS_URL`.
+- Функция `build_embedding_service_from_env()` читает `MEMORY_MCP_EMBEDDINGS_URL` (алиас `EMBEDDINGS_URL`) или параметры LM Studio.
 
 ### Индексаторы (`src/memory_mcp/indexing/*`)
 - Unified интерфейс `BaseIndexer`.
 - `TelegramIndexer` → нормализованные `MemoryRecord`.
 - CLI команда `ingest-telegram` вызывает индексатор + `MemoryIngestor`.
 
+### Smart Search движок (`src/memory_mcp/search/*`)
+- `SmartSearchEngine` объединяет адаптер памяти, `ArtifactsReader` и `SearchSessionStore` для интерактивного поиска.
+- Сессии многократного поиска сохраняются в `data/search_sessions.db` (настраивается `SMART_SEARCH_SESSION_STORE_PATH`) и позволяют применять обратную связь (`feedback`).
+- `hybrid_search.py` и `search_explainer.py` обеспечивают подсветку источников (граф, Qdrant, артефакты) и пояснения к результатам.
+- Порог уверенности и стратегия уточняющих вопросов управляются через `SMART_SEARCH_MIN_CONFIDENCE` и связанные настройки `QualityAnalysis`.
+
+### Менеджмент фоновой индексации
+- `_active_indexing_jobs` в `mcp.server` отслеживает жизненный цикл индексаций (`start_background_indexing`, `stop_background_indexing`, `get_background_indexing_status`).
+- Стадии включают очистку старых данных, загрузку чатов, оптимизацию SQLite (VACUUM/ANALYZE) и проверку целостности, чтобы диагностировать узкие места.
+- `MemoryServiceAdapter` и CLI используют общий менеджер для чтения/обновления статусов, что позволяет отображать прогресс и предотвращать параллельные full-rebuild для одного чата.
+- Настройки фоновой индексации (`MEMORY_MCP_BACKGROUND_INDEXING_ENABLED`, `MEMORY_MCP_BACKGROUND_INDEXING_INTERVAL`) включают периодический обход `input/` и безопасное завершение при остановке сервера.
+
 ## MCP инструменты
 
-### Список всех инструментов
+### Категории и назначение
 
-Memory MCP сервер предоставляет следующие инструменты:
+Все инструменты описаны и регистрируются в `src/memory_mcp/mcp/server.py::list_tools()`. Параметры и схемы запросов
+синхронизированы с обработчиками в `call_tool()`, поэтому при добавлении нового инструмента нужно обновлять оба места
+(и тесты `tests/test_mcp_server*.py`).
 
-1. **`health`** — Проверка состояния MCP сервера и конфигурации
-2. **`version`** — Получение информации о версии сервера и доступных возможностях
-3. **`ingest_records`** — Приём пачки записей памяти в хранилище
-4. **`search_memory`** — Поиск по памяти (FTS + векторный)
-5. **`fetch_record`** — Получение полной записи по идентификатору
-6. **`store_trading_signal`** — Сохранение торгового сигнала в хранилище памяти
-7. **`search_trading_patterns`** — Поиск сохранённых торговых паттернов и сигналов
-8. **`get_signal_performance`** — Получение метрик производительности торгового сигнала
-9. **`ingest_scraped_content`** — Инжест скрапленного веб-контента в память
+**Системные**
+- `health` — проверка зависимостей, конфигурации и доступности базы данных/векторного стора.
+- `version` — версия сервера, список включённых features; используется клиентами для capability detection.
 
-### Планируемые инструменты
+**Индексация и управление данными**
+- `ingest_records`, `ingest_scraped_content`, `index_chat`, `start_background_indexing`, `stop_background_indexing`,
+  `get_background_indexing_status`, `get_available_chats` — загрузка данных (Telegram, веб, incremental input) и контроль фоновых задач.
+- `import_records`, `export_records` — массовые операции ввода/вывода в форматах JSONL/архив с вложениями.
+- `update_record`, `batch_update_records`, `batch_delete_records`, `batch_fetch_records` —
+  редактирование и выборки без повторного конфигурирования MCP клиента.
+- `update_summaries`, `review_summaries` — пересборка саммаризаций и QA workflow для готовых обзоров.
 
-Рекомендуемые инструменты для расширения функциональности:
+**Поиск и аналитика**
+- `search_memory` (гибрид BM25+вектор), `smart_search` (LLM-assisted, сессии, feedback), `search_by_embedding`,
+  `similar_records`, `search_explain`.
+- `get_statistics`, `get_indexing_progress` — покрытие источников, свежесть данных, прогресс индексации.
+- `analyze_entities`, `search_trading_patterns`, `get_signal_performance`, `store_trading_signal` — аналитика и оценка торговых паттернов.
 
-- **Управление**: `update_record`, `delete_record`, `batch_update_records`
-- **Статистика**: `get_statistics`, `get_indexing_progress`
-- **Граф знаний**: `get_graph_neighbors`, `find_graph_path`, `build_insight_graph`, `get_related_records`
-- **Саммаризация**: `update_summaries`, `review_summaries`
-- **Экспорт/импорт**: `export_records`, `import_records`
-- **Расширенный поиск**: `search_by_embedding`, `similar_records`, `search_explain`
-- **Аналитика**: `analyze_entities`, `get_timeline`, `get_tags_statistics`
-- **Эмбеддинги**: `generate_embedding`
+**Граф знаний и навигация**
+- `get_graph_neighbors`, `find_graph_path`, `get_related_records`, `build_insight_graph` — traversal по `TypedGraphMemory`,
+  построение insight-графов и получение соседей/путей для объяснения связей.
+
+**Дополнительные сервисы**
+- `get_tags_statistics`, `get_timeline` — временные и теговые отчёты для UX.
+- `generate_embedding` — прямой вызов сервиса эмбеддингов; упрощает отладку и внешние интеграции.
+
+> ⚠️ **Советы**: перечисленные инструменты имеют строгие схемы (`schema.py`). Перед изменением аргументов синхронизируйте:
+> 1. `Tool.inputSchema`
+> 2. Pydantic модель запроса/ответа
+> 3. Документацию в этом файле и `README.md`
+> 4. Смежные тесты (`tests/test_mcp_server*.py`, `tests/test_trading_memory.py`, `tests/test_smart_search.py`)
+
+### Роадмап
+
+Актуальный список инициатив фиксируется в `QUALITY_IMPROVEMENT_PLAN.md`. В фокусе 2024Q2:
+- вынесение декларативного реестра инструментов (единый источник правды для `list_tools`, `call_tool`, документации),
+- нормализаторы аргументов (ISO даты, массивы тегов, агрегаторы) для всех CLI/MCP потоков,
+- менеджер фоновых задач с атомарными статусами и диагностикой,
+- авто-проверки документации (CI убедится, что новые инструменты описаны в `AGENTS.md` и `README.md`).
 
 ### Стандарт описания инструментов
 - **Первая строка**: лаконичное действие на английском (≤90 символов), начинаем с глагола.
@@ -167,7 +198,7 @@ Memory MCP сервер предоставляет следующие инстр
 - Локально: БД создаётся в `data/memory_graph.db` (относительно корня проекта)
 - Docker: БД монтируется из `data/` в `/app/data/memory_graph.db`
 - Убедитесь, что директория существует и доступна для записи
-- Проверьте `MEMORY_DB_PATH` (относительный путь разрешается от `pyproject.toml`)
+- Проверьте `MEMORY_MCP_DB_PATH` (или алиас `MEMORY_DB_PATH`); относительный путь резолвится от `pyproject.toml`.
 
 **Примечание**: `list_tools()` вызывается только при запросе списка инструментов клиентом, не при запуске сервера.
 
@@ -175,15 +206,16 @@ Memory MCP сервер предоставляет следующие инстр
 
 | Инструмент | Назначение | Ключевые параметры |
 |------------|------------|-------------------|
-| `ingest_records` | Приём записей в хранилище | `records[]` (MemoryRecordPayload) |
-| `search_memory` | Гибридный поиск (FTS + векторный) | `query`, `top_k`, `source`, `tags`, `date_from`, `date_to` |
-| `fetch_record` | Получение записи по ID | `record_id` |
-| `health` | Проверка состояния сервера | - |
-| `version` | Информация о версии | - |
+| `ingest_records` | Приём пачки `MemoryRecordPayload` | `records[]`, `upsert`, `include_embeddings` |
+| `search_memory` | Гибридный поиск (BM25 + вектор) | `query`, `top_k`, фильтры `source/tags/date` |
+| `smart_search` | Интерактивный поиск с обратной связью | `query`, `session_id`, `feedback[]`, `clarify` |
+| `index_chat` | Индексация Telegram чата | `chat`, `aggregation_strategy`, фильтры дат, `enable_smart_aggregation` |
+| `export_records` | Экспорт записей/вложений | `source`, `tags`, `date_from`, `include_embeddings`, `format` |
+| `import_records` | Импорт JSONL/директорий с вложениями | `records`, `attachments_dir`, `conflict_policy` |
+| `generate_embedding` | Получение векторов без записи в БД | `texts[]`, `model_override`, `normalize` |
 | `store_trading_signal` | Сохранение торгового сигнала | `symbol`, `signal_type`, `direction`, `entry`, `confidence` |
-| `search_trading_patterns` | Поиск торговых паттернов | `query`, `symbol`, `limit` |
-| `get_signal_performance` | Метрики производительности сигнала | `signal_id` |
-| `ingest_scraped_content` | Индексация веб-контента | `url`, `content`, `title`, `metadata` |
+| `search_trading_patterns` | Поиск по торговым сигналам | `query`, `symbol`, `limit`, `min_confidence` |
+| `start_background_indexing` | Запуск фонового ingest по входной директории | `job_id`, `source_path`, `force_full` |
 
 **Примечание**: Подробные описания параметров и примеры использования см. в `src/memory_mcp/mcp/server.py` и разделе [Сценарии использования](#сценарии-использования).
 
@@ -200,50 +232,61 @@ Memory MCP сервер предоставляет следующие инстр
 - **Сериализация datetime**: Автоматически в ISO 8601 формат при возврате результатов
 - **Подсказки/use cases**: добавляйте bullet tips (зависимости, multi-step сценарии, фильтры)
 - **Troubleshooting**: перечисляйте частые ошибки (пустой `steps`, неправильный формат `env`, отсутствие `records`)
+- **CI guard**: тесты `tests/test_mcp_server.py` и линтеры проверяют наличие документации; PR без обновления `AGENTS.md`
+  для новых инструментов считается неполным.
 
 ## Конфигурация и запуск
 
 ### Переменные окружения
 
-| Переменная | По умолчанию | Описание |
-|------------|--------------|----------|
-| `MEMORY_DB_PATH` | `data/memory_graph.db` | Путь к SQLite БД (относительный путь разрешается от корня проекта) |
-| `QDRANT_URL` | - | URL векторного хранилища Qdrant (опционально) |
-| `EMBEDDINGS_URL` | - | URL сервиса эмбеддингов (**приоритет 1**) |
-| `LMSTUDIO_HOST` | `127.0.0.1` | Хост LM Studio Server (**приоритет 2**) |
-| `LMSTUDIO_PORT` | `1234` | Порт LM Studio Server |
-| `LMSTUDIO_MODEL` | `text-embedding-qwen3-embedding-0.6b` | Модель для эмбеддингов в LM Studio (endpoint `/v1/embeddings`) |
-| `LMSTUDIO_LLM_MODEL` | - | Модель LLM для генерации текста в LM Studio (endpoint `/v1/chat/completions`). Если не указана, используется Ollama с `gpt-oss-20b:latest` |
-| `MEMORY_LOG_LEVEL` | `INFO` | Уровень логирования MCP сервера |
-| `PORT` / `TG_DUMP_PORT` | `8050` | Порт HTTP сервера |
-| `HOST` | `0.0.0.0` | Хост HTTP сервера |
-| `LOG_LEVEL` | `INFO` | Уровень логирования HTTP сервера |
+Основные настройки читаются через `pydantic.BaseSettings` с префиксом `MEMORY_MCP_`. Алиасы обеспечивают обратную
+совместимость со старыми именами (`MEMORY_*`, `TG_DUMP_*`). Сначала используйте новую переменную, а затем, при
+необходимости, добавляйте алиас.
+
+| Новая переменная | Алиасы | По умолчанию | Описание |
+|------------------|--------|--------------|----------|
+| `MEMORY_MCP_DB_PATH` | `MEMORY_DB_PATH` | `data/memory_graph.db` | Путь к SQLite БД. Относительный путь резолвится от `pyproject.toml`. |
+| `MEMORY_MCP_HOST` | `HOST`, `TG_DUMP_HOST` | `127.0.0.1` | HTTP-хост для FastAPI транспорта. |
+| `MEMORY_MCP_PORT` | `PORT`, `TG_DUMP_PORT` | `8050` | HTTP-порт сервера / CLI RPC. |
+| `MEMORY_MCP_LOG_LEVEL` | `MEMORY_LOG_LEVEL`, `LOG_LEVEL` | `INFO` | Уровень логирования MCP. |
+| `MEMORY_MCP_TRANSPORT` | `TRANSPORT` | `stdio` | Транспорт запуска (`stdio`, `streamable-http`). |
+| `MEMORY_MCP_LMSTUDIO_HOST` | `LMSTUDIO_HOST` | `127.0.0.1` | LM Studio (эмбеддинги/LLM) хост. |
+| `MEMORY_MCP_LMSTUDIO_PORT` | `LMSTUDIO_PORT` | `1234` | LM Studio порт. |
+| `MEMORY_MCP_LMSTUDIO_MODEL` | `LMSTUDIO_MODEL` | `text-embedding-qwen3-embedding-0.6b` | Модель для `/v1/embeddings`. |
+| `MEMORY_MCP_LMSTUDIO_LLM_MODEL` | - | `gpt-oss-20b` | LLM для `/v1/chat/completions`; если не задан, используется Ollama. |
+| `MEMORY_MCP_EMBEDDINGS_URL` | `EMBEDDINGS_URL` | - | URL внешнего сервиса эмбеддингов (приоритетнее LM Studio). |
+| `MEMORY_MCP_QDRANT_URL` | `QDRANT_URL` | - | URL Qdrant. Если пуст, векторный поиск не активен. |
+| `MEMORY_MCP_BACKGROUND_INDEXING_ENABLED` | - | `False` | Авто-запуск фоновой индексации при старте. |
+| `MEMORY_MCP_BACKGROUND_INDEXING_INTERVAL` | - | `60` | Интервал проверки `input/` (сек). |
+| `SMART_SEARCH_SESSION_STORE_PATH` | - | `data/search_sessions.db` | Расположение БД для `SmartSearchEngine`. |
+| `SMART_SEARCH_MIN_CONFIDENCE` | - | `0.5` | Порог уверенности для LLM-уточнений. |
+| `QUALITY_ANALYSIS_OLLAMA_MODEL` | - | `gpt-oss-20b:latest` | Модель Ollama для анализа качества (fallback, если нет LM Studio LLM). |
 
 **Приоритет конфигурации эмбеддингов:**
-1. `EMBEDDINGS_URL` (если установлен, используется напрямую)
-2. `LMSTUDIO_HOST` + `LMSTUDIO_PORT` + `LMSTUDIO_MODEL` (формируется URL автоматически)
+1. `MEMORY_MCP_EMBEDDINGS_URL` (или алиас `EMBEDDINGS_URL`) — прямой HTTP endpoint.
+2. `MEMORY_MCP_LMSTUDIO_HOST` + `MEMORY_MCP_LMSTUDIO_PORT` + `MEMORY_MCP_LMSTUDIO_MODEL` — формируется локальный URL.
 
 **Важно - разделение моделей:**
-- **Эмбеддинги**: `LMSTUDIO_MODEL` используется ТОЛЬКО для генерации эмбеддингов через endpoint `/v1/embeddings`
+- **Эмбеддинги**: `MEMORY_MCP_LMSTUDIO_MODEL` используется ТОЛЬКО для генерации эмбеддингов через endpoint `/v1/embeddings`.
 - **Генерация текста (LLM)**: 
-  - Если установлен `LMSTUDIO_LLM_MODEL`, используется для генерации текста через endpoint `/v1/chat/completions`
-  - Если `LMSTUDIO_LLM_MODEL` не установлен, используется Ollama с моделью `gpt-oss-20b:latest` (из `QUALITY_ANALYSIS_OLLAMA_MODEL`)
+  - Если установлен `MEMORY_MCP_LMSTUDIO_LLM_MODEL`, используется для генерации текста через endpoint `/v1/chat/completions`.
+  - Если `MEMORY_MCP_LMSTUDIO_LLM_MODEL` не установлен, используется Ollama с моделью `gpt-oss-20b:latest` (см. `QUALITY_ANALYSIS_OLLAMA_MODEL`).
 - **НЕ используйте модель эмбеддингов для генерации текста** - это вызовет ошибку "Model is not llm"
 
 **Примеры:**
 ```bash
 # Вариант 1: text-embeddings-inference
-EMBEDDINGS_URL=http://embeddings:80
+MEMORY_MCP_EMBEDDINGS_URL=http://embeddings:80
 
 # Вариант 2: LM Studio
-LMSTUDIO_HOST=127.0.0.1
-LMSTUDIO_PORT=1234
-LMSTUDIO_MODEL=text-embedding-qwen3-embedding-0.6b  # для эмбеддингов
-LMSTUDIO_LLM_MODEL=                                  # для LLM (опционально, если не указана, используется Ollama)
+MEMORY_MCP_LMSTUDIO_HOST=127.0.0.1
+MEMORY_MCP_LMSTUDIO_PORT=1234
+MEMORY_MCP_LMSTUDIO_MODEL=text-embedding-qwen3-embedding-0.6b  # для эмбеддингов
+MEMORY_MCP_LMSTUDIO_LLM_MODEL=                                  # для LLM (опционально, если не указана, используется Ollama)
 
 # Для Docker
-MEMORY_DB_PATH=/app/data/memory_graph.db
-QDRANT_URL=http://qdrant:6333
+MEMORY_MCP_DB_PATH=/app/data/memory_graph.db
+MEMORY_MCP_QDRANT_URL=http://qdrant:6333
 ```
 
 ### Docker Compose развертывание
@@ -410,12 +453,12 @@ result = mcp_client.call_tool("search_memory", {
 **Конфигурация:**
 ```bash
 # Приоритет 1: text-embeddings-inference
-EMBEDDINGS_URL=http://embeddings:80
+MEMORY_MCP_EMBEDDINGS_URL=http://embeddings:80
 
 # Приоритет 2: LM Studio
-LMSTUDIO_HOST=127.0.0.1
-LMSTUDIO_PORT=1234
-LMSTUDIO_MODEL=text-embedding-qwen3-embedding-0.6b
+MEMORY_MCP_LMSTUDIO_HOST=127.0.0.1
+MEMORY_MCP_LMSTUDIO_PORT=1234
+MEMORY_MCP_LMSTUDIO_MODEL=text-embedding-qwen3-embedding-0.6b
 ```
 
 **Использование:** Автоматически при индексации, при поиске с `include_embeddings=True`, или через `EmbeddingService.embed(text)`
@@ -463,7 +506,7 @@ Search Query
 
 **Первоначальная настройка:**
 ```bash
-export EMBEDDINGS_URL=http://embeddings:80  # или LM Studio
+export MEMORY_MCP_EMBEDDINGS_URL=http://embeddings:80  # или LM Studio
 memory_mcp check && memory_mcp index
 ```
 
@@ -478,7 +521,7 @@ memory_mcp search "новые темы"      # Поиск
 ```python
 mcp_client.call_tool("ingest_records", {"records": [...]})
 mcp_client.call_tool("search_memory", {"query": "...", "top_k": 10})
-mcp_client.call_tool("fetch_record", {"record_id": "..."})
+mcp_client.call_tool("batch_fetch_records", {"record_ids": ["msg-001", "msg-002"]})
 ```
 
 ## Документация
