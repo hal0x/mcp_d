@@ -20,6 +20,8 @@ def mock_adapter():
         results=[],
         total_matches=0,
     )
+    # Добавляем атрибут graph для EntityContextEnricher
+    adapter.graph = MagicMock()
     return adapter
 
 
@@ -74,14 +76,39 @@ async def test_smart_search_basic(smart_search_engine):
     """Тест базового поиска."""
     request = SmartSearchRequest(query="cryptocurrencies", top_k=10)
 
-    response = await smart_search_engine.search(request)
+    # Мокаем LLM компоненты для избежания реальных вызовов
+    with patch.object(
+        smart_search_engine.query_understanding, "understand_query", new_callable=AsyncMock
+    ) as mock_understanding, patch.object(
+        smart_search_engine.intent_analyzer, "analyze_intent", new_callable=AsyncMock
+    ) as mock_intent:
+        from memory_mcp.search.query_understanding import QueryUnderstanding
+        from memory_mcp.search.query_intent_analyzer import QueryIntent
+        
+        mock_understanding.return_value = QueryUnderstanding(
+            original_query="cryptocurrencies",
+            sub_queries=["cryptocurrencies"],
+            implicit_requirements=[],
+            alternative_formulations=[],
+            key_concepts=["cryptocurrencies"],
+            concept_relationships={},
+            enhanced_query="cryptocurrencies",
+        )
+        mock_intent.return_value = QueryIntent(
+            intent_type="informational",
+            confidence=0.8,
+            recommended_db_weight=0.6,
+            recommended_artifact_weight=0.4,
+        )
+        
+        response = await smart_search_engine.search(request)
 
-    assert response.session_id is not None
-    assert response.confidence_score >= 0.0
-    assert response.confidence_score <= 1.0
-    assert isinstance(response.results, list)
-    assert response.artifacts_found >= 0
-    assert response.db_records_found >= 0
+        assert response.session_id is not None
+        assert response.confidence_score >= 0.0
+        assert response.confidence_score <= 1.0
+        assert isinstance(response.results, list)
+        assert response.artifacts_found >= 0
+        assert response.db_records_found >= 0
 
 
 @pytest.mark.asyncio
@@ -170,6 +197,13 @@ def test_smart_search_combine_results(smart_search_engine):
     # Проверяем, что результаты отсортированы по score
     scores = [r.score for r in combined]
     assert scores == sorted(scores, reverse=True)
+    
+    # Тест с кастомными весами
+    combined_custom = smart_search_engine._combine_results(
+        db_results, artifact_results, top_k=10,
+        db_weight=0.8, artifact_weight=0.2
+    )
+    assert len(combined_custom) == 2
 
 
 def test_smart_search_calculate_confidence(smart_search_engine):

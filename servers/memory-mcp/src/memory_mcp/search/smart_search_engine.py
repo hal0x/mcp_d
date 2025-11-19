@@ -51,12 +51,33 @@ class SmartSearchEngine:
         # Инициализируем обогатитель контекста сущностей
         from .entity_context_enricher import EntityContextEnricher
         from ..analysis.entity_dictionary import get_entity_dictionary
+        from ..memory.embeddings import build_embedding_service_from_env
+        from ..memory.vector_store import build_entity_vector_store_from_env
         
         entity_dict = get_entity_dictionary(graph=adapter.graph if hasattr(adapter, 'graph') else None)
+        embedding_service = build_embedding_service_from_env()
+        entity_vector_store = build_entity_vector_store_from_env()
+        
         self.entity_enricher = EntityContextEnricher(
             entity_dictionary=entity_dict,
             graph=adapter.graph if hasattr(adapter, 'graph') else None,
+            entity_vector_store=entity_vector_store,
+            embedding_service=embedding_service,
         )
+        
+        # Инициализируем ConnectionGraphBuilder для улучшения результатов через граф связей
+        from .search_explainer import ConnectionGraphBuilder
+        self.connection_builder = ConnectionGraphBuilder(
+            typed_graph_memory=adapter.graph if hasattr(adapter, 'graph') else None
+        )
+        
+        # Инициализируем анализатор намерений запроса
+        from .query_intent_analyzer import QueryIntentAnalyzer
+        self.intent_analyzer = QueryIntentAnalyzer()
+        
+        # Инициализируем движок понимания запросов
+        from .query_understanding import QueryUnderstandingEngine
+        self.query_understanding = QueryUnderstandingEngine()
 
     def _get_llm_client(self) -> Optional[LMStudioEmbeddingClient | OllamaEmbeddingClient]:
         """Получение или создание LLM клиента."""
@@ -98,8 +119,69 @@ class SmartSearchEngine:
         Returns:
             Результаты поиска с интерактивными элементами
         """
-        # Обогащаем запрос контекстом сущностей
-        enriched_query = self.entity_enricher.enrich_query_with_entity_context(request.query)
+        # Глубокое понимание запроса через LLM
+        understanding = await self.query_understanding.understand_query(request.query)
+        
+        # Используем улучшенный запрос, если он был сгенерирован
+        query_to_use = understanding.enhanced_query if understanding.enhanced_query != request.query else request.query
+        
+        # Если есть подзапросы, используем первый как основной (или объединяем)
+        if understanding.sub_queries and len(understanding.sub_queries) > 1:
+            # Для сложных запросов используем первый подзапрос как основной
+            query_to_use = understanding.sub_queries[0]
+            logger.debug(
+                f"Запрос декомпозирован на {len(understanding.sub_queries)} подзапросов, "
+                f"используется: {query_to_use}"
+            )
+        
+        # Анализируем намерение запроса для адаптации стратегии поиска
+        intent = await self.intent_analyzer.analyze_intent(query_to_use)
+        
+        # Получаем персонализированные веса на основе истории сессий
+        personalization = self._get_personalization_context()
+        
+        # Адаптируем параметры поиска на основе намерения и персонализации
+        adapted_top_k = intent.recommended_top_k or request.top_k
+        adapted_db_weight = intent.recommended_db_weight
+        adapted_artifact_weight = intent.recommended_artifact_weight
+        
+        # Применяем персонализацию (смешиваем рекомендации намерения с историей)
+        if personalization:
+            # Смешиваем веса: 70% намерение, 30% персонализация
+            adapted_db_weight = (
+                adapted_db_weight * 0.7 + personalization.get("db_weight", adapted_db_weight) * 0.3
+            )
+            adapted_artifact_weight = (
+                adapted_artifact_weight * 0.7 + personalization.get("artifact_weight", adapted_artifact_weight) * 0.3
+            )
+            logger.debug(
+                f"Применена персонализация: БД={personalization.get('db_weight', 0.6):.2f}, "
+                f"артифакты={personalization.get('artifact_weight', 0.4):.2f}"
+            )
+        
+        logger.debug(
+            f"Намерение запроса: {intent.intent_type} (уверенность: {intent.confidence:.2f}), "
+            f"адаптированные веса: БД={adapted_db_weight:.2f}, артифакты={adapted_artifact_weight:.2f}"
+        )
+        
+        # Обогащаем запрос контекстом сущностей (полный профиль + семантически похожие)
+        # Используем улучшенный запрос из understanding
+        enriched_query = self.entity_enricher.enrich_query_with_entity_context(query_to_use)
+        
+        # Добавляем неявные требования и ключевые концепции в контекст
+        if understanding.implicit_requirements:
+            implicit_context = " [неявно: " + ", ".join(understanding.implicit_requirements[:3]) + "]"
+            enriched_query = enriched_query + implicit_context
+        
+        if understanding.key_concepts:
+            concepts_context = " [концепции: " + ", ".join(understanding.key_concepts[:5]) + "]"
+            enriched_query = enriched_query + concepts_context
+        
+        # Расширяем запрос связанными сущностями через граф
+        enriched_query = self.entity_enricher.expand_query_with_related_entities(
+            enriched_query, 
+            entities=None  # Сущности будут извлечены автоматически
+        )
         
         # Получаем или создаем сессию
         session_id = request.session_id
@@ -117,15 +199,25 @@ class SmartSearchEngine:
         original_query = request.query
         request.query = enriched_query
 
-        # Выполняем параллельный поиск
+        # Выполняем параллельный поиск с адаптированным top_k
+        original_top_k = request.top_k
+        request.top_k = adapted_top_k
         db_results, artifact_results = self._parallel_search(request)
+        request.top_k = original_top_k
         
         # Восстанавливаем оригинальный запрос для ответа
         request.query = original_query
 
-        # Объединяем результаты
+        # Объединяем результаты с адаптированными весами
         combined_results = self._combine_results(
-            db_results, artifact_results, request.top_k
+            db_results, artifact_results, request.top_k,
+            db_weight=adapted_db_weight,
+            artifact_weight=adapted_artifact_weight,
+        )
+
+        # Улучшаем результаты через граф связей
+        combined_results = self._boost_results_with_graph_connections(
+            combined_results, original_query
         )
 
         # Вычисляем confidence score
@@ -247,21 +339,27 @@ class SmartSearchEngine:
         db_results: List[SearchResultItem],
         artifact_results: List[SearchResultItem],
         top_k: int,
+        db_weight: float = 0.6,
+        artifact_weight: float = 0.4,
     ) -> List[SearchResultItem]:
         """
-        Объединение результатов с весами (БД: 0.6, артифакты: 0.4).
+        Объединение результатов с настраиваемыми весами.
 
         Args:
             db_results: Результаты из БД
             artifact_results: Результаты из артифактов
             top_k: Максимальное количество результатов
+            db_weight: Вес для результатов БД (по умолчанию 0.6)
+            artifact_weight: Вес для результатов артифактов (по умолчанию 0.4)
 
         Returns:
             Объединенный список результатов
         """
-        # Применяем веса
-        db_weight = 0.6
-        artifact_weight = 0.4
+        # Нормализуем веса, чтобы они в сумме давали 1.0
+        total_weight = db_weight + artifact_weight
+        if total_weight > 0:
+            db_weight = db_weight / total_weight
+            artifact_weight = artifact_weight / total_weight
 
         # Нормализуем scores и применяем веса
         all_results: Dict[str, SearchResultItem] = {}
@@ -515,4 +613,155 @@ class SmartSearchEngine:
             )
 
         return None
+
+    def _boost_results_with_graph_connections(
+        self, results: List[SearchResultItem], query: str
+    ) -> List[SearchResultItem]:
+        """
+        Повышение релевантности результатов на основе графа связей.
+
+        Args:
+            results: Список результатов поиска
+            query: Исходный запрос
+
+        Returns:
+            Список результатов с обновленными scores
+        """
+        if not self.connection_builder or not self.connection_builder.graph:
+            return results
+
+        # Извлекаем сущности из запроса
+        query_entities = self.entity_enricher.extract_entities_from_query(query)
+        if not query_entities:
+            return results
+
+        # Собираем названия сущностей для поиска связей
+        entity_names = [e.get("value", "") for e in query_entities if e.get("value")]
+
+        # Для каждого результата ищем пути к сущностям запроса
+        boosted_results = []
+        for result in results:
+            result_id = result.record_id
+            
+            # Ищем пути между сущностями запроса и результатом
+            connections = self.connection_builder.find_connections(
+                query_entities=entity_names,
+                result_id=result_id,
+                max_paths=3,
+                max_depth=3,
+            )
+
+            # Применяем буст на основе найденных путей
+            boost_factor = 1.0
+            if connections:
+                # Находим самый короткий путь
+                min_path_length = min(c.path_length for c in connections)
+                
+                # Буст зависит от длины пути:
+                # - путь длиной 1: +0.3
+                # - путь длиной 2: +0.2
+                # - путь длиной 3: +0.1
+                if min_path_length == 1:
+                    boost_factor = 1.3
+                elif min_path_length == 2:
+                    boost_factor = 1.2
+                elif min_path_length == 3:
+                    boost_factor = 1.1
+                
+                # Дополнительный буст на основе силы пути
+                max_strength = max(c.path_strength for c in connections)
+                boost_factor += max_strength * 0.1  # До +0.1 за силу связи
+                
+                logger.debug(
+                    f"Буст для результата {result_id}: "
+                    f"путь={min_path_length}, сила={max_strength:.2f}, "
+                    f"фактор={boost_factor:.2f}"
+                )
+
+            # Применяем буст к score
+            result.score *= boost_factor
+            boosted_results.append(result)
+
+        # Пересортировываем результаты по обновленным scores
+        boosted_results.sort(key=lambda x: x.score, reverse=True)
+        
+        return boosted_results
+
+    def _get_personalization_context(self) -> Optional[Dict[str, Any]]:
+        """
+        Получение контекста персонализации на основе общей истории сессий.
+
+        Returns:
+            Словарь с персонализированными весами или None
+        """
+        try:
+            # Получаем общую историю обратной связи
+            feedback_history = self.session_store.get_feedback_for_learning(limit=100)
+            
+            if not feedback_history:
+                return None
+
+            # Анализируем успешные запросы
+            relevant_count = 0
+            irrelevant_count = 0
+            db_preference = 0.0
+            artifact_preference = 0.0
+            total_feedback = 0
+
+            for feedback in feedback_history:
+                relevance = feedback.get("relevance", "")
+                result_id = feedback.get("result_id", "")
+                artifact_path = feedback.get("artifact_path")
+                
+                # Определяем тип результата по result_id или artifact_path
+                result_type = ""
+                if artifact_path or (result_id and result_id.startswith("artifact:")):
+                    result_type = "artifact"
+                elif result_id:
+                    result_type = "db_record"
+                
+                if relevance == "relevant":
+                    relevant_count += 1
+                    # Учитываем тип результата для предпочтений
+                    if result_type == "db_record":
+                        db_preference += 1.0
+                    elif result_type == "artifact":
+                        artifact_preference += 1.0
+                elif relevance == "irrelevant":
+                    irrelevant_count += 1
+                
+                total_feedback += 1
+
+            if total_feedback == 0:
+                return None
+
+            # Вычисляем адаптированные веса на основе предпочтений
+            if db_preference + artifact_preference > 0:
+                db_ratio = db_preference / (db_preference + artifact_preference)
+                artifact_ratio = artifact_preference / (db_preference + artifact_preference)
+                
+                # Нормализуем к диапазону 0.4-0.8 для каждого веса
+                adapted_db_weight = 0.4 + (db_ratio * 0.4)
+                adapted_artifact_weight = 0.4 + (artifact_ratio * 0.4)
+            else:
+                # Если нет предпочтений, используем значения по умолчанию
+                adapted_db_weight = 0.6
+                adapted_artifact_weight = 0.4
+
+            logger.debug(
+                f"Персонализация: {relevant_count} релевантных, {irrelevant_count} нерелевантных, "
+                f"предпочтения: БД={db_preference:.1f}, артифакты={artifact_preference:.1f}"
+            )
+
+            return {
+                "db_weight": adapted_db_weight,
+                "artifact_weight": adapted_artifact_weight,
+                "relevant_count": relevant_count,
+                "irrelevant_count": irrelevant_count,
+                "total_feedback": total_feedback,
+            }
+
+        except Exception as e:
+            logger.warning(f"Ошибка при получении контекста персонализации: {e}")
+            return None
 
