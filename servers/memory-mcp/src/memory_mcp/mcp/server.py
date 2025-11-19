@@ -88,6 +88,10 @@ from .schema import (
     UpdateRecordResponse,
     UpdateSummariesRequest,
     UpdateSummariesResponse,
+    SearchEntitiesRequest,
+    SearchEntitiesResponse,
+    GetEntityProfileRequest,
+    GetEntityProfileResponse,
 )
 
 
@@ -479,6 +483,51 @@ async def list_tools() -> List[Tool]:
                     }
                 },
                 "required": ["signal_id"],
+            },
+        ),
+        Tool(
+            name="search_entities",
+            description="Search entities by semantic similarity using vector search.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Текстовый запрос для поиска сущностей",
+                    },
+                    "query_vector": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Вектор запроса (если query не указан)",
+                    },
+                    "entity_type": {
+                        "type": "string",
+                        "description": "Фильтр по типу сущности (опционально)",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Максимальное количество результатов",
+                        "default": 10,
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="get_entity_profile",
+            description="Get full profile of an entity including description, statistics, and related entities.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "description": "Тип сущности",
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Значение сущности",
+                    },
+                },
+                "required": ["entity_type", "value"],
             },
         ),
         Tool(
@@ -1061,6 +1110,24 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
             request = GetSignalPerformanceRequest(**arguments)
             result = adapter.get_signal_performance(request)
             return _format_tool_response(result.model_dump())
+
+        elif name == "search_entities":
+            try:
+                request = SearchEntitiesRequest(**arguments)
+                result = adapter.search_entities(request)
+                return _format_tool_response(result.model_dump())
+            except Exception as e:
+                logger.exception(f"search_entities failed: {e}")
+                raise RuntimeError(format_error_message(e)) from e
+
+        elif name == "get_entity_profile":
+            try:
+                request = GetEntityProfileRequest(**arguments)
+                result = adapter.get_entity_profile(request)
+                return _format_tool_response(result.model_dump())
+            except Exception as e:
+                logger.exception(f"get_entity_profile failed: {e}")
+                raise RuntimeError(format_error_message(e)) from e
 
         elif name == "generate_embedding":
             try:

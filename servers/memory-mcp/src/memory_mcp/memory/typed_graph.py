@@ -217,6 +217,11 @@ class TypedGraphMemory:
                 json.dumps(node.embedding).encode() if node.embedding else None
             )
 
+            # Для EntityNode добавляем описание в properties, если оно есть
+            node_properties = dict(node.properties)
+            if node.type == NodeType.ENTITY and hasattr(node, "description") and node.description:
+                node_properties["description"] = node.description
+            
             cursor.execute(
                 """
                 INSERT INTO nodes (id, type, label, properties, embedding, created_at, updated_at)
@@ -226,7 +231,7 @@ class TypedGraphMemory:
                     node.id,
                     node.type.value if isinstance(node.type, NodeType) else node.type,
                     node.label,
-                    json.dumps(node.properties),
+                    json.dumps(node_properties),
                     embedding_bytes,
                     node.created_at or datetime.now().isoformat(),
                     node.updated_at or datetime.now().isoformat(),
@@ -685,6 +690,37 @@ class TypedGraphMemory:
         
         if metadata_parts:
             extended_content = f"{extended_content}\n{' '.join(metadata_parts)}"
+        
+        # Добавляем описания сущностей для улучшения поиска
+        entity_descriptions_parts = []
+        if entities:
+            try:
+                from ..analysis.entity_dictionary import get_entity_dictionary
+                entity_dict = get_entity_dictionary()
+                
+                # Пытаемся определить тип сущности из свойств узла или из контекста
+                # Для упрощения проверяем все типы сущностей
+                for entity_name in entities:
+                    if not entity_name or not str(entity_name).strip():
+                        continue
+                    
+                    # Пробуем найти описание для каждого типа сущности
+                    entity_types_to_check = [
+                        "persons", "organizations", "locations", "crypto_tokens",
+                        "telegram_channels", "telegram_bots", "crypto_addresses", "domains"
+                    ]
+                    
+                    for entity_type in entity_types_to_check:
+                        description = entity_dict.get_entity_description(entity_type, str(entity_name))
+                        if description:
+                            entity_descriptions_parts.append(f"{entity_name}: {description}")
+                            break  # Нашли описание, переходим к следующей сущности
+            except Exception as e:
+                # Если не удалось получить описания, продолжаем без них
+                logger.debug(f"Ошибка при получении описаний сущностей для {node_id}: {e}")
+        
+        if entity_descriptions_parts:
+            extended_content = f"{extended_content}\n{' '.join(entity_descriptions_parts)}"
 
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM node_search WHERE node_id = ?", (node_id,))

@@ -137,7 +137,18 @@ class TwoLevelIndexer:
         )
         
         self.time_processor = TimeProcessor() if enable_time_analysis else None
-        self.entity_dictionary = get_entity_dictionary() if enable_entity_learning else None
+        
+        # Инициализируем словарь сущностей с настройками из config
+        if enable_entity_learning:
+            from ..config import get_settings
+            settings = get_settings()
+            self.entity_dictionary = get_entity_dictionary(
+                enable_llm_validation=True,
+                enable_description_generation=settings.entity_description_enabled,
+                graph=graph,
+            )
+        else:
+            self.entity_dictionary = None
         
         self.markdown_renderer = MarkdownRenderer(self.reports_path)
 
@@ -178,6 +189,17 @@ class TwoLevelIndexer:
         else:
             self.ingestor = None
             logger.debug("TwoLevelIndexer: граф памяти не подключен, записи будут только в ChromaDB")
+        
+        # Инициализируем EntityVectorStore для индексации сущностей
+        if enable_entity_learning:
+            from ..memory.vector_store import build_entity_vector_store_from_env
+            self.entity_vector_store = build_entity_vector_store_from_env()
+            if self.entity_vector_store:
+                logger.info("EntityVectorStore инициализирован для индексации сущностей")
+            else:
+                logger.debug("EntityVectorStore недоступен (Qdrant не настроен)")
+        else:
+            self.entity_vector_store = None
 
     def _get_embedding_dimension(self) -> Optional[int]:
         """Получить размерность эмбеддингов из клиента."""
@@ -1060,6 +1082,13 @@ class TwoLevelIndexer:
                         self.entity_dictionary.flush_validation_queue()
                         self.entity_dictionary.save_dictionaries()
                         logger.info(f"Словари сущностей сохранены для чата {chat_name}")
+                        
+                        # Обновляем EntityNode в графе с описаниями
+                        if self.graph:
+                            await self._update_entity_nodes_with_descriptions()
+                        
+                        # Строим и индексируем профили сущностей
+                        await self._build_and_index_entities(chat_name)
                     except Exception as e:
                         logger.warning(f"Ошибка сохранения словарей сущностей: {e}")
 
@@ -2396,6 +2425,222 @@ class TwoLevelIndexer:
                     continue
         except Exception as e:
             logger.debug(f"Ошибка при связывании сессии {session_id} с предыдущими: {e}")
+
+    async def _update_entity_nodes_with_descriptions(self) -> None:
+        """Обновление EntityNode в графе с описаниями из словаря сущностей"""
+        if not self.graph or not self.entity_dictionary:
+            return
+        
+        try:
+            from ..memory.graph_types import NodeType
+            
+            # Получаем все EntityNode из графа
+            entity_nodes = self.graph.get_nodes_by_type(NodeType.ENTITY, limit=10000)
+            
+            updated_count = 0
+            for node_data in entity_nodes:
+                node_id = node_data.get("id")
+                if not node_id:
+                    continue
+                
+                # Получаем тип и имя сущности из узла
+                entity_type = node_data.get("entity_type", "term")
+                label = node_data.get("label", "")
+                
+                if not label:
+                    continue
+                
+                # Получаем описание из словаря
+                description = self.entity_dictionary.get_entity_description(entity_type, label)
+                
+                if description:
+                    # Обновляем узел с описанием
+                    # Проверяем, нужно ли обновлять (если описание изменилось или отсутствует)
+                    current_description = node_data.get("description")
+                    if current_description != description:
+                        # Обновляем через update_node или напрямую через SQL
+                        try:
+                            # Обновляем узел через метод update_node графа
+                            # Сначала получаем текущие свойства
+                            if node_id in self.graph.graph:
+                                node_data = self.graph.graph.nodes[node_id]
+                                current_properties = node_data.get("properties", {})
+                                
+                                # Обновляем описание в свойствах
+                                current_properties["description"] = description
+                                
+                                # Обновляем узел через метод графа
+                                self.graph.update_node(
+                                    node_id,
+                                    properties=current_properties,
+                                )
+                                
+                                # Также обновляем поле description напрямую, если узел это EntityNode
+                                node_data["description"] = description
+                                
+                                updated_count += 1
+                                logger.debug(f"Обновлено описание для EntityNode {node_id}: {description[:50]}...")
+                        except Exception as e:
+                            logger.debug(f"Ошибка при обновлении описания для EntityNode {node_id}: {e}")
+            
+            if updated_count > 0:
+                logger.info(f"Обновлено {updated_count} EntityNode с описаниями")
+        except Exception as e:
+            logger.warning(f"Ошибка при обновлении EntityNode с описаниями: {e}")
+
+    async def _build_and_index_entities(self, chat_name: str) -> None:
+        """
+        Построение и индексация профилей сущностей в векторное хранилище
+        
+        Args:
+            chat_name: Название чата (для логирования)
+        """
+        if not self.entity_dictionary or not self.entity_vector_store or not self.graph:
+            return
+        
+        try:
+            from ..memory.graph_types import NodeType, EntityNode
+            
+            # Собираем все сущности из словаря
+            all_entities = []
+            for entity_type in self.entity_dictionary.learned_dictionaries:
+                for normalized_value in self.entity_dictionary.learned_dictionaries[entity_type]:
+                    # Получаем оригинальное значение (из entity_counts или из графа)
+                    # Пробуем найти в графе для получения оригинального значения
+                    entity_id = f"entity-{normalized_value.replace(' ', '-')}"
+                    original_value = normalized_value
+                    
+                    if entity_id in self.graph.graph:
+                        node_data = self.graph.graph.nodes[entity_id]
+                        original_value = node_data.get("label", normalized_value)
+                    
+                    all_entities.append((entity_type, normalized_value, original_value))
+            
+            if not all_entities:
+                logger.debug(f"Нет сущностей для индексации в чате {chat_name}")
+                return
+            
+            logger.info(f"Начинаем построение профилей для {len(all_entities)} сущностей из чата {chat_name}")
+            
+            indexed_count = 0
+            failed_count = 0
+            
+            for entity_type, normalized_value, original_value in all_entities:
+                try:
+                    # Строим полный профиль сущности
+                    profile = self.entity_dictionary.build_entity_profile(entity_type, original_value)
+                    
+                    if not profile:
+                        continue
+                    
+                    # Формируем текст для эмбеддинга из полного описания
+                    # Включаем: описание, алиасы, связанные сущности
+                    embedding_text_parts = []
+                    
+                    if profile.get("description"):
+                        embedding_text_parts.append(profile["description"])
+                    
+                    # Добавляем алиасы
+                    aliases = profile.get("aliases", [])
+                    if aliases:
+                        embedding_text_parts.append(f"Также известен как: {', '.join(aliases[:5])}")
+                    
+                    # Добавляем информацию о связанных сущностях
+                    related = profile.get("related_entities", [])
+                    if related:
+                        related_names = [r.get("label", "") for r in related[:3] if r.get("label")]
+                        if related_names:
+                            embedding_text_parts.append(f"Связан с: {', '.join(related_names)}")
+                    
+                    embedding_text = " ".join(embedding_text_parts)
+                    
+                    if not embedding_text:
+                        # Если нет описания, используем имя и тип
+                        embedding_text = f"{entity_type} {original_value}"
+                    
+                    # Генерируем эмбеддинг
+                    async with self.embedding_client:
+                        embedding = await self.embedding_client.embed(embedding_text)
+                    
+                    if not embedding or len(embedding) == 0:
+                        logger.debug(f"Не удалось сгенерировать эмбеддинг для {entity_type}={normalized_value}")
+                        failed_count += 1
+                        continue
+                    
+                    # Формируем payload для Qdrant
+                    entity_id = f"entity-{normalized_value.replace(' ', '-')}"
+                    payload = {
+                        "entity_type": entity_type,
+                        "value": original_value,
+                        "normalized_value": normalized_value,
+                        "description": profile.get("description", ""),
+                        "aliases": profile.get("aliases", []),
+                        "importance": profile.get("importance", 0.5),
+                        "mention_count": profile.get("mention_count", 0),
+                        "chats": profile.get("chats", []),
+                        "first_seen": profile.get("first_seen"),
+                        "last_seen": profile.get("last_seen"),
+                    }
+                    
+                    # Сохраняем в EntityVectorStore
+                    self.entity_vector_store.upsert_entity(entity_id, embedding, payload)
+                    
+                    # Обновляем EntityNode в графе с эмбеддингом и полным описанием
+                    if entity_id in self.graph.graph:
+                        node_data = self.graph.graph.nodes[entity_id]
+                        current_properties = node_data.get("properties", {})
+                        
+                        # Обновляем описание и эмбеддинг
+                        current_properties["description"] = profile.get("description", "")
+                        current_properties["entity_profile"] = {
+                            "mention_count": profile.get("mention_count", 0),
+                            "chats": profile.get("chats", []),
+                            "importance": profile.get("importance", 0.5),
+                        }
+                        
+                        self.graph.update_node(
+                            entity_id,
+                            properties=current_properties,
+                            embedding=embedding,
+                        )
+                    else:
+                        # Создаем новый EntityNode, если его нет в графе
+                        entity_node = EntityNode(
+                            id=entity_id,
+                            label=original_value,
+                            entity_type=entity_type,
+                            aliases=profile.get("aliases", []),
+                            description=profile.get("description"),
+                            importance=profile.get("importance", 0.5),
+                            properties={
+                                "normalized_value": normalized_value,
+                                "entity_profile": {
+                                    "mention_count": profile.get("mention_count", 0),
+                                    "chats": profile.get("chats", []),
+                                    "importance": profile.get("importance", 0.5),
+                                },
+                            },
+                            embedding=embedding,
+                        )
+                        self.graph.add_node(entity_node)
+                    
+                    indexed_count += 1
+                    
+                    if indexed_count % 10 == 0:
+                        logger.debug(f"Проиндексировано {indexed_count} сущностей...")
+                        
+                except Exception as e:
+                    logger.warning(f"Ошибка при индексации сущности {entity_type}={normalized_value}: {e}")
+                    failed_count += 1
+                    continue
+            
+            logger.info(
+                f"Завершена индексация сущностей из чата {chat_name}: "
+                f"{indexed_count} успешно, {failed_count} ошибок"
+            )
+            
+        except Exception as e:
+            logger.warning(f"Ошибка при построении и индексации профилей сущностей: {e}")
 
 
 if __name__ == "__main__":

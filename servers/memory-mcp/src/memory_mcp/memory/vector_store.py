@@ -306,12 +306,233 @@ class VectorStore:
         return qmodels.Distance.EUCLID
 
 
+@dataclass
+class EntitySearchResult:
+    entity_id: str
+    score: float
+    payload: Dict[str, object]
+
+
+class EntityVectorStore:
+    """Векторное хранилище для сущностей в отдельной коллекции Qdrant."""
+
+    def __init__(
+        self,
+        url: Optional[str],
+        *,
+        collection: str = "entities",
+        distance: str = "cosine",
+    ) -> None:
+        self.url = url
+        self.collection = collection
+        self.distance = distance
+        self.client: Optional[QdrantClient] = None
+        self.vector_size: Optional[int] = None
+
+        if url and QdrantClient is not None:
+            try:
+                self.client = QdrantClient(url=url, check_compatibility=False)
+                logger.info("Entity vector store connected to %s", _mask_url_in_log(url))
+            except Exception as exc:  # pragma: no cover
+                logger.warning("Failed to connect to Qdrant at %s: %s", _mask_url_in_log(url), exc)
+                self.client = None
+        elif url:
+            logger.warning("qdrant-client package not available; entity vector store disabled.")
+
+    def available(self) -> bool:
+        return self.client is not None
+
+    def ensure_collection(self, vector_size: int) -> None:
+        """Создает коллекцию сущностей, если она не существует."""
+        if not self.client or qmodels is None:
+            return
+        if self.vector_size == vector_size:
+            return
+        try:
+            info = self.client.get_collection(self.collection)
+            existing_size = info.config.params.vectors.size  # type: ignore[attr-defined]
+            if existing_size != vector_size:
+                logger.warning(
+                    "Recreating Qdrant entity collection %s with new vector size %s (was %s)",
+                    self.collection,
+                    vector_size,
+                    existing_size,
+                )
+                self.client.recreate_collection(
+                    collection_name=self.collection,
+                    vectors_config=qmodels.VectorParams(
+                        size=vector_size,
+                        distance=self._distance_enum(),
+                    ),
+                )
+        except Exception:
+            logger.info(
+                "Creating Qdrant entity collection %s (vector size %s)",
+                self.collection,
+                vector_size,
+            )
+            try:
+                self.client.recreate_collection(
+                    collection_name=self.collection,
+                    vectors_config=qmodels.VectorParams(
+                        size=vector_size,
+                        distance=self._distance_enum(),
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.warning("Failed to initialize Qdrant entity collection: %s", exc)
+                return
+        self.vector_size = vector_size
+
+    def upsert_entity(
+        self, entity_id: str, vector: List[float], payload: Dict[str, object]
+    ) -> None:
+        """
+        Сохранение сущности в векторное хранилище.
+
+        Args:
+            entity_id: ID сущности (например, "entity-дуров")
+            vector: Вектор эмбеддинга полного описания сущности
+            payload: Метаданные сущности:
+                - entity_type: тип сущности
+                - value: значение сущности
+                - description: описание
+                - aliases: список алиасов
+                - importance: важность (0-1)
+                - mention_count: количество упоминаний
+                - chats: список чатов
+                - first_seen, last_seen: временные метки
+        """
+        if not self.client or qmodels is None or not vector:
+            return
+        self.ensure_collection(len(vector))
+        try:
+            self.client.upsert(
+                collection_name=self.collection,
+                points=[
+                    qmodels.PointStruct(
+                        id=str(entity_id),
+                        vector=vector,
+                        payload=payload,
+                    )
+                ],
+            )
+            logger.debug(f"Сохранена сущность {entity_id} в векторное хранилище")
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to upsert entity vector for %s: %s", entity_id, exc)
+
+    def search_entities(
+        self,
+        query_vector: List[float],
+        entity_type: Optional[str] = None,
+        limit: int = 10,
+    ) -> List[EntitySearchResult]:
+        """
+        Поиск похожих сущностей по вектору.
+
+        Args:
+            query_vector: Вектор запроса
+            entity_type: Фильтр по типу сущности (опционально)
+            limit: Максимальное количество результатов
+
+        Returns:
+            Список найденных сущностей с метаданными
+        """
+        if not self.client or qmodels is None or not query_vector:
+            return []
+        self.ensure_collection(len(query_vector))
+
+        must: List[qmodels.FilterCondition] = []
+        if entity_type:
+            must.append(
+                qmodels.FieldCondition(
+                    key="entity_type",
+                    match=qmodels.MatchValue(value=entity_type),
+                )
+            )
+
+        flt = qmodels.Filter(must=must) if must else None
+
+        try:
+            if flt:
+                result = self.client.search(
+                    collection_name=self.collection,
+                    query_vector=query_vector,
+                    limit=limit,
+                    query_filter=flt,
+                )
+            else:
+                result = self.client.search(
+                    collection_name=self.collection,
+                    query_vector=query_vector,
+                    limit=limit,
+                )
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Entity vector search failed: %s", exc)
+            return []
+
+        output: List[EntitySearchResult] = []
+        for point in result:
+            output.append(
+                EntitySearchResult(
+                    entity_id=str(point.id),
+                    score=float(point.score),
+                    payload=dict(point.payload or {}),
+                )
+            )
+        return output
+
+    def delete_entity(self, entity_id: str) -> None:
+        """Удаление сущности из векторного хранилища."""
+        if not self.client or qmodels is None:
+            return
+        try:
+            self.client.delete(
+                collection_name=self.collection,
+                points_selector=qmodels.PointIdsList(
+                    points=[str(entity_id)],
+                ),
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to delete entity vector for %s: %s", entity_id, exc)
+
+    def close(self) -> None:
+        """Закрытие соединения с Qdrant."""
+        if self.client:
+            try:
+                self.client.close()
+            except Exception:
+                pass
+
+    def _distance_enum(self):
+        """Преобразование строки расстояния в enum Qdrant."""
+        if qmodels is None:
+            return None
+        if self.distance.lower() == "cosine":
+            return qmodels.Distance.COSINE
+        if self.distance.lower() == "dot":
+            return qmodels.Distance.DOT
+        return qmodels.Distance.EUCLID
+
+
 def build_vector_store_from_env() -> VectorStore | None:
     settings = get_settings()
     url = settings.get_qdrant_url()
     if not url:
         return None
     store = VectorStore(url=url)
+    if not store.available():
+        return None
+    return store
+
+
+def build_entity_vector_store_from_env() -> EntityVectorStore | None:
+    """Создание EntityVectorStore из переменных окружения."""
+    settings = get_settings()
+    url = settings.get_qdrant_url()
+    if not url:
+        return None
+    store = EntityVectorStore(url=url)
     if not store.available():
         return None
     return store

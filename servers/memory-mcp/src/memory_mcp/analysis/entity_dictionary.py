@@ -7,7 +7,7 @@ import json
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,8 @@ class EntityDictionary:
         enable_llm_validation: bool = True,
         llm_client: Optional[Any] = None,
         batch_validation_size: int = 10,
+        enable_description_generation: bool = True,
+        graph: Optional[Any] = None,
     ):
         """Инициализирует словарь сущностей.
 
@@ -45,6 +47,8 @@ class EntityDictionary:
             enable_llm_validation: Включить валидацию через LLM
             llm_client: Клиент для LLM (опционально, создается автоматически если не указан)
             batch_validation_size: Размер батча для валидации сущностей (по умолчанию 10)
+            enable_description_generation: Включить генерацию описаний сущностей (по умолчанию True)
+            graph: Граф памяти для доступа к контексту сообщений (опционально)
         """
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
@@ -62,11 +66,14 @@ class EntityDictionary:
         self.learned_dictionaries: Dict[str, Set[str]] = {
             entity_type: set() for entity_type in ENTITY_TYPES
         }
+        self.entity_descriptions: Dict[str, Dict[str, str]] = defaultdict(dict)
         self.enable_llm_validation = enable_llm_validation
+        self.enable_description_generation = enable_description_generation
         self._llm_client = llm_client
         self._llm_client_initialized = False
         self.batch_validation_size = batch_validation_size
         self._validation_queue: List[Dict[str, Any]] = []
+        self.graph = graph
         
         self.load_dictionaries()
 
@@ -169,6 +176,13 @@ class EntityDictionary:
             
             self.learned_dictionaries[entity_type].add(normalized_value)
             logger.info(f"Добавлена новая сущность в словарь: {entity_type}={normalized_value} (встречается {total_count} раз)")
+            
+            # Генерируем описание, если включено (в фоновом режиме, не блокируем)
+            if self.enable_description_generation:
+                # Добавляем в очередь для генерации описаний (будет обработано позже)
+                # Описание будет сгенерировано при следующем flush или при обновлении узла в графе
+                pass
+            
             return True
 
         return False
@@ -298,6 +312,14 @@ class EntityDictionary:
                 except PermissionError as e:
                     logger.error(f"Ошибка прав доступа при сохранении {dict_file}: {e}")
 
+            # Сохраняем описания сущностей
+            descriptions_file = self.storage_path / "entity_descriptions.json"
+            try:
+                with open(descriptions_file, 'w', encoding='utf-8') as f:
+                    json.dump(dict(self.entity_descriptions), f, ensure_ascii=False, indent=2)
+            except PermissionError as e:
+                logger.error(f"Ошибка прав доступа при сохранении {descriptions_file}: {e}")
+
             logger.info(f"Словари сохранены в {self.storage_path}")
         except Exception as e:
             logger.error(f"Ошибка при сохранении словарей: {e}")
@@ -331,6 +353,15 @@ class EntityDictionary:
                     with open(dict_file, 'r', encoding='utf-8') as f:
                         entities_list = json.load(f)
                         self.learned_dictionaries[entity_type] = set(entities_list)
+
+            # Загружаем описания сущностей
+            descriptions_file = self.storage_path / "entity_descriptions.json"
+            if descriptions_file.exists():
+                with open(descriptions_file, 'r', encoding='utf-8') as f:
+                    descriptions_data = json.load(f)
+                    for entity_type, descriptions in descriptions_data.items():
+                        if entity_type in ENTITY_TYPES:
+                            self.entity_descriptions[entity_type].update(descriptions)
 
             logger.info(f"Словари загружены из {self.storage_path}")
         except Exception as e:
@@ -820,6 +851,19 @@ class EntityDictionary:
                             f"Добавлена новая сущность в словарь: {entity_type}={normalized_value} "
                             f"(встречается {total_count} раз)"
                         )
+                        
+                        # Генерируем описание, если включено
+                        if self.enable_description_generation:
+                            try:
+                                # Собираем все контексты для более полного описания
+                                all_contexts = self.collect_entity_contexts(entity_type, normalized_value)
+                                await self.generate_entity_description(
+                                    entity_type,
+                                    candidate.get("original_value", normalized_value),
+                                    all_contexts=all_contexts if all_contexts else None
+                                )
+                            except Exception as e:
+                                logger.debug(f"Не удалось сгенерировать описание для {normalized_value}: {e}")
                     else:
                         logger.debug(
                             f"Сущность отклонена LLM: {entity_type}={normalized_value} "
@@ -985,26 +1029,538 @@ class EntityDictionary:
             self.entity_counts[entity_type].clear()
         
         self.chat_entity_counts.clear()
+        self.entity_descriptions.clear()
         logger.info("Все словари и счетчики сброшены")
+
+    def get_entity_description(self, entity_type: str, value: str) -> Optional[str]:
+        """
+        Получение описания сущности
+
+        Args:
+            entity_type: Тип сущности
+            value: Значение сущности
+
+        Returns:
+            Описание сущности или None, если описание отсутствует
+        """
+        if entity_type not in ENTITY_TYPES:
+            return None
+
+        normalized_value = self._normalize_entity_value(value)
+        if not normalized_value:
+            return None
+
+        return self.entity_descriptions.get(entity_type, {}).get(normalized_value)
+
+    def update_entity_description(self, entity_type: str, value: str, description: str) -> None:
+        """
+        Обновление описания сущности
+
+        Args:
+            entity_type: Тип сущности
+            value: Значение сущности
+            description: Новое описание
+        """
+        if entity_type not in ENTITY_TYPES:
+            logger.warning(f"Неизвестный тип сущности: {entity_type}")
+            return
+
+        normalized_value = self._normalize_entity_value(value)
+        if not normalized_value:
+            return
+
+        self.entity_descriptions[entity_type][normalized_value] = description.strip()
+        logger.debug(f"Обновлено описание для {entity_type}={normalized_value}")
+
+    def _collect_entity_context(
+        self, entity_type: str, normalized_value: str, original_value: str
+    ) -> Tuple[Optional[List[str]], Optional[Dict[str, Any]]]:
+        """
+        Сбор контекста для генерации описания сущности
+
+        Args:
+            entity_type: Тип сущности
+            normalized_value: Нормализованное значение
+            original_value: Оригинальное значение
+
+        Returns:
+            Кортеж (context_messages, mention_stats):
+            - context_messages: Список сообщений, где упоминается сущность (если доступен граф)
+            - mention_stats: Статистика упоминаний (частота, чаты, временные метки)
+        """
+        context_messages = None
+        mention_stats = None
+
+        # Собираем статистику упоминаний
+        total_count = self.entity_counts[entity_type].get(normalized_value, 0)
+        chat_counts = {}
+        for chat_name, chat_data in self.chat_entity_counts.items():
+            chat_count = chat_data.get(entity_type, {}).get(normalized_value, 0)
+            if chat_count > 0:
+                chat_counts[chat_name] = chat_count
+
+        mention_stats = {
+            "total_count": total_count,
+            "chat_counts": chat_counts,
+            "chats": list(chat_counts.keys()),
+        }
+
+        # Собираем контекст из графа, если доступен
+        if self.graph:
+            try:
+                # Ищем узлы DocChunk, которые упоминают эту сущность
+                from ..memory.graph_types import NodeType
+                
+                # Ищем через FTS поиск по сущностям
+                search_results = self.graph.search_text(
+                    query=normalized_value,
+                    top_k=10,
+                    node_types=[NodeType.DOC_CHUNK],
+                )
+                
+                context_messages = []
+                for result in search_results[:5]:  # Берем первые 5 результатов
+                    node_id = result.get("node_id")
+                    if node_id and node_id in self.graph.graph:
+                        node_data = self.graph.graph.nodes[node_id]
+                        content = node_data.get("content", "")
+                        if content and len(content) > 20:  # Минимальная длина сообщения
+                            context_messages.append(content[:300])  # Ограничиваем длину
+            except Exception as e:
+                logger.debug(f"Ошибка при сборе контекста из графа для {normalized_value}: {e}")
+
+        return context_messages, mention_stats
+
+    async def generate_entity_description(
+        self,
+        entity_type: str,
+        value: str,
+        context_messages: Optional[List[str]] = None,
+        mention_stats: Optional[Dict[str, Any]] = None,
+        all_contexts: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[str]:
+        """
+        Генерация описания сущности через LLM на основе всех контекстов
+
+        Args:
+            entity_type: Тип сущности
+            value: Значение сущности
+            context_messages: Список сообщений с упоминаниями сущности (опционально, для обратной совместимости)
+            mention_stats: Статистика упоминаний (опционально)
+            all_contexts: Полный список контекстов с метаданными (приоритетнее context_messages)
+
+        Returns:
+            Сгенерированное описание или None при ошибке
+        """
+        if entity_type not in ENTITY_TYPES:
+            logger.warning(f"Неизвестный тип сущности: {entity_type}")
+            return None
+
+        normalized_value = self._normalize_entity_value(value)
+        if not normalized_value:
+            return None
+
+        # Если описание уже существует, не генерируем заново
+        existing_description = self.entity_descriptions.get(entity_type, {}).get(normalized_value)
+        if existing_description:
+            logger.debug(f"Описание для {entity_type}={normalized_value} уже существует")
+            return existing_description
+
+        llm_client = self._get_llm_client()
+        if not llm_client:
+            logger.debug("LLM клиент недоступен, пропускаем генерацию описания")
+            return None
+
+        # Собираем контекст, если не передан
+        if all_contexts is None:
+            if context_messages is None or mention_stats is None:
+                context_messages, mention_stats = self._collect_entity_context(
+                    entity_type, normalized_value, value
+                )
+            # Преобразуем context_messages в формат all_contexts для единообразия
+            all_contexts = [{"content": msg} for msg in (context_messages or [])]
+        else:
+            # Если передан all_contexts, извлекаем статистику из него
+            if mention_stats is None:
+                total_count = self.entity_counts[entity_type].get(normalized_value, 0)
+                chat_counts = {}
+                for ctx in all_contexts:
+                    chat = ctx.get("chat", "unknown")
+                    chat_counts[chat] = chat_counts.get(chat, 0) + 1
+                mention_stats = {
+                    "total_count": total_count,
+                    "chat_counts": chat_counts,
+                    "chats": list(chat_counts.keys()),
+                }
+
+        # Формируем промпт
+        entity_type_names = {
+            "persons": "персона",
+            "organizations": "организация",
+            "locations": "локация/место",
+            "crypto_tokens": "криптовалютный токен",
+            "telegram_channels": "Telegram канал",
+            "telegram_bots": "Telegram бот",
+            "crypto_addresses": "криптовалютный адрес",
+            "domains": "доменное имя",
+        }
+
+        type_name = entity_type_names.get(entity_type, entity_type)
+
+        # Формируем контекст для промпта из all_contexts
+        context_text = ""
+        if all_contexts:
+            # Группируем по чатам для лучшего понимания
+            contexts_by_chat = {}
+            for ctx in all_contexts[:20]:  # Берем первые 20 контекстов
+                chat = ctx.get("chat", "unknown")
+                if chat not in contexts_by_chat:
+                    contexts_by_chat[chat] = []
+                content = ctx.get("content", "")
+                if content:
+                    contexts_by_chat[chat].append(content[:200])  # Ограничиваем длину
+            
+            # Формируем текст контекста
+            context_parts = []
+            for chat, contents in list(contexts_by_chat.items())[:5]:  # Максимум 5 чатов
+                context_parts.append(f"\nЧат '{chat}':")
+                for content in contents[:3]:  # Максимум 3 сообщения на чат
+                    context_parts.append(f"  - {content}")
+            
+            context_text = "\n".join(context_parts)
+        
+        stats_text = ""
+        if mention_stats:
+            total_count = mention_stats.get("total_count", 0)
+            chats = mention_stats.get("chats", [])
+            stats_text = f"\nСтатистика упоминаний:\n- Всего упоминаний: {total_count}\n- Чаты: {', '.join(chats[:5])}"
+
+        prompt = f"""Ты эксперт по анализу текста. Создай краткое, но информативное описание сущности на основе всех контекстов упоминаний.
+
+Тип сущности: {type_name}
+Имя сущности: {value} (нормализованное: {normalized_value})
+{stats_text}
+
+Контексты упоминаний из разных чатов:
+{context_text if context_text else "Контекст недоступен"}
+
+Создай краткое описание (1-2 предложения, до 200 символов) на русском языке.
+Описание должно:
+- Быть информативным и помогать понять, что это за сущность
+- Отражать роль/назначение сущности в контексте обсуждений
+- Включать ключевые характеристики, если они упоминаются
+
+Только описание, без дополнительных комментариев."""
+
+        try:
+            async with llm_client:
+                if hasattr(llm_client, 'generate_summary'):
+                    response = await llm_client.generate_summary(
+                        prompt=prompt,
+                        temperature=0.3,
+                        max_tokens=300,
+                        top_p=0.9,
+                        presence_penalty=0.0,
+                    )
+                    
+                    # Очищаем ответ от лишних символов
+                    description = response.strip()
+                    # Убираем кавычки, если есть
+                    if description.startswith('"') and description.endswith('"'):
+                        description = description[1:-1]
+                    if description.startswith("'") and description.endswith("'"):
+                        description = description[1:-1]
+                    
+                    # Ограничиваем длину
+                    max_length = 200
+                    if len(description) > max_length:
+                        description = description[:max_length].rsplit(' ', 1)[0] + "..."
+                    
+                    if description:
+                        self.update_entity_description(entity_type, normalized_value, description)
+                        logger.info(f"Сгенерировано описание для {entity_type}={normalized_value}: {description[:50]}...")
+                        return description
+                else:
+                    logger.warning("LLM клиент не поддерживает generate_summary, пропускаем генерацию описания")
+                    return None
+        except Exception as e:
+            logger.warning(f"Ошибка при генерации описания для {entity_type}={normalized_value}: {e}")
+            return None
+
+        return None
+
+    def collect_entity_contexts(
+        self, entity_type: str, normalized_value: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Сбор всех контекстов упоминания сущности из графа
+        
+        Args:
+            entity_type: Тип сущности
+            normalized_value: Нормализованное значение сущности
+            
+        Returns:
+            Список контекстов с метаданными (чат, дата, автор, содержание)
+        """
+        contexts = []
+        
+        if not self.graph:
+            logger.debug("Граф недоступен для сбора контекстов")
+            return contexts
+        
+        try:
+            from ..memory.graph_types import NodeType, EdgeType
+            
+            # Ищем EntityNode для этой сущности
+            entity_id = f"entity-{normalized_value.replace(' ', '-')}"
+            
+            # Ищем через FTS поиск по сущностям в DocChunk узлах
+            search_results, _ = self.graph.search_text(
+                query=normalized_value,
+                limit=100,  # Берем больше результатов для полной картины
+            )
+            
+            # Также ищем через граф - находим DocChunk узлы, связанные с EntityNode
+            if entity_id in self.graph.graph:
+                # Получаем все узлы, которые упоминают эту сущность
+                neighbors = self.graph.get_neighbors(
+                    entity_id,
+                    edge_type=EdgeType.MENTIONS,
+                    direction="in",  # Входящие связи (DocChunk -> mentions -> Entity)
+                )
+                
+                for neighbor_id, edge_data in neighbors:
+                    if neighbor_id in self.graph.graph:
+                        node_data = self.graph.graph.nodes[neighbor_id]
+                        node_type = node_data.get("type")
+                        
+                        if node_type == NodeType.DOC_CHUNK.value or node_type == NodeType.DOC_CHUNK:
+                            content = node_data.get("content", "")
+                            properties = node_data.get("properties", {})
+                            
+                            if content and len(content) > 10:
+                                context = {
+                                    "node_id": neighbor_id,
+                                    "content": content,
+                                    "source": properties.get("source", ""),
+                                    "chat": properties.get("chat") or properties.get("source", ""),
+                                    "author": properties.get("author", ""),
+                                    "timestamp": properties.get("timestamp") or properties.get("date_utc", ""),
+                                    "tags": properties.get("tags", []),
+                                }
+                                contexts.append(context)
+            
+            # Добавляем контексты из FTS поиска
+            seen_node_ids = {ctx["node_id"] for ctx in contexts}
+            for result in search_results:
+                node_id = result.get("node_id")
+                if node_id and node_id not in seen_node_ids:
+                    if node_id in self.graph.graph:
+                        node_data = self.graph.graph.nodes[node_id]
+                        node_type = node_data.get("type")
+                        
+                        if node_type == NodeType.DOC_CHUNK.value or node_type == NodeType.DOC_CHUNK:
+                            content = result.get("content", "") or node_data.get("content", "")
+                            properties = node_data.get("properties", {})
+                            
+                            if content and len(content) > 10:
+                                context = {
+                                    "node_id": node_id,
+                                    "content": content[:500],  # Ограничиваем длину
+                                    "source": result.get("source", "") or properties.get("source", ""),
+                                    "chat": properties.get("chat") or properties.get("source", ""),
+                                    "author": properties.get("author", ""),
+                                    "timestamp": properties.get("timestamp") or properties.get("date_utc", ""),
+                                    "tags": properties.get("tags", []),
+                                    "score": result.get("score", 0.0),
+                                }
+                                contexts.append(context)
+                                seen_node_ids.add(node_id)
+            
+            # Группируем по чатам и сортируем по времени
+            contexts_by_chat = {}
+            for ctx in contexts:
+                chat = ctx.get("chat", "unknown")
+                if chat not in contexts_by_chat:
+                    contexts_by_chat[chat] = []
+                contexts_by_chat[chat].append(ctx)
+            
+            # Сортируем контексты по времени (если доступно)
+            for chat in contexts_by_chat:
+                contexts_by_chat[chat].sort(
+                    key=lambda x: x.get("timestamp", ""),
+                    reverse=True
+                )
+            
+            logger.debug(f"Собрано {len(contexts)} контекстов для {entity_type}={normalized_value} из {len(contexts_by_chat)} чатов")
+            
+        except Exception as e:
+            logger.warning(f"Ошибка при сборе контекстов для {normalized_value}: {e}")
+        
+        return contexts
+
+    def build_entity_profile(
+        self, entity_type: str, value: str
+    ) -> Dict[str, Any]:
+        """
+        Формирование полного профиля сущности на основе всех упоминаний
+        
+        Args:
+            entity_type: Тип сущности
+            value: Значение сущности
+            
+        Returns:
+            Словарь с полным профилем сущности:
+            - entity_type, value, normalized_value
+            - description: полное описание
+            - aliases: альтернативные названия
+            - mention_count: общее количество упоминаний
+            - chats: список чатов, где упоминается
+            - chat_counts: количество упоминаний по чатам
+            - first_seen, last_seen: временные метки
+            - contexts: список контекстов упоминаний
+            - related_entities: связанные сущности через граф
+            - importance: важность сущности (на основе частоты)
+        """
+        if entity_type not in ENTITY_TYPES:
+            logger.warning(f"Неизвестный тип сущности: {entity_type}")
+            return {}
+        
+        normalized_value = self._normalize_entity_value(value)
+        if not normalized_value:
+            return {}
+        
+        # Собираем базовую статистику
+        total_count = self.entity_counts[entity_type].get(normalized_value, 0)
+        chat_counts = {}
+        all_chats = set()
+        
+        for chat_name, chat_data in self.chat_entity_counts.items():
+            chat_count = chat_data.get(entity_type, {}).get(normalized_value, 0)
+            if chat_count > 0:
+                chat_counts[chat_name] = chat_count
+                all_chats.add(chat_name)
+        
+        # Собираем контексты из графа
+        contexts = self.collect_entity_contexts(entity_type, normalized_value)
+        
+        # Определяем временные метки
+        timestamps = []
+        for ctx in contexts:
+            ts = ctx.get("timestamp")
+            if ts:
+                try:
+                    from datetime import datetime
+                    if isinstance(ts, str):
+                        # Пробуем распарсить ISO формат
+                        dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                        timestamps.append(dt)
+                except Exception:
+                    pass
+        
+        first_seen = min(timestamps).isoformat() if timestamps else None
+        last_seen = max(timestamps).isoformat() if timestamps else None
+        
+        # Собираем связанные сущности через граф
+        related_entities = []
+        if self.graph:
+            try:
+                from ..memory.graph_types import EdgeType
+                entity_id = f"entity-{normalized_value.replace(' ', '-')}"
+                
+                if entity_id in self.graph.graph:
+                    # Находим соседние EntityNode через различные типы связей
+                    neighbors = self.graph.get_neighbors(entity_id, direction="both")
+                    
+                    for neighbor_id, edge_data in neighbors:
+                        if neighbor_id in self.graph.graph:
+                            neighbor_data = self.graph.graph.nodes[neighbor_id]
+                            neighbor_type = neighbor_data.get("type")
+                            
+                            # Собираем только EntityNode
+                            if neighbor_type == "Entity" or (isinstance(neighbor_type, str) and "Entity" in neighbor_type):
+                                related_entities.append({
+                                    "entity_id": neighbor_id,
+                                    "label": neighbor_data.get("label", ""),
+                                    "entity_type": neighbor_data.get("entity_type", ""),
+                                    "edge_type": edge_data.get("type", ""),
+                                    "weight": edge_data.get("weight", 0.0),
+                                })
+            except Exception as e:
+                logger.debug(f"Ошибка при сборе связанных сущностей: {e}")
+        
+        # Получаем описание (если уже сгенерировано)
+        description = self.get_entity_description(entity_type, value)
+        
+        # Формируем алиасы (из username_to_names и name_to_usernames)
+        aliases = [normalized_value]
+        for chat_name in all_chats:
+            # Проверяем связи имен
+            usernames = self.name_to_usernames.get(chat_name, {}).get(value, set())
+            names = self.username_to_names.get(chat_name, {}).get(normalized_value, set())
+            aliases.extend(list(usernames))
+            aliases.extend(list(names))
+        
+        # Убираем дубликаты и нормализуем
+        aliases = list(set([a.lower().strip() for a in aliases if a]))
+        
+        # Вычисляем важность на основе частоты упоминаний
+        # Нормализуем от 0.0 до 1.0 на основе максимальной частоты для этого типа
+        max_count = max(self.entity_counts[entity_type].values()) if self.entity_counts[entity_type] else 1
+        importance = min(1.0, (total_count / max_count) * 0.8 + 0.2)  # Минимум 0.2, максимум 1.0
+        
+        profile = {
+            "entity_type": entity_type,
+            "value": value,
+            "normalized_value": normalized_value,
+            "description": description,
+            "aliases": aliases,
+            "mention_count": total_count,
+            "chats": sorted(list(all_chats)),
+            "chat_counts": chat_counts,
+            "first_seen": first_seen,
+            "last_seen": last_seen,
+            "contexts": contexts[:20],  # Ограничиваем количество контекстов
+            "context_count": len(contexts),
+            "related_entities": related_entities[:10],  # Ограничиваем количество связанных сущностей
+            "importance": importance,
+        }
+        
+        logger.debug(f"Построен профиль для {entity_type}={normalized_value}: {total_count} упоминаний, {len(contexts)} контекстов")
+        
+        return profile
 
 
 # Глобальный экземпляр для использования в других модулях
 _global_entity_dictionary: Optional[EntityDictionary] = None
 
 
-def get_entity_dictionary(enable_llm_validation: bool = True) -> EntityDictionary:
+def get_entity_dictionary(
+    enable_llm_validation: bool = True,
+    enable_description_generation: bool = True,
+    graph: Optional[Any] = None,
+) -> EntityDictionary:
     """
     Получение глобального экземпляра словаря сущностей
     
     Args:
         enable_llm_validation: Включить валидацию через LLM (по умолчанию True)
+        enable_description_generation: Включить генерацию описаний (по умолчанию True)
+        graph: Граф памяти для доступа к контексту (опционально)
     """
     global _global_entity_dictionary
     if _global_entity_dictionary is None:
-        _global_entity_dictionary = EntityDictionary(enable_llm_validation=enable_llm_validation)
+        _global_entity_dictionary = EntityDictionary(
+            enable_llm_validation=enable_llm_validation,
+            enable_description_generation=enable_description_generation,
+            graph=graph,
+        )
     else:
-        # Обновляем флаг валидации, если словарь уже создан
+        # Обновляем флаги, если словарь уже создан
         _global_entity_dictionary.enable_llm_validation = enable_llm_validation
+        _global_entity_dictionary.enable_description_generation = enable_description_generation
+        if graph is not None:
+            _global_entity_dictionary.graph = graph
     return _global_entity_dictionary
 
 

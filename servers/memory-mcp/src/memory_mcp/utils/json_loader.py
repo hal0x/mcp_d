@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 def load_json_file(path: Path) -> dict | list | None:
     """
     Загружает JSON файл (обычный JSON, не JSONL).
+    
+    Если файл поврежден (например, отсутствуют запятые между объектами),
+    пытается исправить и загрузить частично.
 
     Args:
         path: Путь к JSON файлу
@@ -33,6 +36,35 @@ def load_json_file(path: Path) -> dict | list | None:
             return json.load(fp)
     except json.JSONDecodeError as e:
         logger.debug("Файл %s не является валидным JSON: %s", path, e)
+        # Пытаемся загрузить частично, исправляя формат
+        try:
+            with open(path, encoding="utf-8") as fp:
+                content = fp.read()
+            
+            # Если это массив, пытаемся исправить отсутствующие запятые
+            if content.strip().startswith('['):
+                import re
+                # Заменяем '}\s*{' на '},\n    {' для объектов верхнего уровня
+                fixed_content = re.sub(r'\}\s*\n\s*\{', '},\n    {', content)
+                try:
+                    return json.loads(fixed_content)
+                except json.JSONDecodeError:
+                    # Если все еще не работает, пытаемся загрузить до первой ошибки
+                    # Находим позицию ошибки и обрезаем файл
+                    error_pos = getattr(e, 'pos', None)
+                    if error_pos and error_pos > 0:
+                        # Пытаемся найти последний валидный объект
+                        partial_content = content[:error_pos]
+                        # Находим последнюю закрывающую скобку объекта
+                        last_brace = partial_content.rfind('}')
+                        if last_brace > 0:
+                            partial_content = partial_content[:last_brace + 1] + '\n]'
+                            try:
+                                return json.loads(partial_content)
+                            except json.JSONDecodeError:
+                                pass
+        except Exception as repair_error:
+            logger.debug("Не удалось исправить файл %s: %s", path, repair_error)
         return None
     except Exception as e:
         logger.error("Ошибка при загрузке JSON файла %s: %s", path, e)

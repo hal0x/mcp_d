@@ -19,7 +19,12 @@ from .graph_types import (
 from .importance_scoring import EvictionScorer, ImportanceScorer, MemoryPruner
 from .typed_graph import TypedGraphMemory
 from .embeddings import EmbeddingService, build_embedding_service_from_env
-from .vector_store import VectorStore, build_vector_store_from_env
+from .vector_store import (
+    VectorStore,
+    EntityVectorStore,
+    build_vector_store_from_env,
+    build_entity_vector_store_from_env,
+)
 
 __all__ = [
     "ImportanceScorer",
@@ -39,5 +44,7 @@ __all__ = [
     "EmbeddingService",
     "build_embedding_service_from_env",
     "VectorStore",
+    "EntityVectorStore",
     "build_vector_store_from_env",
+    "build_entity_vector_store_from_env",
 ]

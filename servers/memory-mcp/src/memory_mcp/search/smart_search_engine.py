@@ -47,6 +47,16 @@ class SmartSearchEngine:
         self.session_store = session_store
         self.min_confidence = min_confidence
         self._llm_client: Optional[LMStudioEmbeddingClient | OllamaEmbeddingClient] = None
+        
+        # Инициализируем обогатитель контекста сущностей
+        from .entity_context_enricher import EntityContextEnricher
+        from ..analysis.entity_dictionary import get_entity_dictionary
+        
+        entity_dict = get_entity_dictionary(graph=adapter.graph if hasattr(adapter, 'graph') else None)
+        self.entity_enricher = EntityContextEnricher(
+            entity_dictionary=entity_dict,
+            graph=adapter.graph if hasattr(adapter, 'graph') else None,
+        )
 
     def _get_llm_client(self) -> Optional[LMStudioEmbeddingClient | OllamaEmbeddingClient]:
         """Получение или создание LLM клиента."""
@@ -88,20 +98,30 @@ class SmartSearchEngine:
         Returns:
             Результаты поиска с интерактивными элементами
         """
+        # Обогащаем запрос контекстом сущностей
+        enriched_query = self.entity_enricher.enrich_query_with_entity_context(request.query)
+        
         # Получаем или создаем сессию
         session_id = request.session_id
         if not session_id:
-            session_id = self.session_store.create_session(request.query)
+            session_id = self.session_store.create_session(enriched_query)
         else:
             # Сохраняем уточненный запрос, если есть feedback
             if request.feedback:
-                refined_query = await self._refine_query(request.query, request.feedback)
-                if refined_query and refined_query != request.query:
+                refined_query = await self._refine_query(enriched_query, request.feedback)
+                if refined_query and refined_query != enriched_query:
                     self.session_store.add_refined_query(session_id, refined_query)
-                    request.query = refined_query
+                    enriched_query = refined_query
+        
+        # Обновляем запрос в request для использования в поиске
+        original_query = request.query
+        request.query = enriched_query
 
         # Выполняем параллельный поиск
         db_results, artifact_results = self._parallel_search(request)
+        
+        # Восстанавливаем оригинальный запрос для ответа
+        request.query = original_query
 
         # Объединяем результаты
         combined_results = self._combine_results(

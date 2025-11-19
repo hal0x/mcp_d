@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -62,15 +63,22 @@ class MemoryIngestor:
             by_source_chat[key].append((doc_node, record))
         
         # Создаем связи между соседними записями в одной группе (по timestamp)
+        # Также проверяем существующие записи в графе для создания связей с уже проиндексированными
         for (source, chat), nodes_records in by_source_chat.items():
             if len(nodes_records) < 2:
+                # Если только одна новая запись, проверяем существующие записи в графе
+                if len(nodes_records) == 1:
+                    new_node, new_record = nodes_records[0]
+                    self._link_to_existing_records(new_node, new_record, source, chat)
                 continue
+            
             # Сортируем по timestamp
             sorted_nodes = sorted(
                 nodes_records,
                 key=lambda x: x[1].timestamp,
             )
-            # Создаем связи между соседними записями
+            
+            # Создаем связи между новыми записями
             for i in range(len(sorted_nodes) - 1):
                 prev_node, prev_record = sorted_nodes[i]
                 next_node, next_record = sorted_nodes[i + 1]
@@ -89,8 +97,96 @@ class MemoryIngestor:
                         self.graph.add_edge(edge)
                     except Exception as e:
                         logger.debug(f"Failed to add edge between {prev_node.id} and {next_node.id}: {e}")
+            
+            # Связываем новые записи с существующими в графе
+            for new_node, new_record in sorted_nodes:
+                self._link_to_existing_records(new_node, new_record, source, chat)
         
         return stats
+
+    def _link_to_existing_records(
+        self,
+        new_node: DocChunkNode,
+        new_record: MemoryRecord,
+        source: str,
+        chat: str,
+    ) -> None:
+        """Создает связи между новой записью и существующими записями в графе."""
+        try:
+            cursor = self.graph.conn.cursor()
+            
+            # Получаем существующие записи из того же чата, отсортированные по timestamp
+            query = """
+                SELECT id, properties FROM nodes
+                WHERE type = 'DocChunk' 
+                AND id != ?
+                AND properties IS NOT NULL
+                AND (
+                    json_extract(properties, '$.source') = ? 
+                    OR json_extract(properties, '$.chat') = ?
+                )
+                ORDER BY json_extract(properties, '$.timestamp') DESC
+                LIMIT 10
+            """
+            
+            cursor.execute(query, (new_node.id, source, chat))
+            existing_rows = cursor.fetchall()
+            
+            if not existing_rows:
+                return
+            
+            # Парсим timestamp новой записи
+            new_timestamp = new_record.timestamp
+            
+            for row in existing_rows:
+                try:
+                    props = json.loads(row["properties"]) if isinstance(row["properties"], str) else row["properties"]
+                    if not props:
+                        continue
+                    
+                    # Получаем timestamp существующей записи
+                    existing_timestamp_str = props.get("timestamp") or props.get("created_at")
+                    if not existing_timestamp_str:
+                        continue
+                    
+                    from ..utils.datetime_utils import parse_datetime_utc
+                    existing_timestamp = parse_datetime_utc(existing_timestamp_str, default=None)
+                    if not existing_timestamp:
+                        continue
+                    
+                    # Вычисляем разницу во времени
+                    time_diff = abs((new_timestamp - existing_timestamp).total_seconds())
+                    
+                    # Создаем связь только если записи близки по времени (в пределах 4 часов)
+                    if time_diff <= 4 * 3600:  # 4 часа
+                        existing_id = row["id"]
+                        
+                        # Определяем направление связи (от более старой к более новой)
+                        if new_timestamp > existing_timestamp:
+                            source_id = existing_id
+                            target_id = new_node.id
+                        else:
+                            source_id = new_node.id
+                            target_id = existing_id
+                        
+                        edge = GraphEdge(
+                            id=f"{source_id}-next-{target_id}",
+                            source_id=source_id,
+                            target_id=target_id,
+                            type=EdgeType.RELATES_TO,
+                            weight=0.5,
+                            properties={"time_diff_seconds": time_diff},
+                        )
+                        try:
+                            self.graph.add_edge(edge)
+                        except Exception as e:
+                            # Игнорируем ошибки, если связь уже существует
+                            logger.debug(f"Failed to add edge between {source_id} and {target_id}: {e}")
+                except Exception as e:
+                    logger.debug(f"Ошибка при создании связи с существующей записью {row['id']}: {e}")
+                    continue
+        except Exception as e:
+            logger.debug(f"Ошибка при связывании новой записи {new_node.id} с существующими: {e}")
 
     def _build_doc_node(self, record: MemoryRecord) -> DocChunkNode:
         created_at = record.timestamp.isoformat()

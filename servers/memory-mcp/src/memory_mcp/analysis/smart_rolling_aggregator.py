@@ -281,23 +281,20 @@ class SmartRollingAggregator:
         manager.save_state(state)
 
     def _load_messages(self, chat_file: Path) -> List[Dict[str, Any]]:
-        """Загружает сообщения из файла"""
-        messages = []
-
+        """Загружает сообщения из файла (поддерживает JSON и JSONL)"""
+        from ..utils.json_loader import load_json_or_jsonl
+        
         try:
-            with open(chat_file, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        try:
-                            message = json.loads(line)
-                            messages.append(message)
-                        except json.JSONDecodeError:
-                            continue
+            messages, is_jsonl = load_json_or_jsonl(chat_file)
+            if isinstance(messages, list):
+                return messages
+            elif isinstance(messages, dict):
+                # Если это словарь, извлекаем поле messages
+                return messages.get("messages", [])
+            return []
         except Exception as e:
             logger.error(f"Ошибка загрузки сообщений из {chat_file}: {e}")
-
-        return messages
+            return []
 
     def _group_messages_by_window(
         self,

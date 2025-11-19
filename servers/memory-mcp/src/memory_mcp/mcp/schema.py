@@ -539,6 +539,90 @@ class AnalyzeEntitiesResponse(BaseModel):
     total_entities: int = Field(..., description="Всего найдено сущностей")
 
 
+class EntityContextItem(BaseModel):
+    """Контекст упоминания сущности."""
+
+    node_id: str = Field(..., description="ID узла с упоминанием")
+    content: str = Field(..., description="Содержание контекста")
+    source: str = Field(..., description="Источник")
+    chat: str = Field(..., description="Чат")
+    author: Optional[str] = Field(None, description="Автор")
+    timestamp: Optional[str] = Field(None, description="Временная метка")
+
+
+class RelatedEntityItem(BaseModel):
+    """Связанная сущность."""
+
+    entity_id: str = Field(..., description="ID сущности")
+    label: str = Field(..., description="Название сущности")
+    entity_type: str = Field(..., description="Тип сущности")
+    description: Optional[str] = Field(None, description="Описание")
+    edge_type: str = Field(..., description="Тип связи")
+    weight: float = Field(..., description="Вес связи")
+
+
+class EntityProfile(BaseModel):
+    """Полный профиль сущности."""
+
+    entity_type: str = Field(..., description="Тип сущности")
+    value: str = Field(..., description="Значение сущности")
+    normalized_value: str = Field(..., description="Нормализованное значение")
+    description: Optional[str] = Field(None, description="Описание сущности")
+    aliases: list[str] = Field(default_factory=list, description="Альтернативные названия")
+    mention_count: int = Field(..., description="Количество упоминаний")
+    chats: list[str] = Field(default_factory=list, description="Список чатов")
+    chat_counts: dict[str, int] = Field(default_factory=dict, description="Количество упоминаний по чатам")
+    first_seen: Optional[str] = Field(None, description="Первое упоминание (ISO)")
+    last_seen: Optional[str] = Field(None, description="Последнее упоминание (ISO)")
+    contexts: list[EntityContextItem] = Field(default_factory=list, description="Контексты упоминаний")
+    context_count: int = Field(..., description="Общее количество контекстов")
+    related_entities: list[RelatedEntityItem] = Field(default_factory=list, description="Связанные сущности")
+    importance: float = Field(..., description="Важность сущности (0-1)")
+
+
+class SearchEntitiesRequest(BaseModel):
+    """Request for searching entities by semantic similarity."""
+
+    query: Optional[str] = Field(None, description="Текстовый запрос для поиска сущностей")
+    query_vector: Optional[list[float]] = Field(None, description="Вектор запроса (если query не указан)")
+    entity_type: Optional[str] = Field(None, description="Фильтр по типу сущности")
+    limit: int = Field(10, ge=1, le=50, description="Максимальное количество результатов")
+
+
+class EntitySearchResult(BaseModel):
+    """Результат поиска сущности."""
+
+    entity_id: str = Field(..., description="ID сущности")
+    score: float = Field(..., description="Score сходства")
+    entity_type: str = Field(..., description="Тип сущности")
+    value: str = Field(..., description="Значение сущности")
+    description: Optional[str] = Field(None, description="Описание")
+    importance: float = Field(..., description="Важность")
+    mention_count: int = Field(..., description="Количество упоминаний")
+
+
+class SearchEntitiesResponse(BaseModel):
+    """Response with entity search results."""
+
+    results: list[EntitySearchResult] = Field(
+        default_factory=list, description="Список найденных сущностей"
+    )
+    total_found: int = Field(..., description="Всего найдено сущностей")
+
+
+class GetEntityProfileRequest(BaseModel):
+    """Request for getting entity profile."""
+
+    entity_type: str = Field(..., description="Тип сущности")
+    value: str = Field(..., description="Значение сущности")
+
+
+class GetEntityProfileResponse(BaseModel):
+    """Response with entity profile."""
+
+    profile: Optional[EntityProfile] = Field(None, description="Профиль сущности, если найден")
+
+
 # --------------------------- Batch operations schemas ---------------------------
 
 

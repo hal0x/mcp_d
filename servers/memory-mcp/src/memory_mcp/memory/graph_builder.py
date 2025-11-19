@@ -187,9 +187,15 @@ class GraphBuilder:
         )
 
     def _create_entity_node(
-        self, entity_name: str, entity_type: str = "term"
+        self, entity_name: str, entity_type: str = "term", description: Optional[str] = None
     ) -> Optional[EntityNode]:
-        """Создание узла сущности"""
+        """Создание узла сущности
+        
+        Args:
+            entity_name: Имя сущности
+            entity_type: Тип сущности
+            description: Описание сущности (опционально)
+        """
         if not entity_name or entity_name in self.entity_cache:
             return None
 
@@ -202,9 +208,24 @@ class GraphBuilder:
             label=entity_name,
             entity_type=entity_type,
             aliases=[normalized],
+            description=description,
             importance=0.5,
             properties={"original_name": entity_name},
         )
+    
+    def _get_entity_description_from_dict(self, entity_name: str, entity_type: str) -> Optional[str]:
+        """Получение описания сущности из словаря
+        
+        Args:
+            entity_name: Имя сущности
+            entity_type: Тип сущности
+            
+        Returns:
+            Описание сущности или None
+        """
+        # GraphBuilder не имеет прямого доступа к EntityDictionary
+        # Описание будет получено позже при обновлении узла в графе
+        return None
 
     def _create_doc_chunk_node(
         self, message: Dict[str, Any], session_id: str, index: int

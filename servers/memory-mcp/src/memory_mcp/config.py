@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     )
     large_context_cache_size: int = Field(100, description="Размер кэша для промежуточных результатов")
 
+    # Настройки генерации описаний сущностей
+    entity_description_enabled: bool = Field(True, description="Включить генерацию описаний сущностей")
+    entity_description_max_length: int = Field(200, description="Максимальная длина описания сущности")
+
     model_config = SettingsConfigDict(
         env_prefix="MEMORY_MCP_",
         env_file=".env",

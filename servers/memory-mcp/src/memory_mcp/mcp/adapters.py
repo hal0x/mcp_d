@@ -22,6 +22,14 @@ from ..utils.datetime_utils import parse_datetime_utc
 from .schema import (
     AnalyzeEntitiesRequest,
     AnalyzeEntitiesResponse,
+    SearchEntitiesRequest,
+    SearchEntitiesResponse,
+    GetEntityProfileRequest,
+    GetEntityProfileResponse,
+    EntitySearchResult,
+    EntityProfile,
+    EntityContextItem,
+    RelatedEntityItem,
     AttachmentPayload,
     BackgroundIndexingRequest,
     BackgroundIndexingResponse,
@@ -229,6 +237,16 @@ class MemoryServiceAdapter:
         from ..config import get_settings
         settings = get_settings()
         self.artifacts_reader = ArtifactsReader(artifacts_dir=settings.artifacts_path)
+        
+        # Инициализируем обогатитель контекста сущностей
+        from ..search.entity_context_enricher import EntityContextEnricher
+        from ..analysis.entity_dictionary import get_entity_dictionary
+        
+        entity_dict = get_entity_dictionary(graph=self.graph)
+        self.entity_enricher = EntityContextEnricher(
+            entity_dictionary=entity_dict,
+            graph=self.graph,
+        )
     
     def _find_node_id(self, record_id: str) -> Optional[str]:
         """Находит node_id в графе по различным форматам record_id.
@@ -528,8 +546,14 @@ class MemoryServiceAdapter:
 
     def search(self, request: SearchRequest) -> SearchResponse:
         """Выполняет гибридный поиск: FTS5 + векторный + ChromaDB с объединением через RRF."""
+        # Обогащаем запрос контекстом сущностей
+        enriched_query = self.entity_enricher.enrich_query_with_entity_context(request.query)
+        
+        # Извлекаем сущности из запроса для добавления в результаты
+        extracted_entities = self.entity_enricher.extract_entities_from_query(request.query)
+        
         rows, total_fts = self.graph.search_text(
-            request.query,
+            enriched_query,  # Используем обогащенный запрос
             limit=request.top_k * 2,  # Берем больше для RRF
             source=request.source,
             tags=request.tags,
@@ -571,6 +595,25 @@ class MemoryServiceAdapter:
                     except Exception:
                         pass
             
+            # Добавляем BM25 score в метаданные
+            # row.get("metadata") может быть None, dict или строкой JSON
+            row_metadata = row.get("metadata")
+            if row_metadata is None:
+                metadata = {}
+            elif isinstance(row_metadata, dict):
+                metadata = dict(row_metadata)
+            elif isinstance(row_metadata, str):
+                try:
+                    import json
+                    metadata = json.loads(row_metadata)
+                except:
+                    metadata = {}
+            else:
+                metadata = {}
+            
+            metadata["bm25_score"] = float(row.get("score", 0.0))
+            metadata["search_source"] = "fts5"
+            
             item = SearchResultItem(
                 record_id=row["node_id"],
                 score=row["score"],  # Оригинальный score, RRF пересчитает
@@ -578,7 +621,7 @@ class MemoryServiceAdapter:
                 source=row["source"],
                 timestamp=row["timestamp"],
                 author=row.get("author"),
-                metadata=row.get("metadata", {}),
+                metadata=metadata,
                 embedding=embedding,
             )
             fts_results.append(item)
@@ -587,7 +630,8 @@ class MemoryServiceAdapter:
         # 2. Векторный поиск (Qdrant)
         vector_results: list[SearchResultItem] = []
         if self.embedding_service and self.vector_store:
-            query_vector = self.embedding_service.embed(request.query)
+            # Используем обогащенный запрос для векторного поиска
+            query_vector = self.embedding_service.embed(enriched_query)
             if query_vector:
                 vector_matches = self.vector_store.search(
                     query_vector,
@@ -613,6 +657,11 @@ class MemoryServiceAdapter:
                         snippet=snippet,
                     )
                     if item:
+                        # Добавляем vector score в метаданные
+                        if not item.metadata:
+                            item.metadata = {}
+                        item.metadata["vector_score"] = match.score
+                        item.metadata["search_source"] = "vector"
                         vector_results.append(item)
                         # Сохраняем в all_items, если еще нет (или обновляем, если векторный результат лучше)
                         if record_id not in all_items:
@@ -688,9 +737,19 @@ class MemoryServiceAdapter:
             rrf_scores = self._reciprocal_rank_fusion(result_lists, k=self._rrf_k)
             
             # Обновляем scores в all_items на основе RRF
+            # Но сохраняем оригинальные BM25 и vector scores в метаданных
             for record_id, rrf_score in rrf_scores.items():
                 if record_id in all_items:
-                    all_items[record_id].score = rrf_score
+                    item = all_items[record_id]
+                    # Сохраняем оригинальные scores в метаданных перед обновлением
+                    if not item.metadata:
+                        item.metadata = {}
+                    # Сохраняем оригинальный score как rrf_input_score, если его еще нет
+                    if "rrf_input_score" not in item.metadata:
+                        item.metadata["rrf_input_score"] = item.score
+                    # Обновляем score на RRF score
+                    item.score = rrf_score
+                    item.metadata["rrf_score"] = rrf_score
             
             # Сортируем по RRF score
             results = sorted(all_items.values(), key=lambda item: item.score, reverse=True)
@@ -700,14 +759,26 @@ class MemoryServiceAdapter:
             
             # FTS5 результаты с весом
             for item in fts_results:
+                # Сохраняем оригинальный BM25 score в метаданных
+                if not item.metadata:
+                    item.metadata = {}
+                item.metadata["bm25_score_original"] = item.score
                 item.score = item.score * self._fts_weight
                 combined[item.record_id] = item
             
             # Vector результаты с весом
             for item in vector_results:
+                # Сохраняем оригинальный vector score в метаданных
+                if not item.metadata:
+                    item.metadata = {}
+                item.metadata["vector_score_original"] = item.score
                 score = item.score * self._vector_weight
                 existing = combined.get(item.record_id)
                 if existing:
+                    # Сохраняем vector score в метаданных существующего элемента
+                    if not existing.metadata:
+                        existing.metadata = {}
+                    existing.metadata["vector_score_original"] = item.score
                     existing.score = max(existing.score, score)
                     # Обновляем эмбеддинг, если его не было
                     if not existing.embedding and item.embedding:
@@ -732,6 +803,14 @@ class MemoryServiceAdapter:
             results = sorted(combined.values(), key=lambda item: item.score, reverse=True)
 
         total_combined = max(total_fts, len(all_items))
+        
+        # Добавляем информацию о найденных сущностях в метаданные результатов
+        if extracted_entities:
+            for result in results[: request.top_k]:
+                if not result.metadata:
+                    result.metadata = {}
+                result.metadata["query_entities"] = extracted_entities
+        
         return SearchResponse(
             results=results[: request.top_k],
             total_matches=total_combined,
@@ -775,12 +854,35 @@ class MemoryServiceAdapter:
             # Убираем дубликаты
             search_patterns = list(dict.fromkeys(search_patterns))
             
+            # Также пробуем поиск по частичному совпадению (LIKE)
+            search_patterns_with_like = []
             for pattern in search_patterns:
+                search_patterns_with_like.append(pattern)
+                # Если pattern содержит дефисы, пробуем поиск по частичному совпадению
+                if "-" in pattern:
+                    # Для записей типа "semya-old-S0005-M0007" пробуем найти по началу
+                    parts = pattern.split("-")
+                    if len(parts) >= 2:
+                        # Пробуем найти по начальным частям
+                        for i in range(2, len(parts) + 1):
+                            partial = "-".join(parts[:i])
+                            search_patterns_with_like.append(partial)
+            
+            for pattern in search_patterns_with_like:
+                # Сначала точное совпадение
                 cursor.execute(
                     "SELECT id FROM nodes WHERE id = ? LIMIT 1",
                     (pattern,)
                 )
                 row = cursor.fetchone()
+                if not row:
+                    # Пробуем частичное совпадение (LIKE)
+                    cursor.execute(
+                        "SELECT id FROM nodes WHERE id LIKE ? LIMIT 1",
+                        (f"{pattern}%",)
+                    )
+                    row = cursor.fetchone()
+                
                 if row:
                     found_id = row["id"]
                     logger.debug(f"Найдена запись по паттерну '{pattern}': {found_id}")
@@ -1009,6 +1111,112 @@ class MemoryServiceAdapter:
                 notes=perf_data.get("notes"),
             )
         return GetSignalPerformanceResponse(signal=signal, performance=perf)
+
+    def search_entities(
+        self, request: SearchEntitiesRequest
+    ) -> SearchEntitiesResponse:
+        """Поиск сущностей по семантическому сходству."""
+        from ..memory.vector_store import build_entity_vector_store_from_env
+        
+        entity_vector_store = build_entity_vector_store_from_env()
+        if not entity_vector_store or not entity_vector_store.available():
+            return SearchEntitiesResponse(results=[], total_found=0)
+        
+        # Генерируем вектор запроса, если передан текст
+        query_vector = request.query_vector
+        if not query_vector and request.query:
+            if not self.embedding_service:
+                return SearchEntitiesResponse(results=[], total_found=0)
+            query_vector = self.embedding_service.embed(request.query)
+        
+        if not query_vector:
+            return SearchEntitiesResponse(results=[], total_found=0)
+        
+        # Поиск в EntityVectorStore
+        search_results = entity_vector_store.search_entities(
+            query_vector=query_vector,
+            entity_type=request.entity_type,
+            limit=request.limit,
+        )
+        
+        # Преобразуем результаты в EntitySearchResult
+        results = []
+        for result in search_results:
+            payload = result.payload or {}
+            results.append(
+                EntitySearchResult(
+                    entity_id=result.entity_id,
+                    score=result.score,
+                    entity_type=payload.get("entity_type", ""),
+                    value=payload.get("value", ""),
+                    description=payload.get("description"),
+                    importance=payload.get("importance", 0.5),
+                    mention_count=payload.get("mention_count", 0),
+                )
+            )
+        
+        return SearchEntitiesResponse(results=results, total_found=len(results))
+
+    def get_entity_profile(
+        self, request: GetEntityProfileRequest
+    ) -> GetEntityProfileResponse:
+        """Получение полного профиля сущности."""
+        from ..analysis.entity_dictionary import get_entity_dictionary
+        
+        entity_dict = get_entity_dictionary(graph=self.graph)
+        if not entity_dict:
+            return GetEntityProfileResponse(profile=None)
+        
+        # Строим профиль сущности
+        profile_data = entity_dict.build_entity_profile(request.entity_type, request.value)
+        
+        if not profile_data:
+            return GetEntityProfileResponse(profile=None)
+        
+        # Преобразуем контексты
+        contexts = [
+            EntityContextItem(
+                node_id=ctx.get("node_id", ""),
+                content=ctx.get("content", ""),
+                source=ctx.get("source", ""),
+                chat=ctx.get("chat", ""),
+                author=ctx.get("author"),
+                timestamp=ctx.get("timestamp"),
+            )
+            for ctx in profile_data.get("contexts", [])
+        ]
+        
+        # Преобразуем связанные сущности
+        related = [
+            RelatedEntityItem(
+                entity_id=r.get("entity_id", ""),
+                label=r.get("label", ""),
+                entity_type=r.get("entity_type", ""),
+                description=r.get("description"),
+                edge_type=r.get("edge_type", ""),
+                weight=r.get("weight", 0.0),
+            )
+            for r in profile_data.get("related_entities", [])
+        ]
+        
+        profile = EntityProfile(
+            entity_type=profile_data.get("entity_type", ""),
+            value=profile_data.get("value", ""),
+            normalized_value=profile_data.get("normalized_value", ""),
+            description=profile_data.get("description"),
+            aliases=profile_data.get("aliases", []),
+            mention_count=profile_data.get("mention_count", 0),
+            chats=profile_data.get("chats", []),
+            chat_counts=profile_data.get("chat_counts", {}),
+            first_seen=profile_data.get("first_seen"),
+            last_seen=profile_data.get("last_seen"),
+            contexts=contexts,
+            context_count=profile_data.get("context_count", 0),
+            related_entities=related,
+            importance=profile_data.get("importance", 0.5),
+        )
+        
+        return GetEntityProfileResponse(profile=profile)
 
     def ingest_scraped_content(
         self, request: ScrapedContentRequest
@@ -1885,75 +2093,83 @@ class MemoryServiceAdapter:
         """Get timeline of records sorted by timestamp."""
         cursor = self.graph.conn.cursor()
         
-        # Получаем все узлы с properties, фильтруем в Python для более гибкого поиска
-        query = "SELECT id, properties FROM nodes WHERE properties IS NOT NULL"
+        # Получаем все узлы типа DocChunk с properties
+        # Фильтруем только записи с типом DocChunk, чтобы исключить служебные узлы
+        query = """
+            SELECT id, properties, type FROM nodes 
+            WHERE type = 'DocChunk' AND properties IS NOT NULL
+        """
         
-        query += " ORDER BY json_extract(properties, '$.timestamp') DESC"
-        if request.limit:
-            # Берем больше записей для фильтрации
-            query += f" LIMIT {request.limit * 10 if request.source else request.limit}"
-        
+        # Используем более надежный способ сортировки
+        # Сначала получаем все записи, потом сортируем в Python
         cursor.execute(query)
         
         items = []
         for row in cursor.fetchall():
-            if row["properties"]:
-                props = json.loads(row["properties"])
-                # Используем source из properties, или chat, или "unknown"
-                source = props.get("source") or props.get("chat", "unknown")
+            if not row["properties"]:
+                continue
                 
-                # Дополнительная фильтрация по source, если указан
-                if request.source and source != request.source:
-                    continue
-                
-                timestamp_str = props.get("timestamp") or props.get("created_at")
-                if not timestamp_str:
-                    continue
-                
-                # Используем parse_datetime_utc для более гибкой обработки дат
-                try:
-                    timestamp = parse_datetime_utc(timestamp_str, default=None)
-                    if timestamp is None:
-                        logger.debug(
-                            f"Не удалось распарсить timestamp '{timestamp_str}' для записи {row['id']}"
-                        )
-                        continue
-                except Exception as e:
+            try:
+                props = json.loads(row["properties"]) if isinstance(row["properties"], str) else row["properties"]
+            except (json.JSONDecodeError, TypeError):
+                logger.debug(f"Не удалось распарсить properties для узла {row['id']}")
+                continue
+            
+            # Используем source из properties, или chat, или "unknown"
+            source = props.get("source") or props.get("chat", "unknown")
+            
+            # Дополнительная фильтрация по source, если указан
+            if request.source and source != request.source:
+                continue
+            
+            timestamp_str = props.get("timestamp") or props.get("created_at")
+            if not timestamp_str:
+                continue
+            
+            # Используем parse_datetime_utc для более гибкой обработки дат
+            try:
+                timestamp = parse_datetime_utc(timestamp_str, default=None)
+                if timestamp is None:
                     logger.debug(
-                        f"Ошибка при парсинге timestamp '{timestamp_str}' для записи {row['id']}: {e}"
+                        f"Не удалось распарсить timestamp '{timestamp_str}' для записи {row['id']}"
                     )
                     continue
-                
-                # Фильтруем по датам
-                # Убеждаемся, что оба datetime имеют timezone для корректного сравнения
-                if request.date_from:
-                    date_from = request.date_from
-                    if timestamp.tzinfo is None and date_from.tzinfo is not None:
-                        timestamp = timestamp.replace(tzinfo=timezone.utc)
-                    elif timestamp.tzinfo is not None and date_from.tzinfo is None:
-                        date_from = date_from.replace(tzinfo=timezone.utc)
-                    if timestamp < date_from:
-                        continue
-                if request.date_to:
-                    date_to = request.date_to
-                    if timestamp.tzinfo is None and date_to.tzinfo is not None:
-                        timestamp = timestamp.replace(tzinfo=timezone.utc)
-                    elif timestamp.tzinfo is not None and date_to.tzinfo is None:
-                        date_to = date_to.replace(tzinfo=timezone.utc)
-                    if timestamp > date_to:
-                        continue
-                
-                content = props.get("content", "")
-                content_preview = content[:200] if content else ""
-                
-                items.append(
-                    TimelineItem(
-                        record_id=row["id"],
-                        timestamp=timestamp,
-                        source=source,
-                        content_preview=content_preview,
-                    )
+            except Exception as e:
+                logger.debug(
+                    f"Ошибка при парсинге timestamp '{timestamp_str}' для записи {row['id']}: {e}"
                 )
+                continue
+            
+            # Фильтруем по датам
+            # Убеждаемся, что оба datetime имеют timezone для корректного сравнения
+            if request.date_from:
+                date_from = request.date_from
+                if timestamp.tzinfo is None and date_from.tzinfo is not None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                elif timestamp.tzinfo is not None and date_from.tzinfo is None:
+                    date_from = date_from.replace(tzinfo=timezone.utc)
+                if timestamp < date_from:
+                    continue
+            if request.date_to:
+                date_to = request.date_to
+                if timestamp.tzinfo is None and date_to.tzinfo is not None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                elif timestamp.tzinfo is not None and date_to.tzinfo is None:
+                    date_to = date_to.replace(tzinfo=timezone.utc)
+                if timestamp > date_to:
+                    continue
+            
+            content = props.get("content", "")
+            content_preview = content[:200] if content else ""
+            
+            items.append(
+                TimelineItem(
+                    record_id=row["id"],
+                    timestamp=timestamp,
+                    source=source,
+                    content_preview=content_preview,
+                )
+            )
         
         # Сортируем по timestamp
         items.sort(key=lambda x: x.timestamp, reverse=True)
@@ -2244,36 +2460,30 @@ class MemoryServiceAdapter:
         
         cursor = self.graph.conn.cursor()
         
+        # Используем более надежный способ фильтрации через json_extract
         query = """
             SELECT id, properties FROM nodes
             WHERE type = 'DocChunk' AND properties IS NOT NULL
         """
         params = []
         
+        # Фильтрация по source через json_extract
         if request.source:
-            query += " AND properties LIKE ?"
-            params.append(f'%"source": "{request.source}"%')
+            query += " AND (json_extract(properties, '$.source') = ? OR json_extract(properties, '$.chat') = ?)"
+            params.extend([request.source, request.source])
         
-        if request.tags:
-            for tag in request.tags:
-                query += " AND properties LIKE ?"
-                params.append(f'%"tags":%"{tag}"%')
-        
+        # Фильтрация по датам
         if request.date_from:
-            query += " AND json_extract(properties, '$.timestamp') >= ?"
-            if isinstance(request.date_from, datetime):
-                params.append(request.date_from.timestamp())
-            else:
-                params.append(request.date_from)
+            query += " AND json_extract(properties, '$.timestamp') IS NOT NULL"
+            # Будем фильтровать в Python после парсинга
         
         if request.date_to:
-            query += " AND json_extract(properties, '$.timestamp') <= ?"
-            if isinstance(request.date_to, datetime):
-                params.append(request.date_to.timestamp())
-            else:
-                params.append(request.date_to)
+            query += " AND json_extract(properties, '$.timestamp') IS NOT NULL"
+            # Будем фильтровать в Python после парсинга
         
-        query += f" LIMIT {request.limit}"
+        # Берем больше записей для фильтрации в Python
+        limit_multiplier = 10 if (request.source or request.tags or request.date_from or request.date_to) else 1
+        query += f" LIMIT {request.limit * limit_multiplier}"
         
         cursor.execute(query, params)
         rows = cursor.fetchall()
@@ -2285,15 +2495,36 @@ class MemoryServiceAdapter:
                 if not props:
                     continue
                 
-                if request.source and props.get("source") != request.source:
+                # Фильтрация по source в Python (более надежно)
+                source = props.get("source") or props.get("chat", "unknown")
+                if request.source and source != request.source:
                     continue
                 
+                # Фильтрация по тегам
                 if request.tags:
                     node_tags = props.get("tags", [])
                     if not isinstance(node_tags, list):
                         node_tags = []
                     if not all(tag in node_tags for tag in request.tags):
                         continue
+                
+                # Фильтрация по датам
+                timestamp_str = props.get("timestamp") or props.get("created_at")
+                if timestamp_str:
+                    try:
+                        timestamp = parse_datetime_utc(timestamp_str, default=None)
+                        if timestamp:
+                            if request.date_from:
+                                if timestamp < request.date_from:
+                                    continue
+                            if request.date_to:
+                                if timestamp > request.date_to:
+                                    continue
+                    except Exception as e:
+                        logger.debug(f"Ошибка при парсинге timestamp для экспорта: {e}")
+                        # Пропускаем записи с некорректными датами
+                        if request.date_from or request.date_to:
+                            continue
                 
                 record = MemoryRecordPayload(
                     record_id=row["id"],
@@ -2307,6 +2538,10 @@ class MemoryServiceAdapter:
                     metadata={k: v for k, v in props.items() if k not in ["source", "content", "timestamp", "author", "tags", "entities", "created_at"]},
                 )
                 records.append(record)
+                
+                # Ограничиваем количество записей после фильтрации
+                if len(records) >= request.limit:
+                    break
             except Exception as e:
                 logger.debug(f"Failed to parse record {row['id']}: {e}")
                 continue
