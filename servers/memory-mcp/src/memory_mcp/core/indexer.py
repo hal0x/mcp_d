@@ -2,6 +2,7 @@
 """Двухуровневая индексация: L1 (sessions с саммари) и L2 (messages с контекстом)."""
 
 import asyncio
+import json
 import logging
 from collections import Counter
 from datetime import datetime, timedelta
@@ -1278,6 +1279,11 @@ class TwoLevelIndexer:
                     except Exception as e:
                         logger.debug(f"Ошибка при сохранении эмбеддинга сессии {session_id}: {e}")
                 
+                # Создаем связи с предыдущими сессиями того же чата
+                # Получаем имя чата из meta, с fallback на chat_id из summary
+                chat = meta.get("chat_name") or summary.get("chat_id") or ""
+                self._link_session_to_previous_sessions(session_id, chat, start_time_utc)
+                
                 logger.debug(f"Синхронизирована сессия {session_id} с графом памяти")
             except Exception as e:
                 logger.warning(f"Ошибка при синхронизации сессии {session_id} с графом: {e}")
@@ -1310,13 +1316,63 @@ class TwoLevelIndexer:
                 if not msg_text or len(msg_text) < 10:
                     continue
 
+                # Используем уникальный ID сообщения из Telegram для предотвращения дублирования
+                # Приоритет: id -> message_id -> fallback на session-based ID
+                telegram_msg_id = msg.get("id") or msg.get("message_id")
+                if telegram_msg_id:
+                    # Используем формат: chat:telegram_msg_id для уникальности
+                    msg_id = f"{chat}:{telegram_msg_id}"
+                else:
+                    # Fallback: используем session-based ID, но с хешем текста для уникальности
+                    import hashlib
+                    text_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:8]
+                    msg_id = f"{session_id}-M{i+1:04d}-{text_hash}"
+                
                 # Проверяем, существует ли уже это сообщение в базе
-                msg_id = f"{session_id}-M{i+1:04d}"
+                # Сначала проверяем по точному ID
                 existing_msg = self.messages_collection.get(ids=[msg_id])
                 if existing_msg and existing_msg.get("ids"):
                     # Сообщение уже существует, пропускаем
                     logger.debug(f"Сообщение {msg_id} уже существует, пропускаем")
                     continue
+                
+                # Дополнительная проверка: ищем дубликаты по содержимому и telegram ID
+                # Это предотвращает дублирование, когда одно сообщение попадает в разные сессии
+                if telegram_msg_id:
+                    # Ищем по telegram ID в других сессиях
+                    import hashlib
+                    content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
+                    # Ищем записи с таким же telegram ID или хешем содержимого
+                    try:
+                        # Проверяем в ChromaDB по метаданным
+                        existing_by_id = self.messages_collection.get(
+                            where={"$or": [
+                                {"msg_id": {"$eq": f"{chat}:{telegram_msg_id}"}},
+                                {"telegram_id": {"$eq": str(telegram_msg_id)}},
+                                {"content_hash": {"$eq": content_hash}}
+                            ]},
+                            limit=1
+                        )
+                        if existing_by_id and existing_by_id.get("ids"):
+                            logger.debug(f"Дубликат сообщения найден по telegram_id={telegram_msg_id} или content_hash={content_hash}, пропускаем")
+                            continue
+                    except Exception as e:
+                        # Если поиск по метаданным не работает, продолжаем
+                        logger.debug(f"Не удалось проверить дубликаты по метаданным: {e}")
+                else:
+                    # Для сообщений без telegram ID проверяем по хешу содержимого
+                    import hashlib
+                    content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
+                    try:
+                        existing_by_hash = self.messages_collection.get(
+                            where={"content_hash": {"$eq": content_hash}},
+                            limit=1
+                        )
+                        if existing_by_hash and existing_by_hash.get("ids"):
+                            logger.debug(f"Дубликат сообщения найден по content_hash={content_hash}, пропускаем")
+                            continue
+                    except Exception as e:
+                        logger.debug(f"Не удалось проверить дубликаты по хешу: {e}")
 
                 # Добавляем симметричный контекст (до 10 сообщений, ≤ 1500 символов)
                 # В каналах соседний контент менее релевантен — уменьшим контекст
@@ -1370,6 +1426,10 @@ class TwoLevelIndexer:
                         f"В сообщении {i+1} сессии {session_id} заменены некорректные URL: {replaced_urls}"
                     )
 
+                # Вычисляем content_hash для предотвращения дублирования
+                import hashlib
+                content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
+                
                 # Сохраняем данные для батчевой обработки
                 messages_to_index.append({
                     "msg_id": msg_id,
@@ -1377,6 +1437,8 @@ class TwoLevelIndexer:
                     "embedding_text": embedding_text,
                     "msg_index": i,  # Сохраняем индекс для извлечения автора
                     "msg": msg,  # Сохраняем исходное сообщение для извлечения автора
+                    "telegram_id": str(telegram_msg_id) if telegram_msg_id else None,
+                    "content_hash": content_hash,
                     "metadata": {
                         "msg_id": msg_id,
                         "session_id": session_id,
@@ -1388,6 +1450,8 @@ class TwoLevelIndexer:
                         "replaced_urls": ",".join(replaced_urls)
                         if replaced_urls
                         else "",  # Сохраняем замененные URL как строку
+                        "telegram_id": str(telegram_msg_id) if telegram_msg_id else None,
+                        "content_hash": content_hash,
                     }
                 })
 
@@ -2246,6 +2310,90 @@ class TwoLevelIndexer:
             f"✅ Стратегия '{strategy}' применена: создано {len(sessions)} сессий"
         )
         return sessions
+
+    def _link_session_to_previous_sessions(
+        self, session_id: str, chat: str, session_timestamp: datetime
+    ) -> None:
+        """Создает связи между текущей сессией и предыдущими сессиями того же чата."""
+        if not self.graph:
+            return
+        
+        try:
+            from ..memory.graph_types import GraphEdge, EdgeType
+            cursor = self.graph.conn.cursor()
+            
+            # Ищем предыдущие сессии того же чата
+            query = """
+                SELECT id, properties FROM nodes
+                WHERE type = 'DocChunk' 
+                AND id != ?
+                AND id LIKE ?
+                AND properties IS NOT NULL
+                AND json_extract(properties, '$.session_type') = 'session_summary'
+                AND (
+                    json_extract(properties, '$.chat') = ?
+                    OR json_extract(properties, '$.source') = ?
+                )
+                ORDER BY json_extract(properties, '$.timestamp') DESC
+                LIMIT 5
+            """
+            
+            # Ищем сессии с префиксом чата (например, "Семья-S" или "semya-")
+            chat_prefix = f"{chat}-S%"
+            cursor.execute(query, (session_id, chat_prefix, chat, chat))
+            existing_sessions = cursor.fetchall()
+            
+            for row in existing_sessions:
+                try:
+                    props = json.loads(row["properties"]) if isinstance(row["properties"], str) else row["properties"]
+                    if not props:
+                        continue
+                    
+                    # Получаем timestamp предыдущей сессии
+                    prev_timestamp_str = props.get("timestamp") or props.get("start_time_utc")
+                    if not prev_timestamp_str:
+                        continue
+                    
+                    from ..utils.datetime_utils import parse_datetime_utc
+                    prev_timestamp = parse_datetime_utc(prev_timestamp_str, default=None)
+                    if not prev_timestamp:
+                        continue
+                    
+                    # Создаем связь только если сессии близки по времени (в пределах 7 дней)
+                    time_diff = abs((session_timestamp - prev_timestamp).total_seconds())
+                    if time_diff <= 7 * 24 * 3600:  # 7 дней
+                        prev_session_id = row["id"]
+                        
+                        # Определяем направление связи (от более старой к более новой)
+                        if session_timestamp > prev_timestamp:
+                            source_id = prev_session_id
+                            target_id = session_id
+                        else:
+                            source_id = session_id
+                            target_id = prev_session_id
+                        
+                        edge = GraphEdge(
+                            id=f"{source_id}-next-session-{target_id}",
+                            source_id=source_id,
+                            target_id=target_id,
+                            type=EdgeType.RELATES_TO,
+                            weight=0.7,  # Высокий вес для связей между сессиями
+                            properties={
+                                "time_diff_seconds": time_diff,
+                                "relation_type": "session_sequence"
+                            },
+                        )
+                        try:
+                            self.graph.add_edge(edge)
+                            logger.debug(f"Создана связь между сессиями {source_id} -> {target_id}")
+                        except Exception as e:
+                            # Игнорируем ошибки, если связь уже существует
+                            logger.debug(f"Не удалось создать связь между сессиями {source_id} и {target_id}: {e}")
+                except Exception as e:
+                    logger.debug(f"Ошибка при создании связи с сессией {row['id']}: {e}")
+                    continue
+        except Exception as e:
+            logger.debug(f"Ошибка при связывании сессии {session_id} с предыдущими: {e}")
 
 
 if __name__ == "__main__":
