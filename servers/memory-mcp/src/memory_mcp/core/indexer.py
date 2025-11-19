@@ -1056,6 +1056,8 @@ class TwoLevelIndexer:
                 # Сохраняем словари сущностей если включено обучение
                 if self.entity_dictionary and self.enable_entity_learning:
                     try:
+                        # Обрабатываем очередь валидации перед сохранением
+                        self.entity_dictionary.flush_validation_queue()
                         self.entity_dictionary.save_dictionaries()
                         logger.info(f"Словари сущностей сохранены для чата {chat_name}")
                     except Exception as e:

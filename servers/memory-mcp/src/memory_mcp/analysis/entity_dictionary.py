@@ -36,6 +36,7 @@ class EntityDictionary:
         storage_path: Path = Path("config/entity_dictionaries"),
         enable_llm_validation: bool = True,
         llm_client: Optional[Any] = None,
+        batch_validation_size: int = 10,
     ):
         """Инициализирует словарь сущностей.
 
@@ -43,6 +44,7 @@ class EntityDictionary:
             storage_path: Путь к директории для хранения словарей
             enable_llm_validation: Включить валидацию через LLM
             llm_client: Клиент для LLM (опционально, создается автоматически если не указан)
+            batch_validation_size: Размер батча для валидации сущностей (по умолчанию 10)
         """
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
@@ -63,6 +65,8 @@ class EntityDictionary:
         self.enable_llm_validation = enable_llm_validation
         self._llm_client = llm_client
         self._llm_client_initialized = False
+        self.batch_validation_size = batch_validation_size
+        self._validation_queue: List[Dict[str, Any]] = []
         
         self.load_dictionaries()
 
@@ -98,7 +102,7 @@ class EntityDictionary:
         normalized_value = value.lower().strip().replace('@', '')
         return normalized_value in self.username_to_names.get(chat_name, {})
 
-    def track_entity(self, entity_type: str, value: str, chat_name: str, author_username: Optional[str] = None, author_display_name: Optional[str] = None) -> bool:
+    def track_entity(self, entity_type: str, value: str, chat_name: str, author_username: Optional[str] = None, author_display_name: Optional[str] = None, use_batch: bool = True) -> bool:
         """Отслеживает появление сущности и добавляет в словарь при достижении порога.
 
         Args:
@@ -107,6 +111,7 @@ class EntityDictionary:
             chat_name: Название чата
             author_username: Никнейм автора сообщения (опционально, для связывания)
             author_display_name: Отображаемое имя автора (опционально, для связывания)
+            use_batch: Использовать батч-валидацию (по умолчанию True)
 
         Returns:
             True если сущность добавлена в словарь, False иначе
@@ -141,13 +146,26 @@ class EntityDictionary:
 
             # Валидация через LLM перед добавлением в словарь
             if self.enable_llm_validation:
-                is_valid = self._validate_entity_with_llm(entity_type, normalized_value, value, chat_name)
-                if not is_valid:
-                    logger.debug(
-                        f"Сущность отклонена LLM: {entity_type}={normalized_value} "
-                        f"(встречается {total_count} раз, но не прошла валидацию)"
-                    )
+                if use_batch:
+                    # Добавляем в очередь для батч-валидации
+                    self._validation_queue.append({
+                        "entity_type": entity_type,
+                        "normalized_value": normalized_value,
+                        "original_value": value,
+                        "chat_name": chat_name,
+                    })
+                    # Не добавляем сразу, вернем False
+                    # Сущность будет добавлена после flush_validation_queue
                     return False
+                else:
+                    # Старый способ - немедленная валидация
+                    is_valid = self._validate_entity_with_llm(entity_type, normalized_value, value, chat_name)
+                    if not is_valid:
+                        logger.debug(
+                            f"Сущность отклонена LLM: {entity_type}={normalized_value} "
+                            f"(встречается {total_count} раз, но не прошла валидацию)"
+                        )
+                        return False
             
             self.learned_dictionaries[entity_type].add(normalized_value)
             logger.info(f"Добавлена новая сущность в словарь: {entity_type}={normalized_value} (встречается {total_count} раз)")
@@ -619,6 +637,238 @@ class EntityDictionary:
                 f"Ошибка валидации сущности '{normalized_value}' (тип: {entity_type}) через LLM: {e}. "
                 "Проверьте конфигурацию LLM клиента."
             ) from e
+
+    async def _validate_entities_batch_async(
+        self, candidates: List[Dict[str, Any]]
+    ) -> Dict[str, bool]:
+        """
+        Батч-валидация нескольких сущностей одним запросом к LLM
+        
+        Args:
+            candidates: Список словарей с ключами:
+                - entity_type: тип сущности
+                - normalized_value: нормализованное значение
+                - original_value: оригинальное значение
+                - chat_name: название чата (опционально)
+        
+        Returns:
+            Словарь {normalized_value: bool} с результатами валидации
+        """
+        llm_client = self._get_llm_client()
+        if not llm_client:
+            # Если LLM недоступен, разрешаем все
+            return {c["normalized_value"]: True for c in candidates}
+        
+        if not candidates:
+            return {}
+        
+        # Группируем кандидатов по типу сущности для формирования промпта
+        entity_type_names = {
+            "persons": "имя человека",
+            "organizations": "название организации",
+            "locations": "название места/локации",
+            "crypto_tokens": "криптовалютный токен",
+            "telegram_channels": "Telegram канал",
+            "telegram_bots": "Telegram бот",
+            "crypto_addresses": "криптовалютный адрес",
+            "domains": "доменное имя",
+        }
+        
+        # Создаем промпт для батч-валидации
+        items_list = []
+        for i, candidate in enumerate(candidates):
+            entity_type = candidate["entity_type"]
+            type_name = entity_type_names.get(entity_type, entity_type)
+            items_list.append(
+                f"{i+1}. Тип: {type_name}, "
+                f"Слово: \"{candidate['original_value']}\" "
+                f"(нормализованное: \"{candidate['normalized_value']}\")"
+            )
+        
+        items_text = "\n".join(items_list)
+        
+        # Собираем контекст никнеймов из всех чатов
+        chat_names = {c.get("chat_name") for c in candidates if c.get("chat_name")}
+        username_context = ""
+        if chat_names:
+            all_usernames = set()
+            for chat_name in chat_names:
+                usernames_in_chat = list(self.username_to_names.get(chat_name, {}).keys())
+                all_usernames.update(usernames_in_chat[:10])
+            if all_usernames:
+                username_context = f"\n\nВАЖНО: В чатах есть пользователи с никнеймами: {', '.join(list(all_usernames)[:20])}. Если слово является никнеймом пользователя из чата, а не каналом/ботом - отклони."
+        
+        prompt = f"""Ты эксперт по анализу текста. Определи для каждого слова/фразы, является ли оно действительно указанным типом сущности.
+
+Список для проверки:
+{items_text}{username_context}
+
+Правила:
+1. Для каждого типа сущности: это должно быть действительно сущность этого типа, а не обычное слово, глагол, прилагательное или другое слово общего назначения.
+2. Исключи мат, грубые слова, времена года, дни недели, обычные глаголы и прилагательные.
+3. Если это опечатка или случайное сокращение - отклони. Официальные сокращения стран, городов и других географических объектов (например, "США", "СПб") - принимай.
+4. Если это никнейм пользователя из чата (не канал/бот) - отклони.
+5. Для локаций: учитывай склонения и падежи русских названий мест.
+6. Для имен: учитывай уменьшительные, ласкательные и сокращенные формы имен, а также склонения.
+
+Ответь ТОЛЬКО в формате JSON массива, где каждый элемент - объект с ключами:
+- "index": номер из списка (1, 2, 3...)
+- "valid": true или false
+
+Пример ответа:
+[
+  {{"index": 1, "valid": true}},
+  {{"index": 2, "valid": false}},
+  {{"index": 3, "valid": true}}
+]
+
+Не добавляй никаких объяснений, только JSON массив."""
+
+        try:
+            async with llm_client:
+                if hasattr(llm_client, 'generate_summary'):
+                    base_max_tokens = 100
+                    if hasattr(llm_client, '_is_reasoning_model') and hasattr(llm_client, 'llm_model_name'):
+                        if llm_client._is_reasoning_model(llm_client.llm_model_name or ""):
+                            base_max_tokens = 4096
+                    
+                    # Увеличиваем max_tokens пропорционально размеру батча
+                    response = await llm_client.generate_summary(
+                        prompt=prompt,
+                        temperature=0.1,
+                        max_tokens=base_max_tokens * len(candidates),
+                        top_p=0.9,
+                        presence_penalty=0.0,
+                    )
+                else:
+                    logger.warning("LLM клиент не поддерживает generate_summary, пропускаем валидацию")
+                    return {c["normalized_value"]: True for c in candidates}
+                
+                # Парсим JSON ответ
+                try:
+                    # Извлекаем JSON из ответа (может быть обернут в markdown код блоки)
+                    response_clean = response.strip()
+                    if "```json" in response_clean:
+                        response_clean = response_clean.split("```json")[1].split("```")[0].strip()
+                    elif "```" in response_clean:
+                        response_clean = response_clean.split("```")[1].split("```")[0].strip()
+                    
+                    # Пытаемся найти JSON массив в ответе
+                    import json
+                    # Ищем начало массива
+                    start_idx = response_clean.find('[')
+                    end_idx = response_clean.rfind(']')
+                    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                        response_clean = response_clean[start_idx:end_idx+1]
+                    
+                    results = json.loads(response_clean)
+                    
+                    # Создаем словарь результатов
+                    validation_results = {}
+                    for result in results:
+                        index = result.get("index", 0) - 1  # Индекс в массиве (0-based)
+                        if 0 <= index < len(candidates):
+                            normalized_value = candidates[index]["normalized_value"]
+                            validation_results[normalized_value] = result.get("valid", False)
+                    
+                    # Если не все результаты получены, разрешаем остальные (консервативный подход)
+                    for candidate in candidates:
+                        if candidate["normalized_value"] not in validation_results:
+                            logger.warning(f"Не получен результат валидации для '{candidate['normalized_value']}'. Разрешаем.")
+                            validation_results[candidate["normalized_value"]] = True
+                    
+                    return validation_results
+                except json.JSONDecodeError as e:
+                    logger.error(f"Ошибка парсинга JSON ответа от LLM: {e}. Ответ: {response[:500]}")
+                    # При ошибке парсинга разрешаем все (консервативный подход)
+                    return {c["normalized_value"]: True for c in candidates}
+                    
+        except Exception as e:
+            logger.error(f"Ошибка при батч-валидации сущностей через LLM: {e}")
+            # При ошибке разрешаем все
+            return {c["normalized_value"]: True for c in candidates}
+
+    async def _flush_validation_queue_async(self) -> None:
+        """Обработка накопленной очереди валидации батчами"""
+        if not self._validation_queue:
+            return
+        
+        queue_size = len(self._validation_queue)
+        logger.info(f"Обработка очереди валидации: {queue_size} кандидатов")
+        
+        # Обрабатываем батчами
+        for i in range(0, len(self._validation_queue), self.batch_validation_size):
+            batch = self._validation_queue[i:i + self.batch_validation_size]
+            batch_num = (i // self.batch_validation_size) + 1
+            total_batches = (len(self._validation_queue) + self.batch_validation_size - 1) // self.batch_validation_size
+            
+            logger.debug(f"Валидация батча {batch_num}/{total_batches} ({len(batch)} сущностей)")
+            
+            try:
+                results = await self._validate_entities_batch_async(batch)
+                
+                # Применяем результаты
+                for candidate in batch:
+                    normalized_value = candidate["normalized_value"]
+                    entity_type = candidate["entity_type"]
+                    is_valid = results.get(normalized_value, True)
+                    total_count = self.entity_counts[entity_type].get(normalized_value, 0)
+                    
+                    if is_valid:
+                        self.learned_dictionaries[entity_type].add(normalized_value)
+                        logger.info(
+                            f"Добавлена новая сущность в словарь: {entity_type}={normalized_value} "
+                            f"(встречается {total_count} раз)"
+                        )
+                    else:
+                        logger.debug(
+                            f"Сущность отклонена LLM: {entity_type}={normalized_value} "
+                            f"(встречается {total_count} раз, но не прошла валидацию)"
+                        )
+            except Exception as e:
+                logger.error(f"Ошибка при обработке батча валидации: {e}")
+                # При ошибке разрешаем все сущности в батче (консервативный подход)
+                for candidate in batch:
+                    normalized_value = candidate["normalized_value"]
+                    entity_type = candidate["entity_type"]
+                    total_count = self.entity_counts[entity_type].get(normalized_value, 0)
+                    self.learned_dictionaries[entity_type].add(normalized_value)
+                    logger.warning(
+                        f"Сущность добавлена из-за ошибки валидации: {entity_type}={normalized_value} "
+                        f"(встречается {total_count} раз)"
+                    )
+        
+        # Очищаем очередь
+        processed_count = len(self._validation_queue)
+        self._validation_queue.clear()
+        logger.info(f"Очередь валидации обработана: {processed_count} кандидатов")
+    
+    def flush_validation_queue(self) -> None:
+        """Синхронная обертка для обработки очереди валидации"""
+        if not self._validation_queue:
+            return
+        
+        try:
+            # Пытаемся получить существующий event loop
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Если loop уже запущен, создаем новый в отдельном потоке
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(
+                            lambda: asyncio.run(self._flush_validation_queue_async())
+                        )
+                        future.result(timeout=30.0)  # Таймаут 30 секунд
+                else:
+                    # Если loop не запущен, используем его
+                    loop.run_until_complete(self._flush_validation_queue_async())
+            except RuntimeError:
+                # Если нет event loop, создаем новый
+                asyncio.run(self._flush_validation_queue_async())
+        except concurrent.futures.TimeoutError:
+            logger.warning("Таймаут при обработке очереди валидации. Продолжаем с сохранением.")
+        except Exception as e:
+            logger.warning(f"Ошибка при обработке очереди валидации: {e}. Продолжаем с сохранением.")
 
     def _validate_entity_with_llm(
         self, entity_type: str, normalized_value: str, original_value: str, chat_name: Optional[str] = None
