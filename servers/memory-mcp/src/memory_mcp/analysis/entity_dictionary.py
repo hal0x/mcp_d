@@ -2,6 +2,7 @@
 """Автоматическое обучение словарей сущностей с LLM-валидацией."""
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 from collections import defaultdict
@@ -130,6 +131,14 @@ class EntityDictionary:
         total_count = self.entity_counts[entity_type][normalized_value]
 
         if total_count >= threshold and normalized_value not in self.learned_dictionaries[entity_type]:
+            # Предварительная валидация (быстрая проверка на стоп-слова и явно неправильные сущности)
+            if not self._prevalidate_entity(entity_type, normalized_value, value):
+                logger.debug(
+                    f"Сущность отклонена предварительной проверкой: {entity_type}={normalized_value} "
+                    f"(встречается {total_count} раз, но не прошла предварительную валидацию)"
+                )
+                return False
+
             # Валидация через LLM перед добавлением в словарь
             if self.enable_llm_validation:
                 is_valid = self._validate_entity_with_llm(entity_type, normalized_value, value, chat_name)
@@ -351,6 +360,73 @@ class EntityDictionary:
 
         return normalized
 
+    def _prevalidate_entity(self, entity_type: str, normalized_value: str, original_value: str) -> bool:
+        """
+        Предварительная валидация сущности перед LLM-валидацией.
+        Отсеивает явно неправильные сущности (предлоги, обычные слова и т.д.)
+
+        Args:
+            entity_type: Тип сущности
+            normalized_value: Нормализованное значение
+            original_value: Оригинальное значение
+
+        Returns:
+            True если сущность прошла предварительную проверку, False иначе
+        """
+        # Импортируем стоп-слова из токенизатора
+        try:
+            from ..utils.russian_tokenizer import RUSSIAN_STOP_WORDS, ENGLISH_STOP_WORDS
+            stop_words = RUSSIAN_STOP_WORDS | ENGLISH_STOP_WORDS
+        except ImportError:
+            # Fallback стоп-слова, если токенизатор недоступен
+            stop_words = {
+                'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'как', 'а', 'то',
+                'против', 'про', 'для', 'от', 'до', 'из', 'к', 'у', 'по', 'за', 'над', 'под',
+                'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'
+            }
+
+        # Проверка на стоп-слова (предлоги, союзы и т.д.)
+        if normalized_value in stop_words:
+            logger.debug(f"Сущность отклонена (стоп-слово): {entity_type}={normalized_value}")
+            return False
+
+        # Специфичные проверки для разных типов сущностей
+        if entity_type == "locations":
+            # Предлоги и наречия, которые не являются локациями
+            invalid_locations = {
+                'против', 'про', 'всего', 'них', 'какая', 'много', 'разве', 'три',
+                'эту', 'моя', 'впрочем', 'хорошо', 'свою', 'этой', 'перед', 'иногда',
+                'лучше', 'чуть', 'том', 'нельзя', 'такой', 'им', 'более', 'всегда',
+                'конечно', 'всю', 'между'
+            }
+            if normalized_value in invalid_locations:
+                logger.debug(f"Сущность отклонена (не локация): {entity_type}={normalized_value}")
+                return False
+
+        elif entity_type == "organizations":
+            # Слова, которые не являются организациями
+            invalid_organizations = {
+                'киберспорт',  # Это индустрия, а не организация
+                'спорт', 'игра', 'игры', 'компьютер', 'компьютеры',
+                'технология', 'технологии', 'разработка', 'программирование'
+            }
+            if normalized_value in invalid_organizations:
+                logger.debug(f"Сущность отклонена (не организация): {entity_type}={normalized_value}")
+                return False
+
+        elif entity_type == "persons":
+            # Проверка на предлоги и обычные слова в родительном падеже
+            # "андрея" может быть валидным (родительный падеж от "Андрей"),
+            # но нужно проверить, не является ли это обычным словом
+            # Эта проверка более мягкая, так как имена могут быть в разных падежах
+
+            # Слишком короткие значения (менее 3 символов) - подозрительны
+            if len(normalized_value) < 3:
+                logger.debug(f"Сущность отклонена (слишком короткая): {entity_type}={normalized_value}")
+                return False
+
+        return True
+
     def _get_llm_client(self):
         """Получение или создание LLM клиента для валидации"""
         if self._llm_client is not None:
@@ -505,15 +581,37 @@ class EntityDictionary:
                     return True
                 
                 # Парсим ответ
+                # Метод generate_summary должен вернуть только content, но на всякий случай проверяем
                 response_clean = response.strip().upper()
+                
+                # Если ответ содержит JSON (что не должно происходить, но на всякий случай)
+                if response_clean.startswith("{") or response_clean.startswith("["):
+                    try:
+                        import json
+                        parsed = json.loads(response)
+                        # Пытаемся извлечь content из JSON
+                        if isinstance(parsed, dict):
+                            if "choices" in parsed and len(parsed["choices"]) > 0:
+                                message = parsed["choices"][0].get("message", {})
+                                response_clean = message.get("content", "").strip().upper()
+                            elif "content" in parsed:
+                                response_clean = parsed["content"].strip().upper()
+                    except (json.JSONDecodeError, KeyError, AttributeError):
+                        logger.warning(f"Не удалось распарсить JSON-ответ от LLM для '{normalized_value}': {response[:200]}")
+                
                 if "ДА" in response_clean or "YES" in response_clean:
+                    logger.debug(f"LLM подтвердил сущность: {entity_type}={normalized_value}")
                     return True
                 elif "НЕТ" in response_clean or "NO" in response_clean:
+                    logger.debug(f"LLM отклонил сущность: {entity_type}={normalized_value}")
                     return False
                 else:
-                    # Если ответ неоднозначный, логируем и разрешаем (консервативный подход)
-                    logger.debug(f"Неоднозначный ответ LLM для '{normalized_value}': '{response}'. Разрешаем добавление.")
-                    return True
+                    # Если ответ неоднозначный, логируем и отклоняем (консервативный подход)
+                    logger.warning(
+                        f"Неоднозначный ответ LLM для '{normalized_value}' (тип: {entity_type}): '{response[:100]}'. "
+                        f"Отклоняем добавление для безопасности."
+                    )
+                    return False
                     
         except Exception as e:
             logger.error(f"Ошибка при валидации сущности '{normalized_value}' через LLM: {e}")
@@ -537,6 +635,13 @@ class EntityDictionary:
         Returns:
             True если сущность валидна, False иначе
         """
+        # Определяем таймаут в зависимости от типа модели
+        llm_client = self._get_llm_client()
+        timeout = 5.0  # По умолчанию 5 секунд
+        if llm_client and hasattr(llm_client, '_is_reasoning_model') and hasattr(llm_client, 'llm_model_name'):
+            if llm_client._is_reasoning_model(llm_client.llm_model_name or ""):
+                timeout = 30.0  # Для reasoning-моделей увеличиваем таймаут до 30 секунд
+        
         try:
             # Пытаемся получить существующий event loop
             try:
@@ -549,7 +654,14 @@ class EntityDictionary:
                             asyncio.run,
                             self._validate_entity_with_llm_async(entity_type, normalized_value, original_value, chat_name)
                         )
-                        return future.result(timeout=5.0)  # Таймаут 5 секунд
+                        try:
+                            return future.result(timeout=timeout)
+                        except concurrent.futures.TimeoutError:
+                            logger.warning(
+                                f"Таймаут валидации сущности {entity_type}={normalized_value} "
+                                f"(таймаут {timeout}с). Отклоняем добавление."
+                            )
+                            return False
                 else:
                     # Если loop не запущен, используем его
                     return loop.run_until_complete(
@@ -560,9 +672,24 @@ class EntityDictionary:
                 return asyncio.run(
                     self._validate_entity_with_llm_async(entity_type, normalized_value, original_value, chat_name)
                 )
+        except concurrent.futures.TimeoutError:
+            logger.warning(
+                f"Таймаут валидации сущности {entity_type}={normalized_value} "
+                f"(таймаут {timeout}с). Отклоняем добавление."
+            )
+            return False
         except Exception as e:
-            logger.warning(f"Ошибка при синхронной валидации сущности: {e}. Разрешаем добавление.")
-            return True  # При ошибке разрешаем добавление
+            # Логируем полную информацию об ошибке для диагностики
+            import traceback
+            error_details = str(e) if str(e) else type(e).__name__
+            logger.warning(
+                f"Ошибка при синхронной валидации сущности {entity_type}={normalized_value}: {error_details}. "
+                f"Отклоняем добавление для безопасности."
+            )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"Трассировка ошибки валидации:\n{traceback.format_exc()}")
+            # При ошибке отклоняем добавление (консервативный подход)
+            return False
 
     def export_dictionary(self, entity_type: str, format: str = "json") -> Optional[str]:
         """
