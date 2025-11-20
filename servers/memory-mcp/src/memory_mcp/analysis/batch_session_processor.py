@@ -25,9 +25,9 @@ class BatchSessionProcessor:
 
     def __init__(
         self,
-        max_tokens: int = 131072,  # Максимальный контекст модели
+        max_tokens: int = 30000,  # Максимальный контекст модели (уменьшено для предотвращения таймаутов)
         prompt_reserve_tokens: int = 5000,
-        context_reserve_tokens: int = 10000,  # Резерв для накопительного контекста
+        context_reserve_tokens: int = 5000,  # Резерв для накопительного контекста (уменьшено)
         embedding_client: Optional[LMStudioEmbeddingClient | OllamaEmbeddingClient] = None,
     ):
         """
