@@ -24,9 +24,6 @@ from ..utils.datetime_utils import parse_datetime_utc
 from .adapters import MemoryServiceAdapter
 from ..memory.artifacts_reader import ArtifactsReader
 from .schema import (
-    StartBackgroundIndexingResponse,
-    StopBackgroundIndexingResponse,
-    GetBackgroundIndexingStatusResponse,
     AnalyzeEntitiesRequest,
     AnalyzeEntitiesResponse,
     BackgroundIndexingRequest,
@@ -231,7 +228,7 @@ async def list_tools() -> List[Tool]:
         # Новые универсальные инструменты
         Tool(
             name="search",
-            description="Universal search tool supporting hybrid, smart, embedding, similar, and trading search types. Use search_type parameter to specify the search mode.",
+            description="Universal search tool supporting hybrid, smart, embedding, similar, and trading search types. Use search_type parameter to specify the search mode. Required parameters depend on search_type: 'query' for hybrid/smart/trading, 'embedding' for embedding, 'record_id' for similar.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -239,15 +236,21 @@ async def list_tools() -> List[Tool]:
                         "type": "string",
                         "enum": ["hybrid", "smart", "embedding", "similar", "trading"],
                         "default": "hybrid",
-                        "description": "Тип поиска: hybrid (FTS+вектор), smart (LLM-assisted), embedding (по вектору), similar (похожие записи), trading (торговые паттерны)",
+                        "description": "Тип поиска: hybrid (FTS+вектор, требует query), smart (LLM-assisted, требует query), embedding (по вектору, требует embedding), similar (похожие записи, требует record_id), trading (торговые паттерны, требует query)",
                     },
-                    "query": {"type": "string", "description": "Поисковый запрос (требуется для hybrid, smart, trading)"},
+                    "query": {
+                        "type": "string",
+                        "description": "Поисковый запрос. Обязателен для search_type: hybrid, smart, trading. Опционален для других типов.",
+                    },
                     "embedding": {
                         "type": "array",
                         "items": {"type": "number"},
-                        "description": "Вектор эмбеддинга (требуется для embedding)",
+                        "description": "Вектор эмбеддинга. Обязателен для search_type: embedding. Опционален для других типов.",
                     },
-                    "record_id": {"type": "string", "description": "ID записи (требуется для similar)"},
+                    "record_id": {
+                        "type": "string",
+                        "description": "ID записи. Обязателен для search_type: similar. Опционален для других типов.",
+                    },
                     "top_k": {"type": "integer", "description": "Максимальное количество результатов", "default": 5},
                     "source": {"type": "string", "description": "Фильтр по источнику"},
                     "tags": {"type": "array", "items": {"type": "string"}, "description": "Фильтр по тегам"},
@@ -863,6 +866,19 @@ async def _handle_version() -> ToolResponse:
 
 async def _handle_search(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
     """Обработчик инструмента search."""
+    search_type = arguments.get("search_type", "hybrid")
+    
+    # Валидация обязательных параметров в зависимости от типа поиска
+    if search_type in ("hybrid", "smart", "trading"):
+        if not arguments.get("query"):
+            raise ValueError(f"Параметр 'query' обязателен для search_type='{search_type}'")
+    elif search_type == "embedding":
+        if not arguments.get("embedding"):
+            raise ValueError("Параметр 'embedding' обязателен для search_type='embedding'")
+    elif search_type == "similar":
+        if not arguments.get("record_id"):
+            raise ValueError("Параметр 'record_id' обязателен для search_type='similar'")
+    
     # Парсим feedback для smart search
     feedback_data = arguments.get("feedback")
     feedback_list = None
@@ -872,13 +888,12 @@ async def _handle_search(arguments: Dict[str, Any], adapter: MemoryServiceAdapte
     # Парсим даты
     date_from = parse_datetime_utc(arguments.get("date_from"), return_none_on_error=True)
     date_to = parse_datetime_utc(arguments.get("date_to"), return_none_on_error=True)
-
-    search_type = arguments.get("search_type", "hybrid")
     
     if search_type == "smart":
         # Smart search требует SmartSearchEngine
+        # query уже проверен валидацией выше
         request = SmartSearchRequest(
-            query=arguments.get("query", ""),
+            query=arguments["query"],
             session_id=arguments.get("session_id"),
             feedback=feedback_list,
             clarify=arguments.get("clarify", False),
@@ -960,30 +975,14 @@ async def _handle_background_indexing(arguments: Dict[str, Any], adapter: Memory
     action = request.action
     
     if action == "start":
-        result_obj = await _start_background_indexing(adapter)
-        return _format_tool_response(BackgroundIndexingResponse(
-            action="start",
-            success=result_obj.success,
-            message=result_obj.message,
-        ).model_dump())
+        result = await _start_background_indexing(adapter)
+        return _format_tool_response(result.model_dump())
     elif action == "stop":
-        result_obj = await _stop_background_indexing()
-        return _format_tool_response(BackgroundIndexingResponse(
-            action="stop",
-            success=result_obj.success,
-            message=result_obj.message,
-        ).model_dump())
+        result = await _stop_background_indexing()
+        return _format_tool_response(result.model_dump())
     elif action == "status":
-        result_obj = _get_background_indexing_status()
-        return _format_tool_response(BackgroundIndexingResponse(
-            action="status",
-            message=result_obj.message,
-            running=result_obj.running,
-            check_interval=result_obj.check_interval,
-            last_check_time=result_obj.last_check_time,
-            input_path=result_obj.input_path,
-            chats_path=result_obj.chats_path,
-        ).model_dump())
+        result = _get_background_indexing_status()
+        return _format_tool_response(result.model_dump())
     else:
         raise ValueError(f"Unknown action: {action}")
 
@@ -1183,46 +1182,33 @@ _TOOL_HANDLERS: Dict[str, Any] = {
 @server.call_tool()  # type: ignore[misc]
 async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
     """Обрабатывает вызов MCP инструмента и возвращает форматированный ответ."""
+    logger.info(f"Вызов инструмента: {name} с аргументами: {arguments}")
+
+    handler = _TOOL_HANDLERS.get(name)
+    if handler is None:
+        error_msg = format_error_message(ValueError(f"Неизвестный инструмент: {name}"))
+        logger.warning(f"Ошибка при выполнении инструмента {name}: {error_msg}")
+        raise RuntimeError(error_msg)
+
     try:
-        logger.info(f"Вызов инструмента: {name} с аргументами: {arguments}")
-
-        handler = _TOOL_HANDLERS.get(name)
-        if handler is None:
-            raise ValueError(f"Неизвестный инструмент: {name}")
-
         # Инструменты health и version не требуют адаптера
         if name in ("health", "version"):
             return await handler()
 
         # Остальные инструменты требуют адаптер
         adapter = _get_adapter()
-        
-        # Специальная обработка для generate_embedding (ValueError)
-        if name == "generate_embedding":
-            try:
-                return await handler(arguments, adapter)
-            except ValueError as e:
-                original_msg = str(e)
-                error_msg = format_error_message(e)
-                logger.warning(
-                    f"generate_embedding failed: {error_msg} (original: {original_msg})",
-                    exc_info=True,
-                )
-                raise RuntimeError(f"{error_msg} (original: {original_msg})") from e
-        
-        # Остальные инструменты с общей обработкой ошибок
-        try:
-            return await handler(arguments, adapter)
-        except Exception as e:
-            logger.exception(f"{name} failed: {e}")
-            raise RuntimeError(format_error_message(e)) from e
+        return await handler(arguments, adapter)
 
     except ValueError as exc:
-        logger.warning(f"Ошибка при выполнении инструмента {name}: {exc}")
-        raise RuntimeError(format_error_message(exc)) from exc
+        # ValueError обычно означает ошибку валидации параметров
+        error_msg = format_error_message(exc)
+        logger.warning(f"Ошибка валидации для инструмента {name}: {error_msg}")
+        raise RuntimeError(error_msg) from exc
     except Exception as exc:
-        logger.exception(f"Ошибка при выполнении инструмента {name}: {exc}")
-        raise RuntimeError(format_error_message(exc)) from exc
+        # Общая обработка всех остальных исключений
+        error_msg = format_error_message(exc)
+        logger.exception(f"Ошибка при выполнении инструмента {name}: {error_msg}")
+        raise RuntimeError(error_msg) from exc
 
 
 async def _run_indexing_job(
@@ -1829,17 +1815,17 @@ def get_version_payload() -> Dict[str, Any]:
     }
 
 
-async def _start_background_indexing(adapter: MemoryServiceAdapter) -> "StartBackgroundIndexingResponse":
+async def _start_background_indexing(adapter: MemoryServiceAdapter) -> "BackgroundIndexingResponse":
     """Запускает фоновый сервис периодической индексации новых сообщений."""
     global _background_indexing_service
-    from .schema import StartBackgroundIndexingResponse
     from ..config import get_settings
     
     try:
         settings = get_settings()
         
         if _background_indexing_service and _background_indexing_service.is_running():
-            return StartBackgroundIndexingResponse(
+            return BackgroundIndexingResponse(
+                action="start",
                 success=False,
                 message="Фоновая индексация уже запущена"
             )
@@ -1863,32 +1849,35 @@ async def _start_background_indexing(adapter: MemoryServiceAdapter) -> "StartBac
         _background_indexing_service.start()
         logger.info("Фоновая индексация запущена")
         
-        return StartBackgroundIndexingResponse(
+        return BackgroundIndexingResponse(
+            action="start",
             success=True,
             message="Фоновая индексация успешно запущена"
         )
     except Exception as e:
         logger.error(f"Ошибка при запуске фоновой индексации: {e}", exc_info=True)
-        return StartBackgroundIndexingResponse(
+        return BackgroundIndexingResponse(
+            action="start",
             success=False,
             message=f"Ошибка при запуске: {str(e)}"
         )
 
 
-async def _stop_background_indexing() -> "StopBackgroundIndexingResponse":
+async def _stop_background_indexing() -> "BackgroundIndexingResponse":
     """Остановить фоновую индексацию."""
     global _background_indexing_service
-    from .schema import StopBackgroundIndexingResponse
     
     try:
         if not _background_indexing_service:
-            return StopBackgroundIndexingResponse(
+            return BackgroundIndexingResponse(
+                action="stop",
                 success=False,
                 message="Фоновая индексация не запущена"
             )
         
         if not _background_indexing_service.is_running():
-            return StopBackgroundIndexingResponse(
+            return BackgroundIndexingResponse(
+                action="stop",
                 success=False,
                 message="Фоновая индексация уже остановлена"
             )
@@ -1897,29 +1886,31 @@ async def _stop_background_indexing() -> "StopBackgroundIndexingResponse":
         await _background_indexing_service.stop_async()
         logger.info("Фоновая индексация остановлена")
         
-        return StopBackgroundIndexingResponse(
+        return BackgroundIndexingResponse(
+            action="stop",
             success=True,
             message="Фоновая индексация успешно остановлена"
         )
     except Exception as e:
         logger.error(f"Ошибка при остановке фоновой индексации: {e}", exc_info=True)
-        return StopBackgroundIndexingResponse(
+        return BackgroundIndexingResponse(
+            action="stop",
             success=False,
             message=f"Ошибка при остановке: {str(e)}"
         )
 
 
-def _get_background_indexing_status() -> "GetBackgroundIndexingStatusResponse":
+def _get_background_indexing_status() -> "BackgroundIndexingResponse":
     """Получить статус фоновой индексации."""
     global _background_indexing_service
-    from .schema import GetBackgroundIndexingStatusResponse
     from ..config import get_settings
     
     try:
         settings = get_settings()
         
         if not _background_indexing_service:
-            return GetBackgroundIndexingStatusResponse(
+            return BackgroundIndexingResponse(
+                action="status",
                 running=False,
                 check_interval=settings.background_indexing_interval,
                 last_check_time=None,
@@ -1931,7 +1922,8 @@ def _get_background_indexing_status() -> "GetBackgroundIndexingStatusResponse":
         status = _background_indexing_service.get_status()
         is_running = _background_indexing_service.is_running()
         
-        return GetBackgroundIndexingStatusResponse(
+        return BackgroundIndexingResponse(
+            action="status",
             running=is_running,
             check_interval=settings.background_indexing_interval,
             last_check_time=status.get("last_check_time"),
@@ -1941,7 +1933,8 @@ def _get_background_indexing_status() -> "GetBackgroundIndexingStatusResponse":
         )
     except Exception as e:
         logger.error(f"Ошибка при получении статуса фоновой индексации: {e}", exc_info=True)
-        return GetBackgroundIndexingStatusResponse(
+        return BackgroundIndexingResponse(
+            action="status",
             running=False,
             check_interval=60,
             last_check_time=None,
