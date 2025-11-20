@@ -823,8 +823,8 @@ class EntityDictionary:
         return None
     
     async def _validate_entities_batch_async(
-        self, candidates: List[Dict[str, Any]]
-    ) -> Dict[str, bool]:
+        self, candidates: List[Dict[str, Any]], generate_descriptions: bool = False
+    ) -> Dict[str, Any]:
         """
         Батч-валидация нескольких сущностей одним запросом к LLM
         
@@ -835,8 +835,11 @@ class EntityDictionary:
                 - original_value: оригинальное значение
                 - chat_name: название чата (опционально)
         
+            generate_descriptions: Если True, также генерирует описания для валидных сущностей
+        
         Returns:
-            Словарь {normalized_value: bool} с результатами валидации
+            Если generate_descriptions=False: словарь {normalized_value: bool} с результатами валидации
+            Если generate_descriptions=True: словарь {normalized_value: {"valid": bool, "description": str | None}}
         """
         llm_client = self._get_llm_client()
         if not llm_client:
@@ -862,15 +865,29 @@ class EntityDictionary:
             if dyn_type not in entity_type_names:
                 entity_type_names[dyn_type] = dyn_type.replace("_", " ")
         
-        # Создаем промпт для батч-валидации
+        # Создаем промпт для батч-валидации (и генерации описаний, если нужно)
         items_list = []
         for i, candidate in enumerate(candidates):
             entity_type = candidate["entity_type"]
             type_name = entity_type_names.get(entity_type, entity_type)
+            
+            # Добавляем контекст, если нужно генерировать описания
+            context_info = ""
+            if generate_descriptions:
+                all_contexts = candidate.get("all_contexts", [])
+                if all_contexts:
+                    context_parts = []
+                    for ctx in all_contexts[:3]:  # Берем первые 3 контекста
+                        content = ctx.get("content", "")
+                        if content:
+                            context_parts.append(content[:150])  # Ограничиваем длину
+                    if context_parts:
+                        context_info = f", Контекст: {' | '.join(context_parts)}"
+            
             items_list.append(
                 f"{i+1}. Тип: {type_name}, "
                 f"Слово: \"{candidate['original_value']}\" "
-                f"(нормализованное: \"{candidate['normalized_value']}\")"
+                f"(нормализованное: \"{candidate['normalized_value']}\"){context_info}"
             )
         
         items_text = "\n".join(items_list)
@@ -886,7 +903,139 @@ class EntityDictionary:
             if all_usernames:
                 username_context = f"\n\nВАЖНО: В чатах есть пользователи с никнеймами: {', '.join(list(all_usernames)[:20])}. Если слово является никнеймом пользователя из чата, а не каналом/ботом - отклони."
         
-        prompt = f"""Ты эксперт по анализу текста. Определи для каждого слова/фразы, является ли оно действительно указанным типом сущности.
+        # Формируем промпт в зависимости от того, нужно ли генерировать описания
+        if generate_descriptions:
+            # Определяем типы сущностей в батче для добавления специфичных примеров
+            entity_types_in_batch = {c["entity_type"] for c in candidates}
+            
+            # Формируем примеры для каждого типа сущности
+            examples_by_type = []
+            if "persons" in entity_types_in_batch:
+                examples_by_type.append("""
+Примеры для ПЕРСОН:
+- ХОРОШО: "Разработчик игровых механик, упоминается в контексте обсуждения игровых проектов"
+- ХОРОШО: "Игрок в Counter-Strike, упоминается в контексте турниров"
+- ХОРОШО: "Эксперт по криптовалютам, упоминается в контексте финансовых обсуждений"
+- ХОРОШО: "Участник обсуждений в чате" (если контекст минимальный, но сущность валидна)
+- ПЛОХО: "Персонаж с именем Иван, вероятно участник обсуждения. Упоминается пять раз."
+- ПЛОХО: "Персона без дополнительной информации"
+- ПЛОХО: "Роль не уточнена, возможно участник обсуждения"
+""")
+            
+            if "organizations" in entity_types_in_batch:
+                examples_by_type.append("""
+Примеры для ОРГАНИЗАЦИЙ:
+- ХОРОШО: "Игровая студия, разрабатывающая мобильные игры"
+- ХОРОШО: "Криптовалютная биржа, упоминается в контексте торговли"
+- ХОРОШО: "IT-компания, специализирующаяся на разработке ПО"
+- ПЛОХО: "Организация, упоминается в обсуждениях"
+- ПЛОХО: "Компания без дополнительной информации"
+""")
+            
+            if "locations" in entity_types_in_batch:
+                examples_by_type.append("""
+Примеры для ЛОКАЦИЙ:
+- ХОРОШО: "Город во Владимирской области, упоминается в контексте поездок"
+- ХОРОШО: "Столица России, упоминается в контексте путешествий"
+- ХОРОШО: "Географический регион в Сибири"
+- ПЛОХО: "Место, упоминается в обсуждениях"
+- ПЛОХО: "Локация без дополнительной информации"
+""")
+            
+            if "domains" in entity_types_in_batch:
+                examples_by_type.append("""
+Примеры для ДОМЕНОВ:
+- ХОРОШО: "Научный журнал по медицине, публикует исследования"
+- ХОРОШО: "Сайт компании Dyson Farming, занимающейся агротехникой"
+- ХОРОШО: "Онлайн-платформа для публикации научных журналов"
+- ПЛОХО: "Доменное имя, упоминается в обсуждениях"
+""")
+            
+            if "crypto_tokens" in entity_types_in_batch:
+                examples_by_type.append("""
+Примеры для КРИПТОВАЛЮТНЫХ ТОКЕНОВ:
+- ХОРОШО: "Криптовалютный токен Ethereum, используется для смарт-контрактов"
+- ХОРОШО: "Криптовалюта Bitcoin, упоминается в контексте инвестиций"
+- ПЛОХО: "Токен, упоминается в обсуждениях"
+""")
+            
+            if "telegram_channels" in entity_types_in_batch or "telegram_bots" in entity_types_in_batch:
+                examples_by_type.append("""
+Примеры для TELEGRAM КАНАЛОВ/БОТОВ:
+- ХОРОШО: "Telegram канал о криптовалютах, публикует новости и аналитику"
+- ХОРОШО: "Telegram бот для торговли криптовалютами"
+- ПЛОХО: "Telegram канал, упоминается в обсуждениях"
+""")
+            
+            examples_text = "\n".join(examples_by_type) if examples_by_type else ""
+            
+            prompt = f"""Ты эксперт по анализу текста. Выполни две задачи для каждого слова/фразы:
+1. Определи, является ли оно действительно указанным типом сущности
+2. Для валидных сущностей создай краткое, но информативное описание (1-2 предложения, до 200 символов) на русском языке
+
+Список для проверки:
+{items_text}{username_context}
+
+Правила валидации:
+1. Для каждого типа сущности: это должно быть действительно сущность этого типа, а не обычное слово, глагол, прилагательное или другое слово общего назначения.
+2. Исключи мат, грубые слова, времена года, дни недели, обычные глаголы и прилагательные.
+3. Если это опечатка или случайное сокращение - отклони. Официальные сокращения стран, городов и других географических объектов (например, "США", "СПб") - принимай.
+4. Если это никнейм пользователя из чата (не канал/бот) - отклони.
+5. Для локаций: учитывай склонения и падежи русских названий мест.
+6. Для имен: учитывай уменьшительные, ласкательные и сокращенные формы имен, а также склонения.
+7. Если в контексте есть явные указания на тип сущности (например, "Иван работает программистом") - используй их для валидации.
+8. Если сомневаешься - отклони (консервативный подход).
+
+Правила генерации описаний (КРИТИЧНО - следуй строго):
+
+ПРИОРИТЕТЫ для извлечения информации (используй в порядке приоритета):
+1. ВЫСШИЙ: Конкретная роль/профессия/деятельность из контекста (например: "программист", "игрок", "эксперт")
+2. ВЫСОКИЙ: Сфера деятельности/интересы (например: "разработка игр", "криптовалюты")
+3. СРЕДНИЙ: Контекст упоминания (например: "в контексте турниров", "в обсуждениях о финансах")
+4. НИЗШИЙ: Общая категория (только если ничего другого нет, например: "участник обсуждений в чате")
+
+ОБЯЗАТЕЛЬНЫЕ правила:
+1. ВСЕГДА используй контекст из сообщений для создания описания. Если контекст есть - используй его.
+2. Если сущность упоминается в разных контекстах - объедини информацию (например: "Программист и игрок, упоминается в контексте разработки игр").
+3. НЕ используй шаблонные фразы типа "Персонаж с именем X, вероятно участник обсуждения" или "упоминается N раз".
+4. НЕ пиши "Персона без дополнительной информации" или "роль не уточнена" - это неинформативно.
+5. Если в контексте есть конкретная информация (профессия, роль, деятельность, характеристики) - обязательно включи её.
+6. Если контекст минимальный, но сущность валидна - создай описание на основе типа сущности и доступного контекста, даже если он ограничен. Используй общее описание типа "Участник обсуждений в чате" вместо "Персона без дополнительной информации".
+
+Специфичные правила по типам:
+- Для персон: укажи роль/профессию/деятельность, если упоминается. Если нет - используй "Участник обсуждений в чате".
+- Для организаций: укажи сферу деятельности или назначение. Если нет - используй "Организация, упоминается в контексте [тема]".
+- Для локаций: укажи тип места и контекст упоминания (например: "Город во Владимирской области"). Если нет - используй "Географический регион" или "Место, упоминается в контексте [тема]".
+- Для доменов: укажи назначение сайта или организацию, если понятно из контекста.
+- Для криптотокенов: укажи назначение или платформу, если упоминается.
+- Для Telegram каналов/ботов: укажи тематику или назначение, если упоминается.
+
+{examples_text}
+
+Для невалидных сущностей описание должно быть null.
+
+Ответь ТОЛЬКО в формате JSON массива, где каждый элемент - объект с ключами:
+- "index": номер из списка (1, 2, 3...)
+- "valid": true или false
+- "description": описание на русском языке (для valid=true) или null (для valid=false)
+
+ВАЖНО: 
+- Описание должно быть информативным и конкретным, не шаблонным
+- Используй контекст из сообщений максимально эффективно
+- Если контекст минимальный, но сущность валидна - создай общее, но полезное описание
+- НИКОГДА не используй фразы типа "Персона без дополнительной информации" или "упоминается N раз"
+
+Пример ответа:
+[
+  {{"index": 1, "valid": true, "description": "Разработчик игровых механик, упоминается в контексте обсуждения игровых проектов"}},
+  {{"index": 2, "valid": false, "description": null}},
+  {{"index": 3, "valid": true, "description": "Криптовалютный токен Ethereum, используется для смарт-контрактов"}},
+  {{"index": 4, "valid": true, "description": "Участник обсуждений в чате"}}
+]
+
+Не добавляй никаких объяснений, только JSON массив."""
+        else:
+            prompt = f"""Ты эксперт по анализу текста. Определи для каждого слова/фразы, является ли оно действительно указанным типом сущности.
 
 Список для проверки:
 {items_text}{username_context}
@@ -951,29 +1100,57 @@ class EntityDictionary:
                     results = json.loads(response_clean)
                     
                     # Создаем словарь результатов
-                    validation_results = {}
-                    for result in results:
-                        index = result.get("index", 0) - 1  # Индекс в массиве (0-based)
-                        if 0 <= index < len(candidates):
-                            normalized_value = candidates[index]["normalized_value"]
-                            validation_results[normalized_value] = result.get("valid", False)
-                    
-                    # Если не все результаты получены, разрешаем остальные (консервативный подход)
-                    for candidate in candidates:
-                        if candidate["normalized_value"] not in validation_results:
-                            logger.warning(f"Не получен результат валидации для '{candidate['normalized_value']}'. Разрешаем.")
-                            validation_results[candidate["normalized_value"]] = True
+                    if generate_descriptions:
+                        # Формат: {normalized_value: {"valid": bool, "description": str | None}}
+                        validation_results = {}
+                        for result in results:
+                            index = result.get("index", 0) - 1  # Индекс в массиве (0-based)
+                            if 0 <= index < len(candidates):
+                                normalized_value = candidates[index]["normalized_value"]
+                                validation_results[normalized_value] = {
+                                    "valid": result.get("valid", False),
+                                    "description": result.get("description")
+                                }
+                        
+                        # Если не все результаты получены, разрешаем остальные (консервативный подход)
+                        for candidate in candidates:
+                            if candidate["normalized_value"] not in validation_results:
+                                logger.warning(f"Не получен результат валидации для '{candidate['normalized_value']}'. Разрешаем.")
+                                validation_results[candidate["normalized_value"]] = {
+                                    "valid": True,
+                                    "description": None
+                                }
+                    else:
+                        # Формат: {normalized_value: bool}
+                        validation_results = {}
+                        for result in results:
+                            index = result.get("index", 0) - 1  # Индекс в массиве (0-based)
+                            if 0 <= index < len(candidates):
+                                normalized_value = candidates[index]["normalized_value"]
+                                validation_results[normalized_value] = result.get("valid", False)
+                        
+                        # Если не все результаты получены, разрешаем остальные (консервативный подход)
+                        for candidate in candidates:
+                            if candidate["normalized_value"] not in validation_results:
+                                logger.warning(f"Не получен результат валидации для '{candidate['normalized_value']}'. Разрешаем.")
+                                validation_results[candidate["normalized_value"]] = True
                     
                     return validation_results
                 except json.JSONDecodeError as e:
                     logger.error(f"Ошибка парсинга JSON ответа от LLM: {e}. Ответ: {response[:500]}")
                     # При ошибке парсинга разрешаем все (консервативный подход)
-                    return {c["normalized_value"]: True for c in candidates}
+                    if generate_descriptions:
+                        return {c["normalized_value"]: {"valid": True, "description": None} for c in candidates}
+                    else:
+                        return {c["normalized_value"]: True for c in candidates}
                     
         except Exception as e:
             logger.error(f"Ошибка при батч-валидации сущностей через LLM: {e}")
             # При ошибке разрешаем все
-            return {c["normalized_value"]: True for c in candidates}
+            if generate_descriptions:
+                return {c["normalized_value"]: {"valid": True, "description": None} for c in candidates}
+            else:
+                return {c["normalized_value"]: True for c in candidates}
 
     async def _flush_validation_queue_async(self) -> None:
         """Обработка накопленной очереди валидации батчами"""
@@ -992,13 +1169,40 @@ class EntityDictionary:
             logger.debug(f"Валидация батча {batch_num}/{total_batches} ({len(batch)} сущностей)")
             
             try:
-                results = await self._validate_entities_batch_async(batch)
+                # Собираем контексты для всех кандидатов заранее, если нужно генерировать описания
+                if self.enable_description_generation:
+                    for candidate in batch:
+                        if not candidate.get("all_contexts"):
+                            try:
+                                entity_type = candidate["entity_type"]
+                                normalized_value = candidate["normalized_value"]
+                                all_contexts = self.collect_entity_contexts(entity_type, normalized_value)
+                                candidate["all_contexts"] = all_contexts
+                            except Exception as e:
+                                logger.debug(f"Не удалось собрать контексты для {candidate.get('normalized_value', 'unknown')}: {e}")
+                                candidate["all_contexts"] = []
+                
+                # Выполняем валидацию и генерацию описаний в одном запросе
+                results = await self._validate_entities_batch_async(
+                    batch, 
+                    generate_descriptions=self.enable_description_generation
+                )
                 
                 # Применяем результаты
                 for candidate in batch:
                     normalized_value = candidate["normalized_value"]
                     entity_type = candidate["entity_type"]
-                    is_valid = results.get(normalized_value, True)
+                    
+                    if self.enable_description_generation:
+                        # Формат: {"valid": bool, "description": str | None}
+                        result = results.get(normalized_value, {"valid": True, "description": None})
+                        is_valid = result.get("valid", True)
+                        description = result.get("description")
+                    else:
+                        # Формат: bool
+                        is_valid = results.get(normalized_value, True)
+                        description = None
+                    
                     total_count = self.entity_counts[entity_type].get(normalized_value, 0)
                     
                     if is_valid:
@@ -1008,41 +1212,17 @@ class EntityDictionary:
                             f"(встречается {total_count} раз)"
                         )
                         
-                        # Собираем контексты для генерации описаний (будет использовано в батче)
-                        if self.enable_description_generation:
-                            try:
-                                all_contexts = self.collect_entity_contexts(entity_type, normalized_value)
-                                candidate["all_contexts"] = all_contexts
-                            except Exception as e:
-                                logger.debug(f"Не удалось собрать контексты для {normalized_value}: {e}")
-                                candidate["all_contexts"] = None
+                        # Сохраняем описание, если оно было сгенерировано
+                        if description and self.enable_description_generation:
+                            if entity_type not in self.entity_descriptions:
+                                self.entity_descriptions[entity_type] = {}
+                            self.entity_descriptions[entity_type][normalized_value] = description
+                            logger.debug(f"Сохранено описание для {entity_type}={normalized_value}: {description[:50]}...")
                     else:
                         logger.debug(
                             f"Сущность отклонена LLM: {entity_type}={normalized_value} "
                             f"(встречается {total_count} раз, но не прошла валидацию)"
                         )
-                
-                # Генерируем описания для всех валидированных сущностей батчем
-                if self.enable_description_generation:
-                    validated_entities = [
-                        c for c in batch 
-                        if c["normalized_value"] in self.learned_dictionaries[c["entity_type"]]
-                    ]
-                    if validated_entities:
-                        try:
-                            await self.generate_entity_descriptions_batch(validated_entities)
-                        except Exception as e:
-                            logger.warning(f"Ошибка при батч-генерации описаний: {e}")
-                            # Fallback на индивидуальную генерацию
-                            for candidate in validated_entities:
-                                try:
-                                    await self.generate_entity_description(
-                                        candidate["entity_type"],
-                                        candidate.get("original_value", candidate["normalized_value"]),
-                                        all_contexts=candidate.get("all_contexts")
-                                    )
-                                except Exception as e2:
-                                    logger.debug(f"Не удалось сгенерировать описание для {candidate['normalized_value']}: {e2}")
             except Exception as e:
                 logger.error(f"Ошибка при обработке батча валидации: {e}")
                 # При ошибке разрешаем все сущности в батче (консервативный подход)
