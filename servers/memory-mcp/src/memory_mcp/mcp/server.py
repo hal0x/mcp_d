@@ -72,8 +72,6 @@ from .schema import (
     SearchExplainResponse,
     SearchRequest,
     SearchResponse,
-    SearchTradingPatternsRequest,
-    SearchTradingPatternsResponse,
     SimilarRecordsRequest,
     SimilarRecordsResponse,
     SmartSearchRequest,
@@ -94,6 +92,8 @@ from .schema import (
     SearchEntitiesResponse,
     GetEntityProfileRequest,
     GetEntityProfileResponse,
+    GetSignalPerformanceRequest,
+    GetAvailableChatsRequest,
 )
 
 
@@ -422,26 +422,6 @@ async def list_tools() -> List[Tool]:
                     },
                 },
                 "required": ["symbol", "signal_type"],
-            },
-        ),
-        Tool(
-            name="search_trading_patterns",
-            description="Search for stored trading patterns and signals.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Поисковый запрос"},
-                    "symbol": {
-                        "type": "string",
-                        "description": "Торговая пара (опционально)",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Максимальное количество результатов",
-                        "default": 10,
-                    },
-                },
-                "required": ["query"],
             },
         ),
         Tool(
@@ -1052,13 +1032,6 @@ async def _handle_store_trading_signal(arguments: Dict[str, Any], adapter: Memor
     return _format_tool_response(result.model_dump())
 
 
-async def _handle_search_trading_patterns(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента search_trading_patterns."""
-    request = SearchTradingPatternsRequest(**arguments)
-    result = adapter.search_trading_patterns(request)
-    return _format_tool_response(result.model_dump())
-
-
 async def _handle_get_signal_performance(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
     """Обработчик инструмента get_signal_performance."""
     request = GetSignalPerformanceRequest(**arguments)
@@ -1192,7 +1165,6 @@ _TOOL_HANDLERS: Dict[str, Any] = {
     "summaries": _handle_summaries,
     "ingest": _handle_ingest,
     "store_trading_signal": _handle_store_trading_signal,
-    "search_trading_patterns": _handle_search_trading_patterns,
     "get_signal_performance": _handle_get_signal_performance,
     "search_entities": _handle_search_entities,
     "get_entity_profile": _handle_get_entity_profile,
@@ -1838,7 +1810,6 @@ def get_version_payload() -> Dict[str, Any]:
         "ingest",
         # Специализированные инструменты
         "store_trading_signal",
-        "search_trading_patterns",
         "get_signal_performance",
         "generate_embedding",
         "update_record",

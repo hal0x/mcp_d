@@ -17,6 +17,7 @@
 - `smart_search` → используйте `search` с `search_type='smart'`
 - `search_by_embedding` → используйте `search` с `search_type='embedding'`
 - `similar_records` → используйте `search` с `search_type='similar'`
+- `search_trading_patterns` → используйте `search` с `search_type='trading'`
 - `batch_update_records` → используйте `batch_operations` с `operation='update'`
 - `batch_delete_records` → используйте `batch_operations` с `operation='delete'`
 - `batch_fetch_records` → используйте `batch_operations` с `operation='fetch'`

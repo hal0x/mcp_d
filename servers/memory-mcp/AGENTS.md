@@ -227,7 +227,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
 - `store_trading_signal` — сохранение торгового сигнала в память.
 - `get_signal_performance` — метрики производительности торгового сигнала.
-- **Примечание**: `search_trading_patterns` заменён на `search` с `search_type='trading'`.
+- **Примечание**: `search_trading_patterns` удалён в версии 2.0.0. Используйте `search` с `search_type='trading'`.
 
 #### Дополнительные сервисы
 
