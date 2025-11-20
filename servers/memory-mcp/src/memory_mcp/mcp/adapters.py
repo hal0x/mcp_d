@@ -1515,10 +1515,19 @@ class MemoryServiceAdapter:
         Примечание: Прогресс индексации теперь хранится в SQLite через IndexingJobTracker.
         При ошибках инициализации возвращаем ошибку без попытки восстановления.
         """
-        from ..mcp.server import _get_indexing_tracker
+        from ..core.indexing_tracker import IndexingJobTracker
+        from ..config import get_settings
+        from ..utils.paths import find_project_root
+        from pathlib import Path
         
-        # Получаем трекер задач
-        tracker = _get_indexing_tracker()
+        # Создаем трекер напрямую, избегая циклического импорта
+        settings = get_settings()
+        storage_path = "data/indexing_jobs.json"
+        if not os.path.isabs(storage_path):
+            project_root = find_project_root(Path(__file__).parent)
+            storage_path = str(project_root / storage_path)
+        
+        tracker = IndexingJobTracker(storage_path=storage_path)
         
         # Получаем активные задачи из трекера
         active_jobs = tracker.get_all_jobs(status="running", chat=request.chat) if request.chat else tracker.get_all_jobs(status="running")

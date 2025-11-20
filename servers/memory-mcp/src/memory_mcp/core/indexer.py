@@ -87,6 +87,13 @@ class TwoLevelIndexer:
         """
         self.progress_callback = progress_callback
         
+        # Инициализируем embedding_client ПЕРЕД использованием
+        self.artifacts_path = Path(artifacts_path).expanduser()
+        self.artifacts_path.mkdir(parents=True, exist_ok=True)
+        self.reports_path = self.artifacts_path / "reports"
+        self.reports_path.mkdir(parents=True, exist_ok=True)
+        self.embedding_client = embedding_client or LMStudioEmbeddingClient()
+        
         # Инициализируем Qdrant для векторного хранилища
         from ..config import get_settings
         settings = get_settings()
@@ -103,12 +110,6 @@ class TwoLevelIndexer:
             self.qdrant_manager = None
         
         # Qdrant используется для векторного хранилища
-        
-        self.artifacts_path = Path(artifacts_path).expanduser()
-        self.artifacts_path.mkdir(parents=True, exist_ok=True)
-        self.reports_path = self.artifacts_path / "reports"
-        self.reports_path.mkdir(parents=True, exist_ok=True)
-        self.embedding_client = embedding_client or LMStudioEmbeddingClient()
 
         self.enable_clustering = enable_clustering
         self.clustering_threshold = clustering_threshold

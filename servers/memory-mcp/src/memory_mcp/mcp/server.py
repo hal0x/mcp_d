@@ -45,8 +45,6 @@ from .schema import (
     GenerateEmbeddingResponse,
     GetGraphNeighborsRequest,
     GetGraphNeighborsResponse,
-    GetIndexingProgressRequest,
-    GetIndexingProgressResponse,
     GetRelatedRecordsRequest,
     GetRelatedRecordsResponse,
     GetStatisticsRequest,
@@ -717,7 +715,7 @@ async def list_tools() -> List[Tool]:
         ),
         Tool(
             name="index_chat",
-            description="Index a specific Telegram chat with two-level indexing (L1: sessions, L2: messages, L3: tasks). Индексация выполняется в фоновом режиме и не блокирует вызов. Используйте get_indexing_progress для отслеживания прогресса. Поддерживает все параметры индексации: качество, кластеризация, группировка, умная агрегация и др.",
+            description="Index a specific Telegram chat with two-level indexing (L1: sessions, L2: messages). Индексация выполняется в фоновом режиме и не блокирует вызов. Используйте get_statistics с type='indexing' для отслеживания прогресса. Поддерживает все параметры индексации: качество, кластеризация, группировка, умная агрегация и др.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1482,7 +1480,7 @@ async def _start_indexing_job(
         job_id=job_id,
         status="started",
         chat=request.chat,
-        message=f"Индексация чата '{request.chat}' запущена в фоновом режиме. Используйте get_indexing_progress для отслеживания прогресса.",
+        message=f"Индексация чата '{request.chat}' запущена в фоновом режиме. Используйте get_statistics с type='indexing' для отслеживания прогресса.",
     )
 
 
