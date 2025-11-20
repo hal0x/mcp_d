@@ -798,7 +798,7 @@ class LMStudioEmbeddingClient:
                     self.session = aiohttp.ClientSession(
                         connector=connector,
                         timeout=timeout,
-                        headers={"Connection": "close"},
+                        headers={"Connection": "keep-alive"},  # Keep-alive для длительных запросов
                     )
                 
                 async with self.session.post(
@@ -879,7 +879,7 @@ class LMStudioEmbeddingClient:
                         self.session = aiohttp.ClientSession(
                             connector=connector,
                             timeout=timeout,
-                            headers={"Connection": "close"},
+                            # Убираем "Connection": "close" для длительных запросов
                         )
                         delay = 5 + random.uniform(0, 2)
                         logger.debug(f"Ожидание {delay:.2f} секунд перед повторной попыткой генерации...")
