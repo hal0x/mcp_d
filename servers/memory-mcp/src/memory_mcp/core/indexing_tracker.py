@@ -291,3 +291,52 @@ class IndexingJobTracker:
 
             return deleted
 
+    def cleanup_stale_running_jobs(self, max_age_hours: int = 2) -> int:
+        """
+        Завершить зависшие задачи со статусом "running", которые не обновлялись долгое время.
+
+        Args:
+            max_age_hours: Максимальный возраст задачи в часах перед пометкой как зависшей
+
+        Returns:
+            Количество завершенных задач
+        """
+        with self._lock:
+            jobs = self._load_jobs()
+            cutoff = datetime.now(timezone.utc).timestamp() - (max_age_hours * 60 * 60)
+            completed = 0
+
+            for job_id, job in list(jobs.items()):
+                status = job.get("status")
+                if status == "running":
+                    started_at = job.get("started_at")
+                    if started_at:
+                        try:
+                            started_ts = datetime.fromisoformat(
+                                started_at.replace("Z", "+00:00")
+                            ).timestamp()
+                            if started_ts < cutoff:
+                                # Помечаем задачу как завершенную с ошибкой
+                                job["status"] = "failed"
+                                job["failed_at"] = datetime.now(timezone.utc).isoformat()
+                                job["error"] = f"Задача зависла (не обновлялась более {max_age_hours} часов)"
+                                job["current_stage"] = "Завершена автоматически (зависла)"
+                                completed += 1
+                                logger.warning(
+                                    f"Завершена зависшая задача {job_id} (начата {started_at})"
+                                )
+                        except (ValueError, AttributeError):
+                            # Если не удалось распарсить дату, помечаем как зависшую
+                            job["status"] = "failed"
+                            job["failed_at"] = datetime.now(timezone.utc).isoformat()
+                            job["error"] = "Задача зависла (некорректная дата начала)"
+                            job["current_stage"] = "Завершена автоматически (зависла)"
+                            completed += 1
+                            logger.warning(f"Завершена зависшая задача {job_id} (некорректная дата)")
+
+            if completed > 0:
+                self._save_jobs(jobs)
+                logger.info(f"Завершено {completed} зависших задач индексации")
+
+            return completed
+

@@ -1478,6 +1478,11 @@ class MemoryServiceAdapter:
         
         tracker = IndexingJobTracker(storage_path=storage_path)
         
+        # Автоматически завершаем зависшие задачи (старше 2 часов)
+        stale_completed = tracker.cleanup_stale_running_jobs(max_age_hours=2)
+        if stale_completed > 0:
+            logger.info(f"Автоматически завершено {stale_completed} зависших задач индексации")
+        
         # Получаем активные задачи из трекера
         active_jobs = tracker.get_all_jobs(status="running", chat=request.chat) if request.chat else tracker.get_all_jobs(status="running")
         
