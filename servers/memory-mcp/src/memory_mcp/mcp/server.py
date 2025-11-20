@@ -240,16 +240,16 @@ async def list_tools() -> List[Tool]:
                     },
                     "query": {
                         "type": "string",
-                        "description": "Поисковый запрос. Обязателен для search_type: hybrid, smart, trading. Опционален для других типов.",
+                        "description": "Поисковый запрос. ОБЯЗАТЕЛЕН для search_type='hybrid', 'smart', 'trading'. Опционален для других типов.",
                     },
                     "embedding": {
                         "type": "array",
                         "items": {"type": "number"},
-                        "description": "Вектор эмбеддинга. Обязателен для search_type: embedding. Опционален для других типов.",
+                        "description": "Вектор эмбеддинга. ОБЯЗАТЕЛЕН для search_type='embedding'. Опционален для других типов.",
                     },
                     "record_id": {
                         "type": "string",
-                        "description": "ID записи. Обязателен для search_type: similar. Опционален для других типов.",
+                        "description": "ID записи. ОБЯЗАТЕЛЕН для search_type='similar'. Опционален для других типов.",
                     },
                     "top_k": {"type": "integer", "description": "Максимальное количество результатов", "default": 5},
                     "source": {"type": "string", "description": "Фильтр по источнику"},
@@ -1355,7 +1355,12 @@ async def _run_indexing_job(
                 
                 optimization_results = {}
                 
-                db_path = str(adapter.graph.db_path) if hasattr(adapter.graph, 'db_path') else str(adapter.graph.conn.execute("PRAGMA database_list").fetchone()[2])
+                # Получаем путь к БД напрямую (TypedGraphMemory всегда имеет db_path)
+                try:
+                    db_path = str(adapter.graph.db_path)
+                except (AttributeError, Exception) as e:
+                    logger.error(f"Ошибка при получении пути к БД: {e}", exc_info=True)
+                    raise RuntimeError(f"Не удалось получить путь к базе данных: {e}") from e
                 
                 # Оптимизация базы данных
                 try:
@@ -1483,6 +1488,7 @@ def _optimize_database(db_path: str) -> Dict[str, Any]:
     size_before = db_path_obj.stat().st_size
     operations_performed = []
     start_time = time.time()
+    conn = None
     
     try:
         conn = sqlite3.connect(str(db_path))
@@ -1506,8 +1512,6 @@ def _optimize_database(db_path: str) -> Dict[str, Any]:
         except sqlite3.OperationalError:
             pass  # FTS5 таблица может отсутствовать
         
-        conn.close()
-        
         size_after = db_path_obj.stat().st_size
         space_freed = size_before - size_after
         duration = time.time() - start_time
@@ -1522,6 +1526,12 @@ def _optimize_database(db_path: str) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"error": str(e)}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass  # Игнорируем ошибки при закрытии
 
 
 def _update_importance_scores(graph) -> Dict[str, Any]:
@@ -1530,6 +1540,7 @@ def _update_importance_scores(graph) -> Dict[str, Any]:
     import sqlite3
     from ..memory.importance_scoring import ImportanceScorer
     
+    conn = None
     try:
         scorer = ImportanceScorer()
         db_path = graph.db_path
@@ -1568,8 +1579,6 @@ def _update_importance_scores(graph) -> Dict[str, Any]:
             except Exception:
                 continue
         
-        conn.close()
-        
         avg_importance = sum(importance_scores) / len(importance_scores) if importance_scores else 0
         min_importance = min(importance_scores) if importance_scores else 0
         max_importance = max(importance_scores) if importance_scores else 0
@@ -1583,6 +1592,12 @@ def _update_importance_scores(graph) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"error": str(e)}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass  # Игнорируем ошибки при закрытии
 
 
 def _validate_database(db_path: str) -> Dict[str, Any]:
@@ -1594,6 +1609,8 @@ def _validate_database(db_path: str) -> Dict[str, Any]:
     if not db_path_obj.exists():
         return {"error": f"База данных не найдена: {db_path}"}
     
+    conn = None
+    graph = None
     try:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
@@ -1667,8 +1684,6 @@ def _validate_database(db_path: str) -> Dict[str, Any]:
                     "message": f"Edge '{edge['id']}' references non-existent node",
                 })
         
-        conn.close()
-        
         return {
             "valid": len([i for i in issues if i["severity"] == "error"]) == 0,
             "total_issues": len(issues),
@@ -1678,6 +1693,17 @@ def _validate_database(db_path: str) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"error": str(e)}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass  # Игнорируем ошибки при закрытии
+        if graph is not None:
+            try:
+                graph.close()
+            except Exception:
+                pass  # Игнорируем ошибки при закрытии
 
 
 def _check_prune_memory(graph) -> Dict[str, Any]:
@@ -1686,6 +1712,7 @@ def _check_prune_memory(graph) -> Dict[str, Any]:
     import sqlite3
     from ..memory.importance_scoring import MemoryPruner, EvictionScorer
     
+    conn = None
     try:
         eviction_scorer = EvictionScorer()
         pruner = MemoryPruner(
@@ -1706,7 +1733,6 @@ def _check_prune_memory(graph) -> Dict[str, Any]:
         prune_needed = pruner.should_prune(current_count)
         
         if not prune_needed:
-            conn.close()
             return {
                 "prune_needed": False,
                 "current_count": current_count,
@@ -1725,8 +1751,6 @@ def _check_prune_memory(graph) -> Dict[str, Any]:
         
         candidates = pruner.get_eviction_candidates(messages, threshold=0.7)
         
-        conn.close()
-        
         return {
             "prune_needed": True,
             "current_count": current_count,
@@ -1735,6 +1759,12 @@ def _check_prune_memory(graph) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"error": str(e)}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass  # Игнорируем ошибки при закрытии
 
 
 def get_health_payload() -> Dict[str, Any]:
@@ -1919,8 +1949,35 @@ def _get_background_indexing_status() -> "BackgroundIndexingResponse":
                 message="Фоновая индексация не инициализирована"
             )
         
-        status = _background_indexing_service.get_status()
-        is_running = _background_indexing_service.is_running()
+        # Проверяем валидное состояние сервиса перед вызовом методов
+        try:
+            is_running = _background_indexing_service.is_running()
+        except (AttributeError, Exception) as e:
+            logger.warning(f"Ошибка при проверке состояния фоновой индексации: {e}")
+            return BackgroundIndexingResponse(
+                action="status",
+                running=False,
+                check_interval=settings.background_indexing_interval,
+                last_check_time=None,
+                input_path=settings.input_path,
+                chats_path=settings.chats_path,
+                message=f"Ошибка при проверке состояния: {str(e)}"
+            )
+        
+        try:
+            status = _background_indexing_service.get_status()
+        except (AttributeError, Exception) as e:
+            logger.warning(f"Ошибка при получении статуса фоновой индексации: {e}")
+            # Возвращаем базовый статус без деталей
+            return BackgroundIndexingResponse(
+                action="status",
+                running=is_running,
+                check_interval=settings.background_indexing_interval,
+                last_check_time=None,
+                input_path=settings.input_path,
+                chats_path=settings.chats_path,
+                message=f"Статус: {'работает' if is_running else 'остановлена'} (ошибка получения деталей: {str(e)})"
+            )
         
         return BackgroundIndexingResponse(
             action="status",

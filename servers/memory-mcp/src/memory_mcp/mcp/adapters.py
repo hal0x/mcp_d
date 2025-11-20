@@ -1006,7 +1006,7 @@ class MemoryServiceAdapter:
         )
         return StoreTradingSignalResponse(signal=record)
 
-    def search_trading_patterns(
+    def _search_trading_patterns(
         self, request: SearchTradingPatternsRequest
     ) -> SearchTradingPatternsResponse:
         rows = self.trading_memory.search_patterns(
@@ -1634,7 +1634,7 @@ class MemoryServiceAdapter:
             return GetRelatedRecordsResponse(records=[])
 
     # Advanced Search
-    def search_by_embedding(
+    def _search_by_embedding(
         self, request: SearchByEmbeddingRequest
     ) -> SearchByEmbeddingResponse:
         """Search by embedding vector directly."""
@@ -1665,7 +1665,7 @@ class MemoryServiceAdapter:
             total_matches=len(results),
         )
 
-    def similar_records(
+    def _similar_records(
         self, request: SimilarRecordsRequest
     ) -> SimilarRecordsResponse:
         """Find similar records by getting embedding of the record and searching."""
@@ -2978,47 +2978,114 @@ class MemoryServiceAdapter:
         elif request.search_type == "embedding":
             if not request.embedding:
                 raise ValueError("embedding is required for embedding search")
-            search_req = SearchByEmbeddingRequest(
-                embedding=request.embedding,
-                top_k=request.top_k,
+            # Прямой поиск по вектору эмбеддинга
+            if not self.vector_store:
+                return UnifiedSearchResponse(
+                    search_type="embedding",
+                    results=[],
+                    total_matches=0,
+                )
+            
+            vector_results = self.vector_store.search(
+                request.embedding,
+                limit=request.top_k,
                 source=request.source,
-                tags=request.tags,
+                tags=request.tags if request.tags else None,
                 date_from=request.date_from,
                 date_to=request.date_to,
             )
-            result = self.search_by_embedding(search_req)
+            
+            results = []
+            for match in vector_results:
+                record_id = match.record_id
+                score = match.score
+                payload = match.payload or {}
+                snippet = payload.get("content_preview", "")
+                item = self._build_item_from_graph(record_id, score, snippet=snippet)
+                if item:
+                    results.append(item)
+            
             return UnifiedSearchResponse(
                 search_type="embedding",
-                results=result.results,
-                total_matches=result.total_matches,
+                results=results[:request.top_k],
+                total_matches=len(results),
             )
         
         elif request.search_type == "similar":
             if not request.record_id:
                 raise ValueError("record_id is required for similar search")
-            search_req = SimilarRecordsRequest(
-                record_id=request.record_id,
-                top_k=request.top_k,
+            # Прямой поиск похожих записей
+            fetch_req = FetchRequest(record_id=request.record_id)
+            fetch_resp = self.fetch(fetch_req)
+            if not fetch_resp.record:
+                return UnifiedSearchResponse(
+                    search_type="similar",
+                    results=[],
+                    total_matches=0,
+                )
+            
+            if not self.embedding_service or not self.vector_store:
+                return UnifiedSearchResponse(
+                    search_type="similar",
+                    results=[],
+                    total_matches=0,
+                )
+            
+            vector = self.embedding_service.embed(fetch_resp.record.content)
+            if not vector:
+                return UnifiedSearchResponse(
+                    search_type="similar",
+                    results=[],
+                    total_matches=0,
+                )
+            
+            vector_results = self.vector_store.search(
+                vector,
+                limit=request.top_k + 1,
             )
-            result = self.similar_records(search_req)
+            
+            results = []
+            for match in vector_results:
+                if match.record_id == request.record_id:
+                    continue
+                item = self._build_item_from_graph(match.record_id, match.score)
+                if item:
+                    results.append(item)
+                if len(results) >= request.top_k:
+                    break
+            
             return UnifiedSearchResponse(
                 search_type="similar",
-                results=result.results,
-                total_matches=len(result.results),
+                results=results,
+                total_matches=len(results),
             )
         
         elif request.search_type == "trading":
             if not request.query:
                 raise ValueError("query is required for trading search")
-            search_req = SearchTradingPatternsRequest(
+            # Прямой поиск торговых паттернов
+            rows = self.trading_memory.search_patterns(
                 query=request.query,
                 symbol=request.symbol,
+                timeframe=None,  # timeframe не передается в UnifiedSearchRequest
                 limit=request.limit or request.top_k,
             )
-            result = self.search_trading_patterns(search_req)
+            signals = [
+                TradingSignalRecord(
+                    signal_id=row["signal_id"],
+                    timestamp=row["timestamp"],
+                    symbol=row["symbol"],
+                    signal_type=row["signal_type"],
+                    direction=row.get("direction"),
+                    entry=row.get("entry"),
+                    confidence=row.get("confidence"),
+                    context=row.get("context", {}),
+                )
+                for row in rows
+            ]
             return UnifiedSearchResponse(
                 search_type="trading",
-                signals=result.signals,
+                signals=signals,
             )
         
         else:

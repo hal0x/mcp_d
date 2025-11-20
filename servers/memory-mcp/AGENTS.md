@@ -265,7 +265,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 | `summaries` | Управление саммаризацией | `action` (`'update'`/`'review'`), `chat`, `dry_run` |
 | `get_available_chats` | Список доступных чатов | `include_stats` (опционально) |
 | `search_entities` | Поиск сущностей | `query`, `entity_type`, `limit` |
-| `get_entity_profile` | Профиль сущности | `entity_id`, `include_related` |
+| `get_entity_profile` | Профиль сущности | `entity_type`, `value` |
 
 **Примечание**: Подробные описания параметров и примеры использования см. в `src/memory_mcp/mcp/server.py` и разделе [Сценарии использования](#сценарии-использования).
 
