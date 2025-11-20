@@ -75,24 +75,98 @@ class MemoryIngestor:
             )
             
             # Создаем связи между новыми записями (если их больше одной)
+            # Используем несколько критериев для создания связей
             if len(sorted_nodes) > 1:
                 for i in range(len(sorted_nodes) - 1):
                     prev_node, prev_record = sorted_nodes[i]
                     next_node, next_record = sorted_nodes[i + 1]
-                    # Создаем связь только если записи близки по времени (в пределах 4 часов)
+                    
+                    # Вычисляем разницу во времени
                     time_diff = (next_record.timestamp - prev_record.timestamp).total_seconds()
-                    if time_diff <= 4 * 3600:  # 4 часа
+                    
+                    # Получаем данные записей
+                    prev_entities = set(prev_record.entities or [])
+                    next_entities = set(next_record.entities or [])
+                    prev_tags = set(prev_record.tags or [])
+                    next_tags = set(next_record.tags or [])
+                    prev_author = prev_record.author
+                    next_author = next_record.author
+                    
+                    # Определяем тип связи и вес на основе критериев
+                    weight = None
+                    edge_type = EdgeType.RELATES_TO
+                    edge_properties = {}
+                    
+                    # Критерий 1: Временная близость (расширенный диапазон)
+                    if time_diff <= 4 * 3600:  # До 4 часов - сильная связь
+                        weight = 0.7
+                        edge_type = EdgeType.TEMPORAL
+                        edge_properties = {"time_diff_seconds": time_diff, "link_reason": "temporal_close"}
+                    elif time_diff <= 24 * 3600:  # До 24 часов - средняя связь
+                        weight = 0.5
+                        edge_type = EdgeType.TEMPORAL
+                        edge_properties = {"time_diff_seconds": time_diff, "link_reason": "temporal_medium"}
+                    elif time_diff <= 7 * 24 * 3600:  # До недели - слабая связь
+                        weight = 0.3
+                        edge_type = EdgeType.RELATES_TO
+                        edge_properties = {"time_diff_seconds": time_diff, "link_reason": "temporal_far"}
+                    
+                    # Критерий 2: Общие сущности (сильная связь)
+                    common_entities = prev_entities & next_entities
+                    if common_entities and len(common_entities) > 0:
+                        entity_weight = min(0.8, 0.5 + len(common_entities) * 0.1)
+                        if weight is None or entity_weight > weight:
+                            weight = entity_weight
+                            edge_type = EdgeType.MENTIONS
+                            edge_properties = {
+                                "common_entities": list(common_entities),
+                                "entity_count": len(common_entities),
+                                "link_reason": "shared_entities",
+                                "time_diff_seconds": time_diff
+                            }
+                    
+                    # Критерий 3: Общие теги (средняя связь)
+                    common_tags = prev_tags & next_tags
+                    if common_tags and len(common_tags) > 0:
+                        tag_weight = min(0.6, 0.4 + len(common_tags) * 0.1)
+                        if weight is None or tag_weight > weight:
+                            weight = tag_weight
+                            edge_type = EdgeType.HAS_TOPIC
+                            edge_properties = {
+                                "common_tags": list(common_tags),
+                                "tag_count": len(common_tags),
+                                "link_reason": "shared_tags",
+                                "time_diff_seconds": time_diff
+                            }
+                    
+                    # Критерий 4: Один автор (слабая связь)
+                    if prev_author and next_author and prev_author == next_author:
+                        author_weight = 0.4
+                        if weight is None or (weight < 0.5 and author_weight > weight):
+                            weight = author_weight
+                            edge_type = EdgeType.AUTHORED_BY
+                            edge_properties = {
+                                "author": prev_author,
+                                "link_reason": "same_author",
+                                "time_diff_seconds": time_diff
+                            }
+                    
+                    # Создаем связь, если есть хотя бы один критерий
+                    if weight is not None and weight >= 0.3:  # Минимальный порог веса
                         edge = GraphEdge(
-                            id=f"{prev_node.id}-next-{next_node.id}",
+                            id=f"{prev_node.id}-relates-{next_node.id}",
                             source_id=prev_node.id,
                             target_id=next_node.id,
-                            type=EdgeType.RELATES_TO,
-                            weight=0.5,  # Средний вес для временных связей
-                            properties={"time_diff_seconds": time_diff},
+                            type=edge_type,
+                            weight=weight,
+                            properties=edge_properties,
                         )
                         try:
                             if self.graph.add_edge(edge):
-                                logger.debug(f"Создана связь между новыми записями {prev_node.id} -> {next_node.id}")
+                                logger.debug(
+                                    f"Создана связь {edge_type.value} между новыми записями {prev_node.id} -> {next_node.id} "
+                                    f"(вес={weight:.2f}, причина={edge_properties.get('link_reason', 'unknown')})"
+                                )
                         except Exception as e:
                             logger.debug(f"Failed to add edge between {prev_node.id} and {next_node.id}: {e}")
             
@@ -109,11 +183,19 @@ class MemoryIngestor:
         source: str,
         chat: str,
     ) -> None:
-        """Создает связи между новой записью и существующими записями в графе."""
+        """Создает связи между новой записью и существующими записями в графе.
+        
+        Использует несколько критериев для создания связей:
+        1. Временная близость (расширенный диапазон)
+        2. Общие сущности (entities)
+        3. Общие теги
+        4. Один автор
+        """
         try:
             cursor = self.graph.conn.cursor()
             
             # Получаем существующие записи из того же чата, отсортированные по timestamp
+            # Увеличиваем лимит для лучшего покрытия
             query = """
                 SELECT id, properties FROM nodes
                 WHERE type = 'DocChunk' 
@@ -124,7 +206,7 @@ class MemoryIngestor:
                     OR json_extract(properties, '$.chat') = ?
                 )
                 ORDER BY json_extract(properties, '$.timestamp') DESC
-                LIMIT 10
+                LIMIT 50
             """
             
             cursor.execute(query, (new_node.id, source, chat))
@@ -135,54 +217,140 @@ class MemoryIngestor:
             
             # Парсим timestamp новой записи
             new_timestamp = new_record.timestamp
+            new_entities = set(record.entities or [])
+            new_tags = set(record.tags or [])
+            new_author = record.author
+            
+            edges_created = 0
+            max_edges_per_record = 20  # Ограничиваем количество связей на запись
             
             for row in existing_rows:
+                if edges_created >= max_edges_per_record:
+                    break
+                    
                 try:
                     props = json.loads(row["properties"]) if isinstance(row["properties"], str) else row["properties"]
                     if not props:
                         continue
                     
+                    existing_id = row["id"]
+                    
                     # Получаем timestamp существующей записи
                     existing_timestamp_str = props.get("timestamp") or props.get("created_at")
-                    if not existing_timestamp_str:
-                        continue
+                    existing_timestamp = None
+                    if existing_timestamp_str:
+                        from ..utils.datetime_utils import parse_datetime_utc
+                        existing_timestamp = parse_datetime_utc(existing_timestamp_str, default=None)
                     
-                    from ..utils.datetime_utils import parse_datetime_utc
-                    existing_timestamp = parse_datetime_utc(existing_timestamp_str, default=None)
-                    if not existing_timestamp:
-                        continue
+                    # Получаем данные существующей записи
+                    existing_entities = set(props.get("entities", []) or [])
+                    existing_tags = set(props.get("tags", []) or [])
+                    existing_author = props.get("author")
                     
                     # Вычисляем разницу во времени
-                    time_diff = abs((new_timestamp - existing_timestamp).total_seconds())
+                    time_diff = None
+                    if existing_timestamp:
+                        time_diff = abs((new_timestamp - existing_timestamp).total_seconds())
                     
-                    # Создаем связь только если записи близки по времени (в пределах 4 часов)
-                    if time_diff <= 4 * 3600:  # 4 часа
-                        existing_id = row["id"]
-                        
-                        # Определяем направление связи (от более старой к более новой)
-                        if new_timestamp > existing_timestamp:
-                            source_id = existing_id
-                            target_id = new_node.id
-                        else:
-                            source_id = new_node.id
-                            target_id = existing_id
-                        
+                    # Определяем направление связи (от более старой к более новой)
+                    if existing_timestamp and new_timestamp > existing_timestamp:
+                        source_id = existing_id
+                        target_id = new_node.id
+                    else:
+                        source_id = new_node.id
+                        target_id = existing_id
+                    
+                    edge_id = f"{source_id}-relates-{target_id}"
+                    
+                    # Критерий 1: Временная близость (расширенный диапазон с разными весами)
+                    weight = None
+                    edge_type = EdgeType.RELATES_TO
+                    edge_properties = {}
+                    
+                    if time_diff is not None:
+                        if time_diff <= 4 * 3600:  # До 4 часов - сильная связь
+                            weight = 0.7
+                            edge_type = EdgeType.TEMPORAL
+                            edge_properties = {"time_diff_seconds": time_diff, "link_reason": "temporal_close"}
+                        elif time_diff <= 24 * 3600:  # До 24 часов - средняя связь
+                            weight = 0.5
+                            edge_type = EdgeType.TEMPORAL
+                            edge_properties = {"time_diff_seconds": time_diff, "link_reason": "temporal_medium"}
+                        elif time_diff <= 7 * 24 * 3600:  # До недели - слабая связь
+                            weight = 0.3
+                            edge_type = EdgeType.RELATES_TO
+                            edge_properties = {"time_diff_seconds": time_diff, "link_reason": "temporal_far"}
+                    
+                    # Критерий 2: Общие сущности (сильная связь)
+                    common_entities = new_entities & existing_entities
+                    if common_entities and len(common_entities) > 0:
+                        entity_weight = min(0.8, 0.5 + len(common_entities) * 0.1)
+                        if weight is None or entity_weight > weight:
+                            weight = entity_weight
+                            edge_type = EdgeType.MENTIONS
+                            edge_properties = {
+                                "common_entities": list(common_entities),
+                                "entity_count": len(common_entities),
+                                "link_reason": "shared_entities"
+                            }
+                            if time_diff is not None:
+                                edge_properties["time_diff_seconds"] = time_diff
+                    
+                    # Критерий 3: Общие теги (средняя связь)
+                    common_tags = new_tags & existing_tags
+                    if common_tags and len(common_tags) > 0:
+                        tag_weight = min(0.6, 0.4 + len(common_tags) * 0.1)
+                        if weight is None or tag_weight > weight:
+                            weight = tag_weight
+                            edge_type = EdgeType.HAS_TOPIC
+                            edge_properties = {
+                                "common_tags": list(common_tags),
+                                "tag_count": len(common_tags),
+                                "link_reason": "shared_tags"
+                            }
+                            if time_diff is not None:
+                                edge_properties["time_diff_seconds"] = time_diff
+                    
+                    # Критерий 4: Один автор (слабая связь, но добавляет контекст)
+                    if new_author and existing_author and new_author == existing_author:
+                        author_weight = 0.4
+                        if weight is None or (weight < 0.5 and author_weight > weight):
+                            weight = author_weight
+                            edge_type = EdgeType.AUTHORED_BY
+                            edge_properties = {
+                                "author": new_author,
+                                "link_reason": "same_author"
+                            }
+                            if time_diff is not None:
+                                edge_properties["time_diff_seconds"] = time_diff
+                    
+                    # Создаем связь, если есть хотя бы один критерий
+                    if weight is not None and weight >= 0.3:  # Минимальный порог веса
                         edge = GraphEdge(
-                            id=f"{source_id}-next-{target_id}",
+                            id=edge_id,
                             source_id=source_id,
                             target_id=target_id,
-                            type=EdgeType.RELATES_TO,
-                            weight=0.5,
-                            properties={"time_diff_seconds": time_diff},
+                            type=edge_type,
+                            weight=weight,
+                            properties=edge_properties,
                         )
                         try:
-                            self.graph.add_edge(edge)
+                            if self.graph.add_edge(edge):
+                                edges_created += 1
+                                logger.debug(
+                                    f"Создана связь {edge_type.value} между {source_id} и {target_id} "
+                                    f"(вес={weight:.2f}, причина={edge_properties.get('link_reason', 'unknown')})"
+                                )
                         except Exception as e:
                             # Игнорируем ошибки, если связь уже существует
                             logger.debug(f"Failed to add edge between {source_id} and {target_id}: {e}")
+                            
                 except Exception as e:
                     logger.debug(f"Ошибка при создании связи с существующей записью {row['id']}: {e}")
                     continue
+                    
+            if edges_created > 0:
+                logger.debug(f"Создано {edges_created} связей для записи {new_node.id}")
         except Exception as e:
             logger.debug(f"Ошибка при связывании новой записи {new_node.id} с существующими: {e}")
 
