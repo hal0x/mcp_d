@@ -730,7 +730,15 @@ def index(
         from ..memory.typed_graph import TypedGraphMemory
         db_path = settings.db_path
         if not Path(db_path).is_absolute():
-            project_root = Path(__file__).parent.parent.parent
+            # Ищем корень проекта по pyproject.toml (как в mcp/server.py)
+            current_dir = Path(__file__).parent
+            project_root = current_dir
+            while project_root.parent != project_root:
+                if (project_root / "pyproject.toml").exists():
+                    break
+                project_root = project_root.parent
+            if not (project_root / "pyproject.toml").exists():
+                project_root = Path.cwd()
             db_path = str(project_root / db_path)
         db_path_obj = Path(db_path)
         db_path_obj.parent.mkdir(parents=True, exist_ok=True)

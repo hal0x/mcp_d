@@ -555,6 +555,29 @@ class TypedGraphMemory:
             return False
 
         try:
+            # Проверяем, существует ли ребро уже в БД
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT id FROM edges WHERE id = ?", (edge.id,))
+            if cursor.fetchone():
+                logger.debug(f"Ребро {edge.id} уже существует, пропускаем")
+                # Обновляем в NetworkX, если его там нет
+                if not self.graph.has_edge(edge.source_id, edge.target_id):
+                    self.graph.add_edge(
+                        edge.source_id,
+                        edge.target_id,
+                        edge_type=edge.type.value
+                        if isinstance(edge.type, EdgeType)
+                        else edge.type,
+                        weight=edge.weight,
+                        **edge.properties,
+                    )
+                return False
+
+            # Проверяем, существует ли ребро в NetworkX
+            if self.graph.has_edge(edge.source_id, edge.target_id):
+                logger.debug(f"Ребро {edge.source_id} -> {edge.target_id} уже существует в графе, пропускаем")
+                return False
+
             # Добавляем в NetworkX
             self.graph.add_edge(
                 edge.source_id,
@@ -568,18 +591,21 @@ class TypedGraphMemory:
 
             # Добавляем обратное ребро если bidirectional
             if edge.bidirectional:
-                self.graph.add_edge(
-                    edge.target_id,
-                    edge.source_id,
-                    edge_type=edge.type.value
-                    if isinstance(edge.type, EdgeType)
-                    else edge.type,
-                    weight=edge.weight,
-                    **edge.properties,
-                )
+                reverse_edge_id = f"{edge.target_id}-next-{edge.source_id}"
+                # Проверяем обратное ребро
+                cursor.execute("SELECT id FROM edges WHERE id = ?", (reverse_edge_id,))
+                if not cursor.fetchone() and not self.graph.has_edge(edge.target_id, edge.source_id):
+                    self.graph.add_edge(
+                        edge.target_id,
+                        edge.source_id,
+                        edge_type=edge.type.value
+                        if isinstance(edge.type, EdgeType)
+                        else edge.type,
+                        weight=edge.weight,
+                        **edge.properties,
+                    )
 
             # Сохраняем в БД
-            cursor = self.conn.cursor()
             cursor.execute(
                 """
                 INSERT INTO edges (id, source_id, target_id, type, weight, properties, created_at, bidirectional)
@@ -603,6 +629,27 @@ class TypedGraphMemory:
             )
             return True
 
+        except sqlite3.IntegrityError as e:
+            # Игнорируем ошибки UNIQUE constraint - ребро уже существует
+            if "UNIQUE constraint failed" in str(e):
+                logger.debug(f"Ребро {edge.id} уже существует в БД, пропускаем")
+                # Обновляем в NetworkX, если его там нет
+                if not self.graph.has_edge(edge.source_id, edge.target_id):
+                    self.graph.add_edge(
+                        edge.source_id,
+                        edge.target_id,
+                        edge_type=edge.type.value
+                        if isinstance(edge.type, EdgeType)
+                        else edge.type,
+                        weight=edge.weight,
+                        **edge.properties,
+                    )
+                self.conn.rollback()
+                return False
+            else:
+                logger.error(f"Ошибка добавления ребра {edge.id}: {e}")
+                self.conn.rollback()
+                return False
         except Exception as e:
             logger.error(f"Ошибка добавления ребра {edge.id}: {e}")
             self.conn.rollback()
@@ -723,21 +770,70 @@ class TypedGraphMemory:
             extended_content = f"{extended_content}\n{' '.join(entity_descriptions_parts)}"
 
         cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM node_search WHERE node_id = ?", (node_id,))
-        cursor.execute(
-            """
-            INSERT INTO node_search (node_id, content, source, tags, entities)
-            VALUES (?, ?, ?, ?, ?)
-        """,
-            (
-                node_id,
-                extended_content,
-                source or "",
-                " ".join(sorted({str(tag) for tag in tags if tag})),
-                " ".join(sorted({str(entity) for entity in entities if entity})),
-            ),
-        )
-        self.conn.commit()
+        try:
+            # Удаляем существующую запись, если есть
+            cursor.execute("DELETE FROM node_search WHERE node_id = ?", (node_id,))
+            
+            # Вставляем новую запись
+            cursor.execute(
+                """
+                INSERT INTO node_search (node_id, content, source, tags, entities)
+                VALUES (?, ?, ?, ?, ?)
+            """,
+                (
+                    node_id,
+                    extended_content,
+                    source or "",
+                    " ".join(sorted({str(tag) for tag in tags if tag})),
+                    " ".join(sorted({str(entity) for entity in entities if entity})),
+                ),
+            )
+            self.conn.commit()
+            logger.debug(f"Запись {node_id} добавлена/обновлена в FTS5 индекс")
+        except Exception as e:
+            # Если произошла ошибка, пытаемся обновить существующую запись
+            self.conn.rollback()
+            try:
+                # Проверяем, существует ли запись
+                cursor.execute("SELECT node_id FROM node_search WHERE node_id = ?", (node_id,))
+                if cursor.fetchone():
+                    # Обновляем существующую запись
+                    cursor.execute(
+                        """
+                        UPDATE node_search 
+                        SET content = ?, source = ?, tags = ?, entities = ?
+                        WHERE node_id = ?
+                    """,
+                        (
+                            extended_content,
+                            source or "",
+                            " ".join(sorted({str(tag) for tag in tags if tag})),
+                            " ".join(sorted({str(entity) for entity in entities if entity})),
+                            node_id,
+                        ),
+                    )
+                    self.conn.commit()
+                    logger.debug(f"Запись {node_id} обновлена в FTS5 индексе")
+                else:
+                    # Если записи нет, пытаемся вставить снова
+                    cursor.execute(
+                        """
+                        INSERT INTO node_search (node_id, content, source, tags, entities)
+                        VALUES (?, ?, ?, ?, ?)
+                    """,
+                        (
+                            node_id,
+                            extended_content,
+                            source or "",
+                            " ".join(sorted({str(tag) for tag in tags if tag})),
+                            " ".join(sorted({str(entity) for entity in entities if entity})),
+                        ),
+                    )
+                    self.conn.commit()
+                    logger.debug(f"Запись {node_id} добавлена в FTS5 индекс после повторной попытки")
+            except Exception as e2:
+                logger.warning(f"Не удалось добавить/обновить запись {node_id} в FTS5 индекс: {e2}")
+                self.conn.rollback()
 
     def _prepare_match_expression(self, query: str) -> str:
         """Подготовка выражения для FTS5 поиска с морфологическим расширением.

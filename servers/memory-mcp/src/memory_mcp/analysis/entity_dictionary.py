@@ -12,14 +12,14 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 logger = logging.getLogger(__name__)
 
 ENTITY_THRESHOLDS = {
-    "crypto_tokens": 3,
-    "persons": 5,
-    "organizations": 4,
-    "locations": 4,
-    "telegram_channels": 2,
-    "telegram_bots": 2,
-    "crypto_addresses": 2,
-    "domains": 3,
+    "crypto_tokens": 10,
+    "persons": 10,
+    "organizations": 10,
+    "locations": 10,
+    "telegram_channels": 10,
+    "telegram_bots": 10,
+    "crypto_addresses": 10,
+    "domains": 10,
 }
 
 ENTITY_TYPES = list(ENTITY_THRESHOLDS.keys())
@@ -75,7 +75,12 @@ class EntityDictionary:
         self._validation_queue: List[Dict[str, Any]] = []
         self.graph = graph
         
+        # Динамические типы сущностей (могут добавляться LLM)
+        self.dynamic_entity_types: Set[str] = set()
+        self.dynamic_entity_thresholds: Dict[str, int] = {}
+        
         self.load_dictionaries()
+        self._load_dynamic_types()
 
     def link_username_to_name(self, chat_name: str, username: str, display_name: str) -> None:
         """Связывает никнейм с отображаемым именем пользователя в чате.
@@ -123,7 +128,8 @@ class EntityDictionary:
         Returns:
             True если сущность добавлена в словарь, False иначе
         """
-        if entity_type not in ENTITY_TYPES:
+        # Проверяем, известен ли тип (включая динамические)
+        if entity_type not in ENTITY_TYPES and entity_type not in self.dynamic_entity_types:
             logger.warning(f"Неизвестный тип сущности: {entity_type}")
             return False
 
@@ -139,7 +145,7 @@ class EntityDictionary:
         self.entity_counts[entity_type][normalized_value] += 1
         self.chat_entity_counts[chat_name][entity_type][normalized_value] += 1
 
-        threshold = ENTITY_THRESHOLDS[entity_type]
+        threshold = self.get_entity_threshold(entity_type)
         total_count = self.entity_counts[entity_type][normalized_value]
 
         if total_count >= threshold and normalized_value not in self.learned_dictionaries[entity_type]:
@@ -360,12 +366,66 @@ class EntityDictionary:
                 with open(descriptions_file, 'r', encoding='utf-8') as f:
                     descriptions_data = json.load(f)
                     for entity_type, descriptions in descriptions_data.items():
-                        if entity_type in ENTITY_TYPES:
+                        # Загружаем описания для всех типов (включая динамические)
+                        if entity_type in ENTITY_TYPES or entity_type in self.dynamic_entity_types:
                             self.entity_descriptions[entity_type].update(descriptions)
 
             logger.info(f"Словари загружены из {self.storage_path}")
         except Exception as e:
             logger.error(f"Ошибка при загрузке словарей: {e}")
+    
+    def _load_dynamic_types(self) -> None:
+        """Загрузка динамических типов сущностей из конфигурации"""
+        dynamic_types_file = self.storage_path / "dynamic_entity_types.json"
+        if dynamic_types_file.exists():
+            try:
+                with open(dynamic_types_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.dynamic_entity_types = set(data.get("types", []))
+                    self.dynamic_entity_thresholds = data.get("thresholds", {})
+                    # Добавляем динамические типы в learned_dictionaries, если их там нет
+                    for entity_type in self.dynamic_entity_types:
+                        if entity_type not in self.learned_dictionaries:
+                            self.learned_dictionaries[entity_type] = set()
+                    logger.info(f"Загружено {len(self.dynamic_entity_types)} динамических типов сущностей")
+            except Exception as e:
+                logger.warning(f"Ошибка при загрузке динамических типов: {e}")
+    
+    def _save_dynamic_types(self) -> None:
+        """Сохранение динамических типов сущностей в конфигурацию"""
+        dynamic_types_file = self.storage_path / "dynamic_entity_types.json"
+        try:
+            data = {
+                "types": sorted(list(self.dynamic_entity_types)),
+                "thresholds": self.dynamic_entity_thresholds
+            }
+            with open(dynamic_types_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            logger.debug(f"Динамические типы сохранены в {dynamic_types_file}")
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении динамических типов: {e}")
+    
+    def get_all_entity_types(self) -> List[str]:
+        """Получить все типы сущностей (включая динамические)"""
+        return list(ENTITY_TYPES) + sorted(list(self.dynamic_entity_types))
+    
+    def get_entity_threshold(self, entity_type: str) -> int:
+        """Получить порог для типа сущности"""
+        if entity_type in ENTITY_THRESHOLDS:
+            return ENTITY_THRESHOLDS[entity_type]
+        return self.dynamic_entity_thresholds.get(entity_type, 3)  # По умолчанию 3
+    
+    def _add_dynamic_entity_type(self, entity_type: str, threshold: int = 3) -> None:
+        """Добавить новый динамический тип сущности"""
+        if entity_type not in ENTITY_TYPES and entity_type not in self.dynamic_entity_types:
+            self.dynamic_entity_types.add(entity_type)
+            self.dynamic_entity_thresholds[entity_type] = threshold
+            if entity_type not in self.learned_dictionaries:
+                self.learned_dictionaries[entity_type] = set()
+            if entity_type not in self.entity_counts:
+                self.entity_counts[entity_type] = defaultdict(int)
+            logger.info(f"Добавлен новый динамический тип сущности: {entity_type} (порог: {threshold})")
+            self._save_dynamic_types()
 
     def _normalize_entity_value(self, value: str) -> Optional[str]:
         """
@@ -423,16 +483,8 @@ class EntityDictionary:
             True если сущность прошла предварительную проверку, False иначе
         """
         # Импортируем стоп-слова из токенизатора
-        try:
-            from ..utils.russian_tokenizer import RUSSIAN_STOP_WORDS, ENGLISH_STOP_WORDS
-            stop_words = RUSSIAN_STOP_WORDS | ENGLISH_STOP_WORDS
-        except ImportError:
-            # Fallback стоп-слова, если токенизатор недоступен
-            stop_words = {
-                'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'как', 'а', 'то',
-                'против', 'про', 'для', 'от', 'до', 'из', 'к', 'у', 'по', 'за', 'над', 'под',
-                'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'
-            }
+        from ..utils.russian_tokenizer import RUSSIAN_STOP_WORDS, ENGLISH_STOP_WORDS
+        stop_words = RUSSIAN_STOP_WORDS | ENGLISH_STOP_WORDS
 
         # Проверка на стоп-слова (предлоги, союзы и т.д.)
         if normalized_value in stop_words:
@@ -483,9 +535,8 @@ class EntityDictionary:
         
         if not self._llm_client_initialized:
             try:
-                from ..config import get_settings, get_quality_analysis_settings
+                from ..config import get_settings
                 from ..core.lmstudio_client import LMStudioEmbeddingClient
-                from ..core.ollama_client import OllamaEmbeddingClient
                 
                 settings = get_settings()
                 
@@ -498,19 +549,13 @@ class EntityDictionary:
                     )
                     logger.debug("Используется LM Studio для валидации сущностей")
                 else:
-                    # Используем Ollama как fallback
-                    qa_settings = get_quality_analysis_settings()
-                    self._llm_client = OllamaEmbeddingClient(
-                        llm_model_name=qa_settings.ollama_model,
-                        base_url=qa_settings.ollama_base_url
-                    )
-                    logger.debug("Используется Ollama для валидации сущностей")
+                    logger.error("LM Studio не настроен, валидация сущностей невозможна")
+                    raise ValueError("Для валидации сущностей требуется настроенный LM Studio (MEMORY_MCP_LMSTUDIO_LLM_MODEL)")
                 
                 self._llm_client_initialized = True
             except Exception as e:
-                logger.warning(f"Не удалось инициализировать LLM клиент для валидации: {e}")
-                self._llm_client = None
-                self._llm_client_initialized = True
+                logger.error(f"Не удалось инициализировать LLM клиент для валидации: {e}")
+                raise
         
         return self._llm_client
 
@@ -544,6 +589,10 @@ class EntityDictionary:
             "crypto_addresses": "криптовалютный адрес",
             "domains": "доменное имя",
         }
+        # Добавляем динамические типы
+        for dyn_type in self.dynamic_entity_types:
+            if dyn_type not in entity_type_names:
+                entity_type_names[dyn_type] = dyn_type.replace("_", " ")
         
         type_name = entity_type_names.get(entity_type, entity_type)
         
@@ -608,26 +657,24 @@ class EntityDictionary:
             # Используем async контекстный менеджер
             async with llm_client:
                 if hasattr(llm_client, 'generate_summary'):
-                    # LMStudioEmbeddingClient или OllamaEmbeddingClient
+                    # LMStudioEmbeddingClient
                     # Для reasoning-моделей увеличиваем max_tokens, так как они генерируют reasoning перед ответом
                     # Минимум 200 токенов для reasoning-моделей, 100 для обычных
-                    base_max_tokens = 100
-                    # Проверяем, является ли модель reasoning-моделью
-                    if hasattr(llm_client, '_is_reasoning_model') and hasattr(llm_client, 'llm_model_name'):
-                        if llm_client._is_reasoning_model(llm_client.llm_model_name or ""):
-                            base_max_tokens = 4096  # Увеличено для reasoning-моделей, чтобы хватало на reasoning + ответ
+                    # Используем максимальное значение модели (131072 для gpt-oss-20b)
+                    from ..config import get_settings
+                    settings = get_settings()
+                    max_tokens = settings.large_context_max_tokens  # 131072
                     
                     response = await llm_client.generate_summary(
                         prompt=prompt,
                         temperature=0.1,  # Низкая температура для более детерминированных ответов
-                        max_tokens=base_max_tokens,  # Увеличено для поддержки reasoning-моделей
+                        max_tokens=max_tokens,  # Максимальное значение модели
                         top_p=0.9,
                         presence_penalty=0.0,
                     )
                 else:
-                    # Fallback - если метод называется по-другому
-                    logger.warning("LLM клиент не поддерживает generate_summary, пропускаем валидацию")
-                    return True
+                    logger.error("LLM клиент не поддерживает generate_summary, валидация невозможна")
+                    raise ValueError("LLM клиент должен поддерживать метод generate_summary")
                 
                 # Парсим ответ
                 # Метод generate_summary должен вернуть только content, но на всякий случай проверяем
@@ -669,6 +716,112 @@ class EntityDictionary:
                 "Проверьте конфигурацию LLM клиента."
             ) from e
 
+    async def _classify_entity_type(
+        self, value: str, normalized_value: str, context: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Классификация типа сущности через LLM
+        
+        Args:
+            value: Оригинальное значение сущности
+            normalized_value: Нормализованное значение
+            context: Контекст упоминания (опционально)
+        
+        Returns:
+            Тип сущности (существующий или новый) или None при ошибке
+        """
+        llm_client = self._get_llm_client()
+        if not llm_client:
+            return None
+        
+        # Получаем список всех существующих типов
+        existing_types = self.get_all_entity_types()
+        existing_types_descriptions = {
+            "persons": "имя человека, персона",
+            "organizations": "название организации, компании, команды",
+            "locations": "название места, локации, города, страны",
+            "crypto_tokens": "криптовалютный токен, монета",
+            "telegram_channels": "Telegram канал",
+            "telegram_bots": "Telegram бот",
+            "crypto_addresses": "криптовалютный адрес (Bitcoin, Ethereum, TON и т.д.)",
+            "domains": "доменное имя, веб-сайт",
+        }
+        
+        # Добавляем описания для динамических типов
+        for dyn_type in self.dynamic_entity_types:
+            if dyn_type not in existing_types_descriptions:
+                existing_types_descriptions[dyn_type] = dyn_type
+        
+        types_list = "\n".join([
+            f"- {t}: {existing_types_descriptions.get(t, t)}"
+            for t in existing_types
+        ])
+        
+        context_text = f"\nКонтекст упоминания: {context}" if context else ""
+        
+        prompt = f"""Ты эксперт по классификации сущностей. Определи, к какому типу относится следующая сущность.
+
+Сущность: "{value}" (нормализованное: "{normalized_value}"){context_text}
+
+Доступные типы сущностей:
+{types_list}
+
+Правила:
+1. Если сущность подходит под один из существующих типов - верни его название точно (без изменений).
+2. Если сущность не подходит ни под один существующий тип, но является значимой сущностью - создай новый тип.
+3. Новый тип должен быть на английском языке, в нижнем регистре, без пробелов (используй подчеркивания).
+4. Новый тип должен быть описательным (например: "games", "products", "events", "technologies").
+
+Верни ответ в формате JSON:
+{{
+    "type": "название_типа",
+    "is_new": true/false,
+    "description": "краткое описание типа (только для новых типов)"
+}}
+
+Только JSON, без дополнительного текста."""
+        
+        try:
+            async with llm_client:
+                if hasattr(llm_client, 'generate_summary'):
+                    from ..config import get_settings
+                    settings = get_settings()
+                    max_tokens = settings.large_context_max_tokens
+                    
+                    response = await llm_client.generate_summary(
+                        prompt=prompt,
+                        temperature=0.3,
+                        max_tokens=max_tokens,
+                        top_p=0.9,
+                        presence_penalty=0.0,
+                    )
+                    
+                    # Парсим JSON ответ
+                    import json
+                    response = response.strip()
+                    if response.startswith("```"):
+                        response = response.split("```")[1]
+                        if response.startswith("json"):
+                            response = response[4:]
+                    response = response.strip()
+                    
+                    result = json.loads(response)
+                    entity_type = result.get("type")
+                    is_new = result.get("is_new", False)
+                    
+                    if entity_type:
+                        # Если тип новый - добавляем его
+                        if is_new and entity_type not in existing_types:
+                            threshold = 3  # По умолчанию порог 3
+                            self._add_dynamic_entity_type(entity_type, threshold)
+                            logger.info(f"LLM определил новый тип сущности: {entity_type} для '{value}'")
+                        
+                        return entity_type
+        except Exception as e:
+            logger.warning(f"Ошибка при классификации типа сущности для '{value}': {e}")
+        
+        return None
+    
     async def _validate_entities_batch_async(
         self, candidates: List[Dict[str, Any]]
     ) -> Dict[str, bool]:
@@ -704,6 +857,10 @@ class EntityDictionary:
             "crypto_addresses": "криптовалютный адрес",
             "domains": "доменное имя",
         }
+        # Добавляем динамические типы
+        for dyn_type in self.dynamic_entity_types:
+            if dyn_type not in entity_type_names:
+                entity_type_names[dyn_type] = dyn_type.replace("_", " ")
         
         # Создаем промпт для батч-валидации
         items_list = []
@@ -758,22 +915,21 @@ class EntityDictionary:
         try:
             async with llm_client:
                 if hasattr(llm_client, 'generate_summary'):
-                    base_max_tokens = 100
-                    if hasattr(llm_client, '_is_reasoning_model') and hasattr(llm_client, 'llm_model_name'):
-                        if llm_client._is_reasoning_model(llm_client.llm_model_name or ""):
-                            base_max_tokens = 4096
+                    # Используем максимальное значение модели (131072 для gpt-oss-20b)
+                    from ..config import get_settings
+                    settings = get_settings()
+                    max_tokens = settings.large_context_max_tokens  # 131072
                     
-                    # Увеличиваем max_tokens пропорционально размеру батча
                     response = await llm_client.generate_summary(
                         prompt=prompt,
                         temperature=0.1,
-                        max_tokens=base_max_tokens * len(candidates),
+                        max_tokens=max_tokens,  # Максимальное значение модели
                         top_p=0.9,
                         presence_penalty=0.0,
                     )
                 else:
-                    logger.warning("LLM клиент не поддерживает generate_summary, пропускаем валидацию")
-                    return {c["normalized_value"]: True for c in candidates}
+                    logger.error("LLM клиент не поддерживает generate_summary, валидация невозможна")
+                    raise ValueError("LLM клиент должен поддерживать метод generate_summary")
                 
                 # Парсим JSON ответ
                 try:
@@ -852,23 +1008,41 @@ class EntityDictionary:
                             f"(встречается {total_count} раз)"
                         )
                         
-                        # Генерируем описание, если включено
+                        # Собираем контексты для генерации описаний (будет использовано в батче)
                         if self.enable_description_generation:
                             try:
-                                # Собираем все контексты для более полного описания
                                 all_contexts = self.collect_entity_contexts(entity_type, normalized_value)
-                                await self.generate_entity_description(
-                                    entity_type,
-                                    candidate.get("original_value", normalized_value),
-                                    all_contexts=all_contexts if all_contexts else None
-                                )
+                                candidate["all_contexts"] = all_contexts
                             except Exception as e:
-                                logger.debug(f"Не удалось сгенерировать описание для {normalized_value}: {e}")
+                                logger.debug(f"Не удалось собрать контексты для {normalized_value}: {e}")
+                                candidate["all_contexts"] = None
                     else:
                         logger.debug(
                             f"Сущность отклонена LLM: {entity_type}={normalized_value} "
                             f"(встречается {total_count} раз, но не прошла валидацию)"
                         )
+                
+                # Генерируем описания для всех валидированных сущностей батчем
+                if self.enable_description_generation:
+                    validated_entities = [
+                        c for c in batch 
+                        if c["normalized_value"] in self.learned_dictionaries[c["entity_type"]]
+                    ]
+                    if validated_entities:
+                        try:
+                            await self.generate_entity_descriptions_batch(validated_entities)
+                        except Exception as e:
+                            logger.warning(f"Ошибка при батч-генерации описаний: {e}")
+                            # Fallback на индивидуальную генерацию
+                            for candidate in validated_entities:
+                                try:
+                                    await self.generate_entity_description(
+                                        candidate["entity_type"],
+                                        candidate.get("original_value", candidate["normalized_value"]),
+                                        all_contexts=candidate.get("all_contexts")
+                                    )
+                                except Exception as e2:
+                                    logger.debug(f"Не удалось сгенерировать описание для {candidate['normalized_value']}: {e2}")
             except Exception as e:
                 logger.error(f"Ошибка при обработке батча валидации: {e}")
                 # При ошибке разрешаем все сущности в батче (консервативный подход)
@@ -1204,6 +1378,10 @@ class EntityDictionary:
             "crypto_addresses": "криптовалютный адрес",
             "domains": "доменное имя",
         }
+        # Добавляем динамические типы
+        for dyn_type in self.dynamic_entity_types:
+            if dyn_type not in entity_type_names:
+                entity_type_names[dyn_type] = dyn_type.replace("_", " ")
 
         type_name = entity_type_names.get(entity_type, entity_type)
 
@@ -1255,10 +1433,15 @@ class EntityDictionary:
         try:
             async with llm_client:
                 if hasattr(llm_client, 'generate_summary'):
+                    # Используем максимальное значение модели (131072 для gpt-oss-20b)
+                    from ..config import get_settings
+                    settings = get_settings()
+                    max_tokens = settings.large_context_max_tokens  # 131072
+                    
                     response = await llm_client.generate_summary(
                         prompt=prompt,
                         temperature=0.3,
-                        max_tokens=300,
+                        max_tokens=max_tokens,  # Максимальное значение модели
                         top_p=0.9,
                         presence_penalty=0.0,
                     )
@@ -1289,6 +1472,226 @@ class EntityDictionary:
 
         return None
 
+    async def generate_entity_descriptions_batch(
+        self, candidates: List[Dict[str, Any]]
+    ) -> Dict[str, str]:
+        """
+        Батч-генерация описаний для нескольких сущностей одновременно
+        
+        Args:
+            candidates: Список кандидатов с полями:
+                - entity_type: тип сущности
+                - normalized_value: нормализованное значение
+                - original_value: оригинальное значение (опционально)
+                - all_contexts: список контекстов (опционально)
+        
+        Returns:
+            Словарь {normalized_value: description}
+        """
+        if not candidates:
+            return {}
+        
+        llm_client = self._get_llm_client()
+        if not llm_client:
+            logger.debug("LLM клиент недоступен, пропускаем батч-генерацию описаний")
+            return {}
+        
+        # Фильтруем сущности, для которых еще нет описаний
+        entities_to_process = []
+        for candidate in candidates:
+            entity_type = candidate["entity_type"]
+            normalized_value = candidate["normalized_value"]
+            
+            # Пропускаем, если описание уже есть
+            existing = self.entity_descriptions.get(entity_type, {}).get(normalized_value)
+            if existing:
+                continue
+            
+            entities_to_process.append(candidate)
+        
+        if not entities_to_process:
+            return {}
+        
+        # Группируем по типам для лучшей обработки (можно использовать для оптимизации в будущем)
+        # entities_by_type = {}
+        # for candidate in entities_to_process:
+        #     entity_type = candidate["entity_type"]
+        #     if entity_type not in entities_by_type:
+        #         entities_by_type[entity_type] = []
+        #     entities_by_type[entity_type].append(candidate)
+        
+        # Обрабатываем батчами по 10-20 сущностей (адаптивно, в зависимости от размера контекста)
+        # Оцениваем средний размер контекста для определения оптимального размера батча
+        avg_context_size = 0
+        for candidate in entities_to_process[:10]:  # Проверяем первые 10 для оценки
+            contexts = candidate.get("all_contexts", [])
+            if contexts:
+                total_size = sum(len(str(ctx.get("content", ""))) for ctx in contexts[:3])
+                avg_context_size += total_size
+        if entities_to_process:
+            avg_context_size = avg_context_size / min(10, len(entities_to_process))
+        
+        # Адаптивный размер батча: больше контекст = меньше сущностей в батче
+        if avg_context_size > 2000:  # Большой контекст
+            batch_size = min(10, len(entities_to_process))
+        elif avg_context_size > 1000:  # Средний контекст
+            batch_size = min(15, len(entities_to_process))
+        else:  # Маленький контекст
+            batch_size = min(20, len(entities_to_process))
+        
+        logger.debug(f"Батч-генерация описаний: {len(entities_to_process)} сущностей, размер батча: {batch_size}, средний размер контекста: {avg_context_size:.0f} символов")
+        results = {}
+        
+        for i in range(0, len(entities_to_process), batch_size):
+            batch = entities_to_process[i:i + batch_size]
+            try:
+                batch_results = await self._generate_descriptions_batch_single(batch, llm_client)
+                results.update(batch_results)
+            except Exception as e:
+                logger.warning(f"Ошибка при батч-генерации описаний для батча {i//batch_size + 1}: {e}")
+                # Fallback на индивидуальную генерацию для этого батча
+                for candidate in batch:
+                    try:
+                        description = await self.generate_entity_description(
+                            candidate["entity_type"],
+                            candidate.get("original_value", candidate["normalized_value"]),
+                            all_contexts=candidate.get("all_contexts")
+                        )
+                        if description:
+                            results[candidate["normalized_value"]] = description
+                    except Exception as e2:
+                        logger.debug(f"Не удалось сгенерировать описание для {candidate['normalized_value']}: {e2}")
+        
+        return results
+    
+    async def _generate_descriptions_batch_single(
+        self, candidates: List[Dict[str, Any]], llm_client: Any
+    ) -> Dict[str, str]:
+        """Генерация описаний для одного батча сущностей"""
+        entity_type_names = {
+            "persons": "персона",
+            "organizations": "организация",
+            "locations": "локация/место",
+            "crypto_tokens": "криптовалютный токен",
+            "telegram_channels": "Telegram канал",
+            "telegram_bots": "Telegram бот",
+            "crypto_addresses": "криптовалютный адрес",
+            "domains": "доменное имя",
+        }
+        # Добавляем динамические типы
+        for dyn_type in self.dynamic_entity_types:
+            if dyn_type not in entity_type_names:
+                entity_type_names[dyn_type] = dyn_type.replace("_", " ")
+        
+        # Формируем промпт для батча
+        entities_info = []
+        for idx, candidate in enumerate(candidates):
+            entity_type = candidate["entity_type"]
+            value = candidate.get("original_value", candidate["normalized_value"])
+            normalized_value = candidate["normalized_value"]
+            all_contexts = candidate.get("all_contexts", [])
+            
+            type_name = entity_type_names.get(entity_type, entity_type)
+            
+            # Формируем краткий контекст
+            context_text = ""
+            if all_contexts:
+                # Берем первые 3 контекста
+                context_parts = []
+                for ctx in all_contexts[:3]:
+                    content = ctx.get("content", "")
+                    if content:
+                        context_parts.append(content[:150])  # Ограничиваем длину
+                context_text = " | ".join(context_parts)
+            
+            # Статистика
+            total_count = self.entity_counts[entity_type].get(normalized_value, 0)
+            
+            entities_info.append(
+                f"{idx + 1}. Тип: {type_name}, Имя: {value} (нормализованное: {normalized_value}), "
+                f"Упоминаний: {total_count}, Контекст: {context_text[:200] if context_text else 'нет'}"
+            )
+        
+        prompt = f"""Ты эксперт по анализу текста. Создай краткие, но информативные описания для следующих сущностей на основе их контекстов упоминаний.
+
+Сущности:
+{chr(10).join(entities_info)}
+
+Для каждой сущности создай краткое описание (1-2 предложения, до 200 символов) на русском языке.
+Описание должно:
+- Быть информативным и помогать понять, что это за сущность
+- Отражать роль/назначение сущности в контексте обсуждений
+- Включать ключевые характеристики, если они упоминаются
+
+Верни ответ в формате JSON объекта, где ключ - нормализованное имя сущности, значение - описание:
+{{
+    "нормализованное_имя_1": "описание 1",
+    "нормализованное_имя_2": "описание 2",
+    ...
+}}
+
+Только JSON, без дополнительного текста."""
+        
+        try:
+            async with llm_client:
+                if hasattr(llm_client, 'generate_summary'):
+                    from ..config import get_settings
+                    settings = get_settings()
+                    max_tokens = settings.large_context_max_tokens  # 131072
+                    
+                    response = await llm_client.generate_summary(
+                        prompt=prompt,
+                        temperature=0.3,
+                        max_tokens=max_tokens,
+                        top_p=0.9,
+                        presence_penalty=0.0,
+                    )
+                    
+                    # Парсим JSON ответ
+                    import json
+                    response = response.strip()
+                    # Убираем markdown code blocks, если есть
+                    if response.startswith("```"):
+                        response = response.split("```")[1]
+                        if response.startswith("json"):
+                            response = response[4:]
+                    response = response.strip()
+                    
+                    descriptions = json.loads(response)
+                    
+                    # Сохраняем описания
+                    results = {}
+                    for candidate in candidates:
+                        normalized_value = candidate["normalized_value"]
+                        entity_type = candidate["entity_type"]
+                        
+                        description = descriptions.get(normalized_value)
+                        if description:
+                            # Очищаем описание
+                            description = description.strip()
+                            if description.startswith('"') and description.endswith('"'):
+                                description = description[1:-1]
+                            if description.startswith("'") and description.endswith("'"):
+                                description = description[1:-1]
+                            
+                            # Ограничиваем длину
+                            max_length = 200
+                            if len(description) > max_length:
+                                description = description[:max_length].rsplit(' ', 1)[0] + "..."
+                            
+                            if description:
+                                self.update_entity_description(entity_type, normalized_value, description)
+                                logger.info(f"Сгенерировано описание для {entity_type}={normalized_value}: {description[:50]}...")
+                                results[normalized_value] = description
+                    
+                    return results
+                else:
+                    logger.warning("LLM клиент не поддерживает generate_summary, пропускаем батч-генерацию описаний")
+                    return {}
+        except Exception as e:
+            logger.warning(f"Ошибка при батч-генерации описаний: {e}")
+            return {}
+
     def collect_entity_contexts(
         self, entity_type: str, normalized_value: str
     ) -> List[Dict[str, Any]]:
@@ -1314,68 +1717,88 @@ class EntityDictionary:
             # Ищем EntityNode для этой сущности
             entity_id = f"entity-{normalized_value.replace(' ', '-')}"
             
-            # Ищем через FTS поиск по сущностям в DocChunk узлах
-            search_results, _ = self.graph.search_text(
-                query=normalized_value,
-                limit=100,  # Берем больше результатов для полной картины
-            )
+            # Пытаемся использовать FTS поиск, но если это вызывает thread safety ошибку, пропускаем
+            search_results = []
+            try:
+                search_results, _ = self.graph.search_text(
+                    query=normalized_value,
+                    limit=100,  # Берем больше результатов для полной картины
+                )
+            except Exception as search_error:
+                if "thread" in str(search_error).lower() or "SQLite" in str(search_error):
+                    logger.debug(f"Пропускаем FTS поиск из-за thread safety: {search_error}")
+                else:
+                    raise
             
             # Также ищем через граф - находим DocChunk узлы, связанные с EntityNode
-            if entity_id in self.graph.graph:
-                # Получаем все узлы, которые упоминают эту сущность
-                neighbors = self.graph.get_neighbors(
-                    entity_id,
-                    edge_type=EdgeType.MENTIONS,
-                    direction="in",  # Входящие связи (DocChunk -> mentions -> Entity)
-                )
-                
-                for neighbor_id, edge_data in neighbors:
-                    if neighbor_id in self.graph.graph:
-                        node_data = self.graph.graph.nodes[neighbor_id]
-                        node_type = node_data.get("type")
-                        
-                        if node_type == NodeType.DOC_CHUNK.value or node_type == NodeType.DOC_CHUNK:
-                            content = node_data.get("content", "")
-                            properties = node_data.get("properties", {})
+            # Используем только NetworkX граф, без обращения к SQLite
+            try:
+                if entity_id in self.graph.graph:
+                    # Получаем все узлы, которые упоминают эту сущность
+                    neighbors = self.graph.get_neighbors(
+                        entity_id,
+                        edge_type=EdgeType.MENTIONS,
+                        direction="in",  # Входящие связи (DocChunk -> mentions -> Entity)
+                    )
+                    
+                    for neighbor_id, edge_data in neighbors:
+                        if neighbor_id in self.graph.graph:
+                            node_data = self.graph.graph.nodes[neighbor_id]
+                            node_type = node_data.get("type")
                             
-                            if content and len(content) > 10:
-                                context = {
-                                    "node_id": neighbor_id,
-                                    "content": content,
-                                    "source": properties.get("source", ""),
-                                    "chat": properties.get("chat") or properties.get("source", ""),
-                                    "author": properties.get("author", ""),
-                                    "timestamp": properties.get("timestamp") or properties.get("date_utc", ""),
-                                    "tags": properties.get("tags", []),
-                                }
-                                contexts.append(context)
+                            if node_type == NodeType.DOC_CHUNK.value or node_type == NodeType.DOC_CHUNK:
+                                content = node_data.get("content", "")
+                                properties = node_data.get("properties", {})
+                                
+                                if content and len(content) > 10:
+                                    context = {
+                                        "node_id": neighbor_id,
+                                        "content": content,
+                                        "source": properties.get("source", ""),
+                                        "chat": properties.get("chat") or properties.get("source", ""),
+                                        "author": properties.get("author", ""),
+                                        "timestamp": properties.get("timestamp") or properties.get("date_utc", ""),
+                                        "tags": properties.get("tags", []),
+                                    }
+                                    contexts.append(context)
+            except Exception as graph_error:
+                if "thread" in str(graph_error).lower() or "SQLite" in str(graph_error):
+                    logger.debug(f"Пропускаем поиск через граф из-за thread safety: {graph_error}")
+                else:
+                    raise
             
             # Добавляем контексты из FTS поиска
             seen_node_ids = {ctx["node_id"] for ctx in contexts}
             for result in search_results:
                 node_id = result.get("node_id")
                 if node_id and node_id not in seen_node_ids:
-                    if node_id in self.graph.graph:
-                        node_data = self.graph.graph.nodes[node_id]
-                        node_type = node_data.get("type")
+                    try:
+                        if node_id in self.graph.graph:
+                            node_data = self.graph.graph.nodes[node_id]
+                            node_type = node_data.get("type")
                         
-                        if node_type == NodeType.DOC_CHUNK.value or node_type == NodeType.DOC_CHUNK:
-                            content = result.get("content", "") or node_data.get("content", "")
-                            properties = node_data.get("properties", {})
-                            
-                            if content and len(content) > 10:
-                                context = {
-                                    "node_id": node_id,
-                                    "content": content[:500],  # Ограничиваем длину
-                                    "source": result.get("source", "") or properties.get("source", ""),
-                                    "chat": properties.get("chat") or properties.get("source", ""),
-                                    "author": properties.get("author", ""),
-                                    "timestamp": properties.get("timestamp") or properties.get("date_utc", ""),
-                                    "tags": properties.get("tags", []),
-                                    "score": result.get("score", 0.0),
-                                }
-                                contexts.append(context)
-                                seen_node_ids.add(node_id)
+                            if node_type == NodeType.DOC_CHUNK.value or node_type == NodeType.DOC_CHUNK:
+                                content = result.get("content", "") or node_data.get("content", "")
+                                properties = node_data.get("properties", {})
+                                
+                                if content and len(content) > 10:
+                                    context = {
+                                        "node_id": node_id,
+                                        "content": content[:500],  # Ограничиваем длину
+                                        "source": result.get("source", "") or properties.get("source", ""),
+                                        "chat": properties.get("chat") or properties.get("source", ""),
+                                        "author": properties.get("author", ""),
+                                        "timestamp": properties.get("timestamp") or properties.get("date_utc", ""),
+                                        "tags": properties.get("tags", []),
+                                        "score": result.get("score", 0.0),
+                                    }
+                                    contexts.append(context)
+                                    seen_node_ids.add(node_id)
+                    except Exception as node_error:
+                        if "thread" in str(node_error).lower() or "SQLite" in str(node_error):
+                            logger.debug(f"Пропускаем узел {node_id} из-за thread safety: {node_error}")
+                        else:
+                            raise
             
             # Группируем по чатам и сортируем по времени
             contexts_by_chat = {}
@@ -1395,7 +1818,11 @@ class EntityDictionary:
             logger.debug(f"Собрано {len(contexts)} контекстов для {entity_type}={normalized_value} из {len(contexts_by_chat)} чатов")
             
         except Exception as e:
-            logger.warning(f"Ошибка при сборе контекстов для {normalized_value}: {e}")
+            # Логируем только если это не thread safety ошибка (она уже обработана выше)
+            if "thread" not in str(e).lower() and "SQLite" not in str(e):
+                logger.warning(f"Ошибка при сборе контекстов для {normalized_value}: {e}")
+            else:
+                logger.debug(f"Пропущен сбор контекстов для {normalized_value} из-за thread safety")
         
         return contexts
 

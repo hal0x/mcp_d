@@ -1008,19 +1008,23 @@ class TwoLevelIndexer:
                         reverse=True,
                     )
 
+                    # Определяем, есть ли новые данные для обновления файлов
+                    has_new_data = len(processed_summaries) > 0
+                    
                     self.markdown_renderer.render_chat_summary(
                         chat_name,
                         all_summaries,
                         top_sessions=top_sessions,
                         force=self.force,
+                        has_new_data=has_new_data,
                     )
                     # Создаём файл накапливающегося контекста
                     self.markdown_renderer.render_cumulative_context(
-                        chat_name, all_summaries, force=self.force
+                        chat_name, all_summaries, force=self.force, has_new_data=has_new_data
                     )
                     # Создаём индекс сессий чата
                     self.markdown_renderer.render_chat_index(
-                        chat_name, all_summaries, force=self.force
+                        chat_name, all_summaries, force=self.force, has_new_data=has_new_data
                     )
 
                     # Кластеризация сессий чата (только если есть новые сессии)
@@ -1337,12 +1341,16 @@ class TwoLevelIndexer:
 
         indexed_count = 0
         messages_to_index = []
+        skipped_duplicates_count = 0
+        processed_count = 0
+        queued_count = 0
 
         # Определим тип чата для подстройки контекста
         chat_mode = self._detect_chat_mode(messages)
 
         for i, msg in enumerate(messages):
             try:
+                processed_count += 1
                 msg_text = msg.get("text", "").strip()
                 if not msg_text or len(msg_text) < 10:
                     continue
@@ -1360,50 +1368,57 @@ class TwoLevelIndexer:
                     msg_id = f"{session_id}-M{i+1:04d}-{text_hash}"
                 
                 # Проверяем, существует ли уже это сообщение в базе
-                # Сначала проверяем по точному ID
-                existing_msg = self.messages_collection.get(ids=[msg_id])
-                if existing_msg and existing_msg.get("ids"):
-                    # Сообщение уже существует, пропускаем
-                    logger.debug(f"Сообщение {msg_id} уже существует, пропускаем")
-                    continue
+                # При force_full пропускаем проверку дубликатов (будет использован upsert)
+                skipped_duplicate = False
+                if not self.force:
+                    # Сначала проверяем по точному ID
+                    existing_msg = self.messages_collection.get(ids=[msg_id])
+                    if existing_msg and existing_msg.get("ids"):
+                        # Сообщение уже существует, пропускаем
+                        logger.debug(f"Сообщение {msg_id} уже существует, пропускаем")
+                        skipped_duplicate = True
+                    
+                    # Дополнительная проверка: ищем дубликаты по содержимому и telegram ID
+                    # Это предотвращает дублирование, когда одно сообщение попадает в разные сессии
+                    if not skipped_duplicate and telegram_msg_id:
+                        # Ищем по telegram ID в других сессиях
+                        import hashlib
+                        content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
+                        # Ищем записи с таким же telegram ID или хешем содержимого
+                        try:
+                            # Проверяем в ChromaDB по метаданным
+                            existing_by_id = self.messages_collection.get(
+                                where={"$or": [
+                                    {"msg_id": {"$eq": f"{chat}:{telegram_msg_id}"}},
+                                    {"telegram_id": {"$eq": str(telegram_msg_id)}},
+                                    {"content_hash": {"$eq": content_hash}}
+                                ]},
+                                limit=1
+                            )
+                            if existing_by_id and existing_by_id.get("ids"):
+                                logger.debug(f"Дубликат сообщения найден по telegram_id={telegram_msg_id} или content_hash={content_hash}, пропускаем")
+                                skipped_duplicate = True
+                        except Exception as e:
+                            # Если поиск по метаданным не работает, продолжаем
+                            logger.debug(f"Не удалось проверить дубликаты по метаданным: {e}")
+                    elif not skipped_duplicate:
+                        # Для сообщений без telegram ID проверяем по хешу содержимого
+                        import hashlib
+                        content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
+                        try:
+                            existing_by_hash = self.messages_collection.get(
+                                where={"content_hash": {"$eq": content_hash}},
+                                limit=1
+                            )
+                            if existing_by_hash and existing_by_hash.get("ids"):
+                                logger.debug(f"Дубликат сообщения найден по content_hash={content_hash}, пропускаем")
+                                skipped_duplicate = True
+                        except Exception as e:
+                            logger.debug(f"Не удалось проверить дубликаты по хешу: {e}")
                 
-                # Дополнительная проверка: ищем дубликаты по содержимому и telegram ID
-                # Это предотвращает дублирование, когда одно сообщение попадает в разные сессии
-                if telegram_msg_id:
-                    # Ищем по telegram ID в других сессиях
-                    import hashlib
-                    content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
-                    # Ищем записи с таким же telegram ID или хешем содержимого
-                    try:
-                        # Проверяем в ChromaDB по метаданным
-                        existing_by_id = self.messages_collection.get(
-                            where={"$or": [
-                                {"msg_id": {"$eq": f"{chat}:{telegram_msg_id}"}},
-                                {"telegram_id": {"$eq": str(telegram_msg_id)}},
-                                {"content_hash": {"$eq": content_hash}}
-                            ]},
-                            limit=1
-                        )
-                        if existing_by_id and existing_by_id.get("ids"):
-                            logger.debug(f"Дубликат сообщения найден по telegram_id={telegram_msg_id} или content_hash={content_hash}, пропускаем")
-                            continue
-                    except Exception as e:
-                        # Если поиск по метаданным не работает, продолжаем
-                        logger.debug(f"Не удалось проверить дубликаты по метаданным: {e}")
-                else:
-                    # Для сообщений без telegram ID проверяем по хешу содержимого
-                    import hashlib
-                    content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
-                    try:
-                        existing_by_hash = self.messages_collection.get(
-                            where={"content_hash": {"$eq": content_hash}},
-                            limit=1
-                        )
-                        if existing_by_hash and existing_by_hash.get("ids"):
-                            logger.debug(f"Дубликат сообщения найден по content_hash={content_hash}, пропускаем")
-                            continue
-                    except Exception as e:
-                        logger.debug(f"Не удалось проверить дубликаты по хешу: {e}")
+                if skipped_duplicate:
+                    skipped_duplicates_count += 1
+                    continue
 
                 # Добавляем симметричный контекст (до 10 сообщений, ≤ 1500 символов)
                 # В каналах соседний контент менее релевантен — уменьшим контекст
@@ -1462,6 +1477,7 @@ class TwoLevelIndexer:
                 content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
                 
                 # Сохраняем данные для батчевой обработки
+                queued_count += 1
                 messages_to_index.append({
                     "msg_id": msg_id,
                     "msg_text": msg_text,
@@ -1574,6 +1590,36 @@ class TwoLevelIndexer:
                                     from_data = msg_obj.get("from") or {}
                                     author = from_data.get("username") or from_data.get("display") or from_data.get("id")
                                 
+                                # Извлекаем теги
+                                tags = []
+                                chat_name = metadata.get("chat", "")
+                                if chat_name:
+                                    tags.append(chat_name.lower().replace(" ", "_"))
+                                msg_tags = msg_obj.get("tags", []) if msg_obj else []
+                                if not msg_tags:
+                                    msg_tags = metadata.get("tags", [])
+                                if isinstance(msg_tags, list):
+                                    tags.extend([str(t).lower() for t in msg_tags if t])
+                                tags = list(dict.fromkeys(tags))  # Убираем дубликаты, сохраняя порядок
+                                
+                                # Извлекаем сущности
+                                entities = []
+                                if self.entity_extractor:
+                                    try:
+                                        extracted = self.entity_extractor.extract_entities(msg_text)
+                                        if extracted:
+                                            entities.extend([
+                                                e.get("text") or e.get("value") 
+                                                for e in extracted 
+                                                if e.get("text") or e.get("value")
+                                            ])
+                                    except Exception as e:
+                                        logger.debug(f"Ошибка извлечения сущностей для сообщения {msg_id}: {e}")
+                                metadata_entities = metadata.get("entities", [])
+                                if isinstance(metadata_entities, list):
+                                    entities.extend(metadata_entities)
+                                entities = list(dict.fromkeys([str(e) for e in entities if e]))  # Убираем дубликаты
+                                
                                 # Создаём MemoryRecord
                                 record = MemoryRecord(
                                     record_id=msg_id,
@@ -1581,8 +1627,8 @@ class TwoLevelIndexer:
                                     content=msg_text,
                                     timestamp=timestamp,
                                     author=author,
-                                    tags=[],
-                                    entities=[],
+                                    tags=tags,
+                                    entities=entities,
                                     attachments=[],
                                     metadata={
                                         "chat": metadata.get("chat", ""),
@@ -1606,6 +1652,12 @@ class TwoLevelIndexer:
                                 logger.info(f"Сохранение {len(records_only)} записей в граф через ingestor.ingest()")
                                 ingest_result = self.ingestor.ingest(records_only)
                                 logger.info(f"Результат ingest: records_ingested={ingest_result.records_ingested}, attachments_ingested={ingest_result.attachments_ingested}")
+                                
+                                if ingest_result.records_ingested == 0:
+                                    logger.warning(
+                                        f"⚠️ Внимание: 0 записей добавлено в граф для сессии {session_id}. "
+                                        f"Возможно, все записи уже существуют или произошла ошибка."
+                                    )
                                 
                                 # Сохраняем эмбеддинги в граф
                                 embeddings_saved = 0
@@ -1670,7 +1722,9 @@ class TwoLevelIndexer:
                 )
 
         logger.info(
-            f"L2: Проиндексировано {indexed_count} сообщений из сессии {session_id}"
+            f"L2: Проиндексировано {indexed_count} сообщений из сессии {session_id} "
+            f"(обработано: {processed_count}, пропущено дубликатов: {skipped_duplicates_count}, "
+            f"добавлено в очередь: {queued_count})"
         )
         return indexed_count
 
