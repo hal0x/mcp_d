@@ -848,38 +848,38 @@ class LMStudioEmbeddingClient:
                             data = await response.json()
                             if "choices" in data and len(data["choices"]) > 0:
                                 choice = data["choices"][0]
-                            message = choice.get("message", {})
-                            
-                            content = message.get("content", "").strip()
-                            reasoning = message.get("reasoning", "")
-                            finish_reason = choice.get("finish_reason", "")
-                            
-                            if not content and reasoning:
-                                logger.warning(
-                                    f"Получен пустой контент от reasoning-модели '{llm_model}'. "
-                                    f"Используем reasoning как fallback. "
-                                    f"Finish reason: {finish_reason}. "
-                                    f"Возможно, max_tokens ({max_tokens}) недостаточно для генерации content."
-                                )
-                                json_match = re.search(r"\{.*\}", reasoning, re.DOTALL)
-                                if json_match:
-                                    content = json_match.group(0)
-                                    logger.info("Извлечен JSON из reasoning")
-                                else:
-                                    content = reasoning.strip()
-                            
-                            if finish_reason == "length" and not content:
-                                logger.error(
-                                    f"Достигнут лимит токенов для модели '{llm_model}'. "
-                                    f"Текущий max_tokens: {max_tokens}. "
-                                    f"Все токены ушли на reasoning. Увеличьте max_tokens."
-                                )
-                            
-                            return content if content else "Ошибка: пустой ответ от модели"
+                                message = choice.get("message", {})
+                                
+                                content = message.get("content", "").strip()
+                                reasoning = message.get("reasoning", "")
+                                finish_reason = choice.get("finish_reason", "")
+                                
+                                if not content and reasoning:
+                                    logger.warning(
+                                        f"Получен пустой контент от reasoning-модели '{llm_model}'. "
+                                        f"Используем reasoning как fallback. "
+                                        f"Finish reason: {finish_reason}. "
+                                        f"Возможно, max_tokens ({max_tokens}) недостаточно для генерации content."
+                                    )
+                                    json_match = re.search(r"\{.*\}", reasoning, re.DOTALL)
+                                    if json_match:
+                                        content = json_match.group(0)
+                                        logger.info("Извлечен JSON из reasoning")
+                                    else:
+                                        content = reasoning.strip()
+                                
+                                if finish_reason == "length" and not content:
+                                    logger.error(
+                                        f"Достигнут лимит токенов для модели '{llm_model}'. "
+                                        f"Текущий max_tokens: {max_tokens}. "
+                                        f"Все токены ушли на reasoning. Увеличьте max_tokens."
+                                    )
+                                
+                                return content if content else "Ошибка: пустой ответ от модели"
+                            else:
+                                logger.error("LM Studio вернул неожиданный формат данных")
+                                return "Ошибка генерации: неожиданный формат ответа"
                         else:
-                            logger.error("LM Studio вернул неожиданный формат данных")
-                            return "Ошибка генерации: неожиданный формат ответа"
-                    else:
                         error_text = await response.text()
                         logger.error(f"Ошибка API LM Studio: {response.status} - {error_text}")
                         if attempt < 1:
