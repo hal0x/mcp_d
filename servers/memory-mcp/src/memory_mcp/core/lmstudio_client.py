@@ -493,12 +493,12 @@ class LMStudioEmbeddingClient:
                                         await asyncio.sleep(2 + attempt)
                                         continue
                                     return None
-                        else:
-                            logger.error("LM Studio вернул неожиданный формат данных")
-                            if attempt < 2:
-                                await asyncio.sleep(2 + attempt)
-                                continue
-                            return None
+                            else:
+                                logger.error("LM Studio вернул неожиданный формат данных")
+                                if attempt < 2:
+                                    await asyncio.sleep(2 + attempt)
+                                    continue
+                                return None
                         else:
                             error_text = await response.text()
                             logger.error(
