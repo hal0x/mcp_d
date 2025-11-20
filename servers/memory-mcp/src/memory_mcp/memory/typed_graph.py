@@ -547,12 +547,50 @@ class TypedGraphMemory:
         Returns:
             True если ребро добавлено
         """
-        # Проверяем существование узлов
-        if edge.source_id not in self.graph or edge.target_id not in self.graph:
+        # Проверяем существование узлов в БД (не только в памяти)
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id FROM nodes WHERE id = ?", (edge.source_id,))
+        if not cursor.fetchone():
             logger.error(
-                f"Узлы для ребра не существуют: {edge.source_id} -> {edge.target_id}"
+                f"Исходный узел для ребра не существует в БД: {edge.source_id}"
             )
             return False
+        
+        cursor.execute("SELECT id FROM nodes WHERE id = ?", (edge.target_id,))
+        if not cursor.fetchone():
+            logger.error(
+                f"Целевой узел для ребра не существует в БД: {edge.target_id}"
+            )
+            return False
+        
+        # Загружаем узлы в память, если их там нет
+        if edge.source_id not in self.graph:
+            cursor.execute("SELECT id, type, label, properties FROM nodes WHERE id = ?", (edge.source_id,))
+            row = cursor.fetchone()
+            if row:
+                props = json.loads(row["properties"]) if row["properties"] else {}
+                node_attrs = {
+                    "node_type": row["type"],
+                    "label": row["label"],
+                    "properties": props,
+                    **props,
+                }
+                self.graph.add_node(row["id"], **node_attrs)
+                logger.debug(f"Загружен узел {edge.source_id} в память для создания связи")
+        
+        if edge.target_id not in self.graph:
+            cursor.execute("SELECT id, type, label, properties FROM nodes WHERE id = ?", (edge.target_id,))
+            row = cursor.fetchone()
+            if row:
+                props = json.loads(row["properties"]) if row["properties"] else {}
+                node_attrs = {
+                    "node_type": row["type"],
+                    "label": row["label"],
+                    "properties": props,
+                    **props,
+                }
+                self.graph.add_node(row["id"], **node_attrs)
+                logger.debug(f"Загружен узел {edge.target_id} в память для создания связи")
 
         try:
             # Проверяем, существует ли ребро уже в БД

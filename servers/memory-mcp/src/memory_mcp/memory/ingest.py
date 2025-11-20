@@ -65,11 +65,7 @@ class MemoryIngestor:
         # Создаем связи между соседними записями в одной группе (по timestamp)
         # Также проверяем существующие записи в графе для создания связей с уже проиндексированными
         for (source, chat), nodes_records in by_source_chat.items():
-            if len(nodes_records) < 2:
-                # Если только одна новая запись, проверяем существующие записи в графе
-                if len(nodes_records) == 1:
-                    new_node, new_record = nodes_records[0]
-                    self._link_to_existing_records(new_node, new_record, source, chat)
+            if not nodes_records:
                 continue
             
             # Сортируем по timestamp
@@ -78,27 +74,29 @@ class MemoryIngestor:
                 key=lambda x: x[1].timestamp,
             )
             
-            # Создаем связи между новыми записями
-            for i in range(len(sorted_nodes) - 1):
-                prev_node, prev_record = sorted_nodes[i]
-                next_node, next_record = sorted_nodes[i + 1]
-                # Создаем связь только если записи близки по времени (в пределах 4 часов)
-                time_diff = (next_record.timestamp - prev_record.timestamp).total_seconds()
-                if time_diff <= 4 * 3600:  # 4 часа
-                    edge = GraphEdge(
-                        id=f"{prev_node.id}-next-{next_node.id}",
-                        source_id=prev_node.id,
-                        target_id=next_node.id,
-                        type=EdgeType.RELATES_TO,
-                        weight=0.5,  # Средний вес для временных связей
-                        properties={"time_diff_seconds": time_diff},
-                    )
-                    try:
-                        self.graph.add_edge(edge)
-                    except Exception as e:
-                        logger.debug(f"Failed to add edge between {prev_node.id} and {next_node.id}: {e}")
+            # Создаем связи между новыми записями (если их больше одной)
+            if len(sorted_nodes) > 1:
+                for i in range(len(sorted_nodes) - 1):
+                    prev_node, prev_record = sorted_nodes[i]
+                    next_node, next_record = sorted_nodes[i + 1]
+                    # Создаем связь только если записи близки по времени (в пределах 4 часов)
+                    time_diff = (next_record.timestamp - prev_record.timestamp).total_seconds()
+                    if time_diff <= 4 * 3600:  # 4 часа
+                        edge = GraphEdge(
+                            id=f"{prev_node.id}-next-{next_node.id}",
+                            source_id=prev_node.id,
+                            target_id=next_node.id,
+                            type=EdgeType.RELATES_TO,
+                            weight=0.5,  # Средний вес для временных связей
+                            properties={"time_diff_seconds": time_diff},
+                        )
+                        try:
+                            if self.graph.add_edge(edge):
+                                logger.debug(f"Создана связь между новыми записями {prev_node.id} -> {next_node.id}")
+                        except Exception as e:
+                            logger.debug(f"Failed to add edge between {prev_node.id} and {next_node.id}: {e}")
             
-            # Связываем новые записи с существующими в графе
+            # Связываем ВСЕ новые записи с существующими в графе (важно для создания связей)
             for new_node, new_record in sorted_nodes:
                 self._link_to_existing_records(new_node, new_record, source, chat)
         
@@ -194,8 +192,15 @@ class MemoryIngestor:
         props["content"] = record.content
         props["source"] = record.source
         props["timestamp"] = created_at
-        props.setdefault("tags", record.tags)
-        props.setdefault("entities", record.entities)
+        # ВАЖНО: сохраняем теги и сущности в properties для FTS5 индексации
+        if record.tags:
+            props["tags"] = record.tags if isinstance(record.tags, list) else [record.tags]
+        else:
+            props.setdefault("tags", [])
+        if record.entities:
+            props["entities"] = record.entities if isinstance(record.entities, list) else [record.entities]
+        else:
+            props.setdefault("entities", [])
         if record.author:
             props["author"] = record.author
         return DocChunkNode(

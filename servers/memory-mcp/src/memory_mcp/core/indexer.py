@@ -1368,9 +1368,49 @@ class TwoLevelIndexer:
                     msg_id = f"{session_id}-M{i+1:04d}-{text_hash}"
                 
                 # Проверяем, существует ли уже это сообщение в базе
-                # При force_full пропускаем проверку дубликатов (будет использован upsert)
+                # ВАЖНО: даже при force_full проверяем дубликаты по telegram_id, чтобы предотвратить
+                # дублирование одного сообщения в разных сессиях
                 skipped_duplicate = False
-                if not self.force:
+                
+                # Всегда проверяем дубликаты по telegram_id (даже при force_full)
+                if telegram_msg_id:
+                    # Проверяем по telegram ID в ChromaDB
+                    try:
+                        existing_by_id = self.messages_collection.get(
+                            where={"$or": [
+                                {"msg_id": {"$eq": f"{chat}:{telegram_msg_id}"}},
+                                {"telegram_id": {"$eq": str(telegram_msg_id)}},
+                            ]},
+                            limit=1
+                        )
+                        if existing_by_id and existing_by_id.get("ids"):
+                            logger.debug(f"Дубликат сообщения найден по telegram_id={telegram_msg_id}, пропускаем")
+                            skipped_duplicate = True
+                    except Exception as e:
+                        logger.debug(f"Не удалось проверить дубликаты по telegram_id: {e}")
+                
+                # Дополнительная проверка по content_hash (даже при force_full)
+                if not skipped_duplicate:
+                    import hashlib
+                    content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
+                    try:
+                        existing_by_hash = self.messages_collection.get(
+                            where={"content_hash": {"$eq": content_hash}},
+                            limit=1
+                        )
+                        if existing_by_hash and existing_by_hash.get("ids"):
+                            # Проверяем, что это действительно то же сообщение (из того же чата)
+                            existing_metadata = existing_by_hash.get("metadatas", [])
+                            if existing_metadata and len(existing_metadata) > 0:
+                                existing_chat = existing_metadata[0].get("chat", "")
+                                if existing_chat == chat:
+                                    logger.debug(f"Дубликат сообщения найден по content_hash={content_hash} в чате {chat}, пропускаем")
+                                    skipped_duplicate = True
+                    except Exception as e:
+                        logger.debug(f"Не удалось проверить дубликаты по content_hash: {e}")
+                
+                # Дополнительная проверка по точному ID (только если не force_full)
+                if not self.force and not skipped_duplicate:
                     # Сначала проверяем по точному ID
                     existing_msg = self.messages_collection.get(ids=[msg_id])
                     if existing_msg and existing_msg.get("ids"):
