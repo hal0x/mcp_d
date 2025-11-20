@@ -801,9 +801,10 @@ class LMStudioEmbeddingClient:
                         headers={"Connection": "keep-alive"},  # Keep-alive для длительных запросов
                     )
                 
-                # Для очень длинных промптов используем streaming, чтобы предотвратить отключение
+                # Для длинных промптов используем streaming, чтобы предотвратить отключение
                 # Streaming позволяет клиенту получать данные во время генерации
-                use_streaming = len(prompt) > 50000  # ~12.5k токенов
+                # Уменьшен порог до 30000 символов (~7.5k токенов) для более раннего включения streaming
+                use_streaming = len(prompt) > 30000  # ~7.5k токенов
                 
                 if use_streaming:
                     payload["stream"] = True
