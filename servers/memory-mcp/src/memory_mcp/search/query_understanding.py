@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Движок понимания запросов (Query Understanding Engine)
+Движок понимания запросов (Query Understanding Engine).
 
 Использует LLM для глубокого понимания запросов:
 - Декомпозиция сложных запросов на подзапросы
@@ -14,27 +14,26 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from ..config import get_settings, get_quality_analysis_settings
+from ..config import get_settings
 from ..core.lmstudio_client import LMStudioEmbeddingClient
-from ..core.ollama_client import OllamaEmbeddingClient
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class QueryUnderstanding:
-    """Результат понимания запроса"""
+    """Результат понимания запроса."""
 
     original_query: str
-    sub_queries: List[str]  # Декомпозированные подзапросы
-    implicit_requirements: List[str]  # Неявные требования
-    alternative_formulations: List[str]  # Альтернативные формулировки
-    key_concepts: List[str]  # Ключевые концепции
-    concept_relationships: Dict[str, List[str]]  # Связи между концепциями
-    enhanced_query: str  # Улучшенный запрос
+    sub_queries: List[str]
+    implicit_requirements: List[str]
+    alternative_formulations: List[str]
+    key_concepts: List[str]
+    concept_relationships: Dict[str, List[str]]
+    enhanced_query: str
 
     def to_dict(self) -> Dict[str, Any]:
-        """Конвертация в словарь"""
+        """Конвертация в словарь."""
         return {
             "original_query": self.original_query,
             "sub_queries": self.sub_queries,
@@ -47,21 +46,20 @@ class QueryUnderstanding:
 
 
 class QueryUnderstandingEngine:
-    """Движок для глубокого понимания запросов"""
+    """Движок для глубокого понимания запросов."""
 
     def __init__(self):
-        """Инициализация движка понимания запросов"""
-        self._llm_client: Optional[LMStudioEmbeddingClient | OllamaEmbeddingClient] = None
+        """Инициализация движка понимания запросов."""
+        self._llm_client: Optional[LMStudioEmbeddingClient] = None
 
-    def _get_llm_client(self) -> Optional[LMStudioEmbeddingClient | OllamaEmbeddingClient]:
-        """Получение или создание LLM клиента"""
+    def _get_llm_client(self) -> Optional[LMStudioEmbeddingClient]:
+        """Получение или создание LLM клиента."""
         if self._llm_client is not None:
             return self._llm_client
 
         try:
             settings = get_settings()
 
-            # Пытаемся использовать LM Studio, если указана LLM модель
             if settings.lmstudio_llm_model:
                 self._llm_client = LMStudioEmbeddingClient(
                     model_name=settings.lmstudio_model,
@@ -70,29 +68,16 @@ class QueryUnderstandingEngine:
                 )
                 logger.debug("Используется LM Studio для понимания запросов")
             else:
-                # Используем Ollama как fallback
-                qa_settings = get_quality_analysis_settings()
-                self._llm_client = OllamaEmbeddingClient(
-                    llm_model_name=qa_settings.ollama_model,
-                    base_url=qa_settings.ollama_base_url,
-                )
-                logger.debug("Используется Ollama для понимания запросов")
+                logger.error("LM Studio не настроен, понимание запросов невозможно")
+                raise ValueError("Для понимания запросов требуется настроенный LM Studio (MEMORY_MCP_LMSTUDIO_LLM_MODEL)")
         except Exception as e:
-            logger.warning(f"Не удалось инициализировать LLM клиент для понимания запросов: {e}")
-            return None
+            logger.error(f"Не удалось инициализировать LLM клиент для понимания запросов: {e}")
+            raise
 
         return self._llm_client
 
     async def understand_query(self, query: str) -> QueryUnderstanding:
-        """
-        Глубокое понимание запроса
-
-        Args:
-            query: Поисковый запрос
-
-        Returns:
-            QueryUnderstanding с декомпозицией и улучшениями
-        """
+        """Глубокое понимание запроса с декомпозицией и улучшениями."""
         if not query or not query.strip():
             return QueryUnderstanding(
                 original_query=query,
@@ -106,39 +91,31 @@ class QueryUnderstandingEngine:
 
         llm_client = self._get_llm_client()
         if not llm_client:
-            # Fallback на простое понимание
-            return self._simple_understanding(query)
+            logger.error("LLM клиент не настроен, понимание запросов невозможно")
+            raise ValueError("Для понимания запросов требуется настроенный LLM клиент")
 
         # Используем LLM для глубокого понимания
-        try:
-            prompt = self._create_understanding_prompt(query)
-            
-            async with llm_client:
-                if isinstance(llm_client, LMStudioEmbeddingClient):
-                    response = await llm_client.generate_summary(
-                        prompt=prompt,
-                        temperature=0.3,
-                        max_tokens=1000,
-                        top_p=0.9,
-                    )
-                else:  # OllamaEmbeddingClient
-                    response = await llm_client.generate_summary(
-                        prompt=prompt,
-                        temperature=0.3,
-                        max_tokens=1000,
-                        top_p=0.9,
-                    )
+        prompt = self._create_understanding_prompt(query)
+        
+        # Используем максимальное значение модели (131072 для gpt-oss-20b)
+        settings = get_settings()
+        max_tokens = settings.large_context_max_tokens  # 131072
+        
+        async with llm_client:
+            response = await llm_client.generate_summary(
+                prompt=prompt,
+                temperature=0.3,
+                max_tokens=max_tokens,  # Максимальное значение модели
+                top_p=0.9,
+            )
 
-            # Парсим ответ LLM
-            understanding = self._parse_llm_response(response, query)
-            if understanding:
-                return understanding
-
-        except Exception as e:
-            logger.warning(f"Ошибка при понимании запроса через LLM: {e}")
-
-        # Fallback на простое понимание
-        return self._simple_understanding(query)
+        # Парсим ответ LLM
+        understanding = self._parse_llm_response(response, query)
+        if not understanding:
+            logger.error("Не удалось распарсить ответ LLM для понимания запроса")
+            raise ValueError("LLM вернул некорректный ответ для понимания запроса")
+        
+        return understanding
 
     def _create_understanding_prompt(self, query: str) -> str:
         """Создание промпта для понимания запроса"""
@@ -215,36 +192,4 @@ class QueryUnderstandingEngine:
             logger.debug(f"Ошибка парсинга ответа LLM для понимания запроса: {e}")
             return None
 
-    def _simple_understanding(self, query: str) -> QueryUnderstanding:
-        """
-        Простое понимание запроса без LLM (fallback)
-
-        Args:
-            query: Поисковый запрос
-
-        Returns:
-            QueryUnderstanding с базовым анализом
-        """
-        # Простая декомпозиция по запятым и союзам
-        sub_queries = []
-        if "," in query or " и " in query or " или " in query:
-            # Пытаемся разбить на части
-            parts = query.replace(" и ", ",").replace(" или ", ",").split(",")
-            sub_queries = [p.strip() for p in parts if p.strip()]
-        else:
-            sub_queries = [query]
-
-        # Извлекаем ключевые слова как концепции
-        words = query.split()
-        key_concepts = [w for w in words if len(w) > 3][:5]  # Слова длиннее 3 символов
-
-        return QueryUnderstanding(
-            original_query=query,
-            sub_queries=sub_queries,
-            implicit_requirements=[],
-            alternative_formulations=[],
-            key_concepts=key_concepts,
-            concept_relationships={},
-            enhanced_query=query,
-        )
 

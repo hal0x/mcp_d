@@ -35,7 +35,7 @@ class QdrantCollectionsManager:
         self.url = url
         self.vector_size = vector_size
         self.client: Optional[QdrantClient] = None
-        self._collections: Dict[str, str] = {}  # Имя коллекции -> имя коллекции в Qdrant
+        self._collections: Dict[str, str] = {}
         
         if url and QdrantClient is not None:
             try:
@@ -65,7 +65,6 @@ class QdrantCollectionsManager:
             return False
         
         try:
-            # Проверяем существование коллекции
             try:
                 info = self.client.get_collection(collection_name)
                 if force_recreate:
@@ -94,7 +93,6 @@ class QdrantCollectionsManager:
                 self._collections[collection_name] = collection_name
                 return True
             except Exception:
-                # Коллекция не существует, создаем
                 logger.info(f"Создание коллекции {collection_name}")
                 self.client.create_collection(
                     collection_name=collection_name,
@@ -186,7 +184,6 @@ class QdrantCollectionsManager:
         
         try:
             if ids:
-                # Получаем по ID
                 points = self.client.retrieve(
                     collection_name=collection_name,
                     ids=ids,
@@ -194,7 +191,6 @@ class QdrantCollectionsManager:
                     with_vectors=True,
                 )
             else:
-                # Получаем с фильтром
                 filter_conditions = self._build_filter(where) if where else None
                 scroll_result = self.client.scroll(
                     collection_name=collection_name,
@@ -203,7 +199,7 @@ class QdrantCollectionsManager:
                     with_payload=True,
                     with_vectors=True,
                 )
-                points = scroll_result[0]  # Первый элемент - список точек
+                points = scroll_result[0]
             
             result_ids = []
             result_embeddings = []
@@ -274,21 +270,17 @@ class QdrantCollectionsManager:
         
         try:
             if ids:
-                # Удаляем по ID
                 self.client.delete(
                     collection_name=collection_name,
                     points_selector=qmodels.PointIdsList(points=ids),
                 )
                 return len(ids)
             elif where:
-                # Удаляем по фильтру
                 filter_conditions = self._build_filter(where)
-                # Qdrant не поддерживает прямое удаление по фильтру через API
-                # Нужно сначала найти точки, затем удалить по ID
                 scroll_result = self.client.scroll(
                     collection_name=collection_name,
                     scroll_filter=filter_conditions,
-                    limit=10000,  # Максимум для удаления
+                    limit=10000,
                     with_payload=False,
                     with_vectors=False,
                 )
@@ -327,8 +319,6 @@ class QdrantCollectionsManager:
                     with_payload=False,
                     with_vectors=False,
                 )
-                # Qdrant не возвращает общее количество напрямую
-                # Нужно прокрутить все записи
                 total = 0
                 offset = None
                 while True:
@@ -344,7 +334,7 @@ class QdrantCollectionsManager:
                     if not points:
                         break
                     total += len(points)
-                    offset = scroll_result[1]  # Следующий offset
+                    offset = scroll_result[1]
                     if offset is None:
                         break
                 return total
@@ -369,10 +359,8 @@ class QdrantCollectionsManager:
         
         must_conditions = []
         
-        # Обрабатываем простые условия
         for key, value in where.items():
             if key == "$and":
-                # Логическое И
                 and_conditions = []
                 for condition in value:
                     sub_filter = self._build_filter(condition)
@@ -381,7 +369,6 @@ class QdrantCollectionsManager:
                 if and_conditions:
                     must_conditions.append(qmodels.Filter(must=and_conditions))
             elif key == "$or":
-                # Логическое ИЛИ
                 or_conditions = []
                 for condition in value:
                     sub_filter = self._build_filter(condition)
@@ -390,7 +377,6 @@ class QdrantCollectionsManager:
                 if or_conditions:
                     must_conditions.append(qmodels.Filter(should=or_conditions))
             elif isinstance(value, dict):
-                # Вложенные условия ($eq, $ne, и т.д.)
                 if "$eq" in value:
                     must_conditions.append(
                         qmodels.FieldCondition(
@@ -399,10 +385,8 @@ class QdrantCollectionsManager:
                         )
                     )
                 elif "$ne" in value:
-                    # Qdrant не поддерживает $ne напрямую, пропускаем
                     logger.warning(f"Qdrant не поддерживает $ne для {key}, пропускаем")
             else:
-                # Простое равенство
                 must_conditions.append(
                     qmodels.FieldCondition(
                         key=key,

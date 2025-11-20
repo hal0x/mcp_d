@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Анализатор намерения запроса (Query Intent Classification)
+Анализатор намерения запроса (Query Intent Classification).
 
 Классифицирует поисковые запросы на типы намерений и адаптирует стратегию поиска.
 """
@@ -10,26 +10,25 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from ..config import get_settings, get_quality_analysis_settings
+from ..config import get_settings
 from ..core.lmstudio_client import LMStudioEmbeddingClient
-from ..core.ollama_client import OllamaEmbeddingClient
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class QueryIntent:
-    """Результат анализа намерения запроса"""
+    """Результат анализа намерения запроса."""
 
-    intent_type: str  # informational, transactional, navigational, analytical
-    confidence: float  # 0.0 - 1.0
-    recommended_db_weight: float  # Рекомендуемый вес для БД (0.0 - 1.0)
-    recommended_artifact_weight: float  # Рекомендуемый вес для артифактов (0.0 - 1.0)
-    recommended_top_k: Optional[int] = None  # Рекомендуемое количество результатов
-    recommended_filters: Optional[Dict[str, Any]] = None  # Рекомендуемые фильтры
+    intent_type: str
+    confidence: float
+    recommended_db_weight: float
+    recommended_artifact_weight: float
+    recommended_top_k: Optional[int] = None
+    recommended_filters: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Конвертация в словарь"""
+        """Конвертация в словарь."""
         return {
             "intent_type": self.intent_type,
             "confidence": self.confidence,
@@ -41,21 +40,20 @@ class QueryIntent:
 
 
 class QueryIntentAnalyzer:
-    """Анализатор намерения запроса для адаптации стратегии поиска"""
+    """Анализатор намерения запроса для адаптации стратегии поиска."""
 
     def __init__(self):
-        """Инициализация анализатора намерений"""
-        self._llm_client: Optional[LMStudioEmbeddingClient | OllamaEmbeddingClient] = None
+        """Инициализация анализатора намерений."""
+        self._llm_client: Optional[LMStudioEmbeddingClient] = None
 
-    def _get_llm_client(self) -> Optional[LMStudioEmbeddingClient | OllamaEmbeddingClient]:
-        """Получение или создание LLM клиента"""
+    def _get_llm_client(self) -> Optional[LMStudioEmbeddingClient]:
+        """Получение или создание LLM клиента."""
         if self._llm_client is not None:
             return self._llm_client
 
         try:
             settings = get_settings()
 
-            # Пытаемся использовать LM Studio, если указана LLM модель
             if settings.lmstudio_llm_model:
                 self._llm_client = LMStudioEmbeddingClient(
                     model_name=settings.lmstudio_model,
@@ -64,16 +62,11 @@ class QueryIntentAnalyzer:
                 )
                 logger.debug("Используется LM Studio для анализа намерения")
             else:
-                # Используем Ollama как fallback
-                qa_settings = get_quality_analysis_settings()
-                self._llm_client = OllamaEmbeddingClient(
-                    llm_model_name=qa_settings.ollama_model,
-                    base_url=qa_settings.ollama_base_url,
-                )
-                logger.debug("Используется Ollama для анализа намерения")
+                logger.error("LM Studio не настроен, анализ намерения невозможен")
+                raise ValueError("Для анализа намерения требуется настроенный LM Studio (MEMORY_MCP_LMSTUDIO_LLM_MODEL)")
         except Exception as e:
-            logger.warning(f"Не удалось инициализировать LLM клиент для анализа намерения: {e}")
-            return None
+            logger.error(f"Не удалось инициализировать LLM клиент для анализа намерения: {e}")
+            raise
 
         return self._llm_client
 
@@ -98,39 +91,32 @@ class QueryIntentAnalyzer:
 
         llm_client = self._get_llm_client()
         if not llm_client:
-            # Fallback на эвристический анализ
-            return self._heuristic_intent_analysis(query)
+            logger.error("LLM клиент не настроен, анализ намерения невозможен")
+            raise ValueError("Для анализа намерения требуется настроенный LLM клиент")
 
         # Используем LLM для классификации
-        try:
-            prompt = self._create_intent_classification_prompt(query)
-            
-            async with llm_client:
-                if isinstance(llm_client, LMStudioEmbeddingClient):
-                    response = await llm_client.generate_summary(
-                        prompt=prompt,
-                        temperature=0.2,
-                        max_tokens=300,
-                        top_p=0.9,
-                    )
-                else:  # OllamaEmbeddingClient
-                    response = await llm_client.generate_summary(
-                        prompt=prompt,
-                        temperature=0.2,
-                        max_tokens=300,
-                        top_p=0.9,
-                    )
+        prompt = self._create_intent_classification_prompt(query)
+        
+        # Используем максимальное значение модели (131072 для gpt-oss-20b)
+        from ..config import get_settings
+        settings = get_settings()
+        max_tokens = settings.large_context_max_tokens  # 131072
+        
+        async with llm_client:
+            response = await llm_client.generate_summary(
+                prompt=prompt,
+                temperature=0.2,
+                max_tokens=max_tokens,  # Максимальное значение модели
+                top_p=0.9,
+            )
 
-            # Парсим ответ LLM
-            intent = self._parse_llm_response(response, query)
-            if intent:
-                return intent
-
-        except Exception as e:
-            logger.warning(f"Ошибка при анализе намерения через LLM: {e}")
-
-        # Fallback на эвристический анализ
-        return self._heuristic_intent_analysis(query)
+        # Парсим ответ LLM
+        intent = self._parse_llm_response(response, query)
+        if not intent:
+            logger.error("Не удалось распарсить ответ LLM для анализа намерения")
+            raise ValueError("LLM вернул некорректный ответ для анализа намерения")
+        
+        return intent
 
     def _create_intent_classification_prompt(self, query: str) -> str:
         """Создание промпта для классификации намерения"""
@@ -236,54 +222,4 @@ class QueryIntentAnalyzer:
 
         return recommendations
 
-    def _heuristic_intent_analysis(self, query: str) -> QueryIntent:
-        """
-        Эвристический анализ намерения на основе ключевых слов
-
-        Args:
-            query: Поисковый запрос
-
-        Returns:
-            QueryIntent с типом намерения
-        """
-        query_lower = query.lower()
-
-        # Ключевые слова для разных типов намерений
-        transactional_keywords = [
-            "как", "как сделать", "инструкция", "шаги", "руководство",
-            "how to", "tutorial", "guide", "steps",
-        ]
-        navigational_keywords = [
-            "где", "найти", "найди", "покажи", "показать",
-            "where", "find", "show", "get",
-        ]
-        analytical_keywords = [
-            "почему", "как работает", "анализ", "сравнение", "разница",
-            "why", "how does", "analyze", "compare", "difference",
-        ]
-
-        # Определяем тип намерения
-        if any(keyword in query_lower for keyword in transactional_keywords):
-            intent_type = "transactional"
-            confidence = 0.7
-        elif any(keyword in query_lower for keyword in navigational_keywords):
-            intent_type = "navigational"
-            confidence = 0.7
-        elif any(keyword in query_lower for keyword in analytical_keywords):
-            intent_type = "analytical"
-            confidence = 0.7
-        else:
-            intent_type = "informational"
-            confidence = 0.6
-
-        recommendations = self._generate_recommendations(intent_type, query)
-
-        return QueryIntent(
-            intent_type=intent_type,
-            confidence=confidence,
-            recommended_db_weight=recommendations["db_weight"],
-            recommended_artifact_weight=recommendations["artifact_weight"],
-            recommended_top_k=recommendations.get("top_k"),
-            recommended_filters=recommendations.get("filters"),
-        )
 

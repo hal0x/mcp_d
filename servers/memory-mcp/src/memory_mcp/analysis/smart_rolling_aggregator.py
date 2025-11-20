@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Умная система континуальной агрегации с учетом связанности сообщений
+Умная система континуальной агрегации с учетом связанности сообщений.
 
-Ключевые отличия от простой rolling_window:
-1. Группировка по связанности (сессии) для чатов, по дням для каналов
-2. Специальное окно NOW для самых актуальных сообщений
-3. Контекстная саммаризация с учетом истории
-4. Интеграция с SessionSegmenter и ContextManager
+Отличия от простой rolling_window:
+- Группировка по связанности (сессии) для чатов, по дням для каналов
+- Специальное окно NOW для самых актуальных сообщений
+- Контекстная саммаризация с учетом истории
+- Интеграция с SessionSegmenter и ContextManager
 """
 
 import asyncio
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 class SmartTimeWindow:
-    """Умное временное окно с учетом типа группировки"""
+    """Умное временное окно с учетом типа группировки."""
 
     def __init__(
         self,
@@ -43,7 +43,7 @@ class SmartTimeWindow:
         group_strategy: str,  # 'session', 'day', 'week', 'month'
         keep_original: bool = True,
         summarize: bool = False,
-        use_context: bool = False,  # Использовать контекст из предыдущих окон
+        use_context: bool = False,
     ):
         self.name = name
         self.age_days_min = age_days_min
@@ -54,7 +54,7 @@ class SmartTimeWindow:
         self.use_context = use_context
 
     def matches(self, age_days: int) -> bool:
-        """Проверяет, попадает ли возраст в это окно"""
+        """Проверяет, попадает ли возраст сообщения в это окно."""
         return self.age_days_min <= age_days < self.age_days_max
 
     def __repr__(self):
@@ -64,8 +64,6 @@ class SmartTimeWindow:
         )
 
 
-# Умная стратегия с учетом связанности
-# Оптимизировано для баланса между качеством и производительностью
 SMART_STRATEGY = [
     SmartTimeWindow(
         "now", 0, 1, "session", keep_original=True, summarize=True, use_context=True
@@ -73,14 +71,14 @@ SMART_STRATEGY = [
     SmartTimeWindow(
         "fresh",
         1,
-        7,  # Уменьшено с 14 до 7 дней для более быстрой обработки
+        7,
         "session",
         keep_original=True,
         summarize=False,
         use_context=False,
     ),
     SmartTimeWindow(
-        "recent", 7, 30, "week", keep_original=False, summarize=True, use_context=False  # Начало сдвинуто с 14 на 7 дней
+        "recent", 7, 30, "week", keep_original=False, summarize=True, use_context=False
     ),
     SmartTimeWindow(
         "old",
@@ -93,16 +91,15 @@ SMART_STRATEGY = [
     ),
 ]
 
-# Стратегия для каналов (без сессий, только временная группировка)
 CHANNEL_STRATEGY = [
     SmartTimeWindow(
         "now", 0, 1, "day", keep_original=True, summarize=True, use_context=True
     ),
     SmartTimeWindow(
-        "fresh", 1, 7, "day", keep_original=True, summarize=False, use_context=False  # Уменьшено с 14 до 7 дней
+        "fresh", 1, 7, "day", keep_original=True, summarize=False, use_context=False
     ),
     SmartTimeWindow(
-        "recent", 7, 30, "week", keep_original=False, summarize=True, use_context=False  # Начало сдвинуто с 14 на 7 дней
+        "recent", 7, 30, "week", keep_original=False, summarize=True, use_context=False
     ),
     SmartTimeWindow(
         "old",
@@ -117,18 +114,18 @@ CHANNEL_STRATEGY = [
 
 
 class SmartAggregationState:
-    """Состояние умной агрегации"""
+    """Состояние умной агрегации."""
 
     def __init__(self, chat_name: str):
         self.chat_name = chat_name
-        self.chat_type: Optional[str] = None  # 'channel', 'group', 'chat'
+        self.chat_type: Optional[str] = None
         self.last_aggregation_time: Optional[datetime] = None
         self.window_summaries: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-        self.now_summary_file: Optional[str] = None  # Путь к файлу NOW саммаризации
-        self.context_cache: Dict[str, Any] = {}  # Кэш контекста для NOW окна
+        self.now_summary_file: Optional[str] = None
+        self.context_cache: Dict[str, Any] = {}
 
     def to_dict(self) -> Dict[str, Any]:
-        """Сериализация"""
+        """Сериализация состояния в словарь."""
         return {
             "chat_name": self.chat_name,
             "chat_type": self.chat_type,
@@ -142,7 +139,7 @@ class SmartAggregationState:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SmartAggregationState":
-        """Десериализация"""
+        """Десериализация состояния из словаря."""
         from ..utils.datetime_utils import parse_datetime_utc
 
         state = cls(data["chat_name"])
@@ -159,13 +156,13 @@ class SmartAggregationState:
 
 class SmartRollingAggregator:
     """
-    Умная система континуальной агрегации
+    Умная система континуальной агрегации.
 
     Особенности:
-    1. Определяет тип чата (канал/группа/чат)
-    2. Использует SessionSegmenter для умной группировки
-    3. Специальное окно NOW с контекстом
-    4. Сохраняет NOW саммаризацию в отдельный файл
+    - Определяет тип чата (канал/группа/чат)
+    - Использует SessionSegmenter для умной группировки
+    - Специальное окно NOW с контекстом
+    - Сохраняет NOW саммаризацию в отдельный файл
     """
 
     def __init__(
@@ -182,18 +179,23 @@ class SmartRollingAggregator:
         self.summaries_dir = summaries_dir
         self.now_summaries_dir = now_summaries_dir
 
-        # Создаем директории
         self.state_dir.mkdir(exist_ok=True)
         self.now_summaries_dir.mkdir(exist_ok=True)
 
-        self.embedding_client = embedding_client or LMStudioEmbeddingClient()
+        if embedding_client is None:
+            settings = get_settings()
+            self.embedding_client = LMStudioEmbeddingClient(
+                model_name=settings.lmstudio_model,
+                llm_model_name=settings.lmstudio_llm_model,
+                base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}",
+            )
+        else:
+            self.embedding_client = embedding_client
         self.use_smart_strategy = use_smart_strategy
 
-        # Компоненты для умной обработки
-        # Оптимизированные настройки для баланса между связанностью и производительностью
         self.session_segmenter = SessionSegmenter(
-            gap_minutes=180,  # 3 часа - баланс между связанностью и количеством сессий
-            max_session_hours=12,  # 12 часов - уменьшено для более эффективной обработки
+            gap_minutes=180,
+            max_session_hours=12,
         )
         self.context_manager = ContextManager(summaries_dir)
         self.session_summarizer = SessionSummarizer(
@@ -201,7 +203,6 @@ class SmartRollingAggregator:
             summaries_dir=summaries_dir,
         )
 
-        # Инициализация процессора больших контекстов (отложенный импорт для избежания циклических зависимостей)
         from .large_context_processor import LargeContextProcessor
         
         settings = get_settings()
@@ -214,7 +215,6 @@ class SmartRollingAggregator:
             enable_caching=True,
         )
 
-        # Инициализация батч-процессора и семантического перегруппировщика
         self.batch_processor = BatchSessionProcessor(
             max_tokens=settings.large_context_max_tokens,
             prompt_reserve_tokens=settings.large_context_prompt_reserve,
@@ -227,29 +227,21 @@ class SmartRollingAggregator:
         logger.info("Инициализирован SmartRollingAggregator с батч-обработкой")
 
     def _parse_date(self, date_str: str) -> Optional[datetime]:
-        """Парсит дату (использует общую утилиту)."""
+        """Парсит дату из строки."""
         from ..utils.datetime_utils import parse_datetime_utc
 
         return parse_datetime_utc(date_str, return_none_on_error=True, use_zoneinfo=True)
 
     def _detect_chat_type(self, messages: List[Dict[str, Any]]) -> str:
-        """
-        Определяет тип чата на основе сообщений
-
-        Returns:
-            'channel', 'group', или 'chat'
-        """
+        """Определяет тип чата на основе сообщений ('channel', 'group', или 'chat')."""
         if not messages:
             return "chat"
 
-        # Проверяем наличие авторов
         messages_with_author = sum(1 for m in messages if m.get("from"))
 
-        # Если большинство сообщений без автора - это канал
         if messages_with_author < len(messages) * 0.3:
             return "channel"
 
-        # Проверяем количество уникальных авторов
         unique_authors = set()
         for msg in messages:
             if msg.get("from"):
@@ -259,11 +251,10 @@ class SmartRollingAggregator:
                 if author_id:
                     unique_authors.add(author_id)
 
-        # Если много авторов - группа, иначе - чат
         return "group" if len(unique_authors) > 5 else "chat"
 
     def _load_state(self, chat_name: str) -> SmartAggregationState:
-        """Загружает состояние"""
+        """Загружает состояние агрегации для чата."""
         from ..utils.state_manager import StateManager
 
         manager = StateManager(self.state_dir)
@@ -274,14 +265,14 @@ class SmartRollingAggregator:
         )
 
     def _save_state(self, state: SmartAggregationState):
-        """Сохраняет состояние"""
+        """Сохраняет состояние агрегации."""
         from ..utils.state_manager import StateManager
 
         manager = StateManager(self.state_dir)
         manager.save_state(state)
 
     def _load_messages(self, chat_file: Path) -> List[Dict[str, Any]]:
-        """Загружает сообщения из файла (поддерживает JSON и JSONL)"""
+        """Загружает сообщения из файла (поддерживает JSON и JSONL)."""
         from ..utils.json_loader import load_json_or_jsonl
         
         try:
@@ -302,7 +293,7 @@ class SmartRollingAggregator:
         current_date: datetime,
         strategy: List[SmartTimeWindow],
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """Группирует сообщения по временным окнам"""
+        """Группирует сообщения по временным окнам на основе возраста."""
         grouped = defaultdict(list)
 
         for msg in messages:
@@ -315,7 +306,6 @@ class SmartRollingAggregator:
 
             age_days = (current_date - msg_date).days
 
-            # Находим подходящее окно
             for window in strategy:
                 if window.matches(age_days):
                     grouped[window.name].append(msg)
@@ -326,14 +316,14 @@ class SmartRollingAggregator:
     def _group_by_sessions(
         self, messages: List[Dict[str, Any]], chat_name: str
     ) -> List[Dict[str, Any]]:
-        """Группирует сообщения по сессиям используя SessionSegmenter"""
+        """Группирует сообщения по сессиям используя SessionSegmenter."""
         return self.session_segmenter.segment_messages(messages, chat_name)
 
     def _group_by_smart_strategy(
         self, windowed_messages: Dict[str, List[Dict[str, Any]]], chat_name: str
     ) -> List[Dict[str, Any]]:
         """
-        Умная стратегия группировки с учетом окон
+        Умная стратегия группировки с учетом окон.
 
         NOW/FRESH: группировка по дням (минимум 10 сообщений)
         RECENT: группировка по неделям (минимум 20 сообщений)
@@ -342,7 +332,6 @@ class SmartRollingAggregator:
         sessions = []
         session_counter = 1
 
-        # Обрабатываем каждое окно отдельно в хронологическом порядке (от старых к новым)
         for window_name in ["old", "recent", "fresh", "now"]:
             window_messages = windowed_messages.get(window_name, [])
             if not window_messages:
@@ -353,17 +342,14 @@ class SmartRollingAggregator:
             )
 
             if window_name in ["now", "fresh"]:
-                # Для актуальных окон группируем по дням
                 window_sessions = self._group_by_days_with_minimum(
                     window_messages, chat_name, min_messages_per_day=10
                 )
             elif window_name == "recent":
-                # Для недавних сообщений группируем по неделям
                 window_sessions = self._group_by_weeks_with_minimum(
                     window_messages, chat_name, min_messages_per_week=20
                 )
             else:  # old
-                # Для старых сообщений группируем по месяцам (каждый месяц = отдельная сессия)
                 window_sessions = self._group_by_months_with_minimum(
                     window_messages,
                     chat_name,
@@ -371,7 +357,6 @@ class SmartRollingAggregator:
                     force_split_by_month=True,
                 )
 
-            # Добавляем информацию о окне к каждой сессии
             for session in window_sessions:
                 session["window"] = window_name
                 session["chat"] = chat_name
@@ -388,20 +373,14 @@ class SmartRollingAggregator:
         chat_name: str,
         min_messages_per_day: int = 20,
     ) -> List[Dict[str, Any]]:
-        """
-        Группирует сообщения по дням с минимальным количеством сообщений
-
-        Объединяет маленькие дни в более крупные сессии для эффективности
-        """
+        """Группирует сообщения по дням с минимальным количеством сообщений."""
         if not messages:
             return []
 
-        # Сортируем сообщения по времени
         sorted_messages = sorted(
             messages, key=lambda x: self._parse_date(x.get("date_utc", ""))
         )
 
-        # Группируем по дням
         day_groups = defaultdict(list)
         for msg in sorted_messages:
             msg_date = self._parse_date(msg.get("date_utc", ""))
@@ -409,7 +388,6 @@ class SmartRollingAggregator:
                 day_key = msg_date.strftime("%Y-%m-%d")
                 day_groups[day_key].append(msg)
 
-        # Объединяем маленькие дни в более крупные сессии
         sessions = []
         current_session_messages = []
         current_session_days = []
@@ -417,13 +395,11 @@ class SmartRollingAggregator:
         for day_key in sorted(day_groups.keys()):
             day_messages = day_groups[day_key]
 
-            # Если текущая сессия + этот день >= min_messages_per_day, создаем сессию
             if (
                 len(current_session_messages) + len(day_messages)
                 >= min_messages_per_day
             ):
                 if current_session_messages:
-                    # Создаем сессию из накопленных сообщений
                     session = self._create_session_from_messages(
                         current_session_messages,
                         chat_name,
@@ -431,15 +407,12 @@ class SmartRollingAggregator:
                     )
                     sessions.append(session)
 
-                # Начинаем новую сессию с текущего дня
                 current_session_messages = day_messages.copy()
                 current_session_days = [day_key]
             else:
-                # Добавляем к текущей сессии
                 current_session_messages.extend(day_messages)
                 current_session_days.append(day_key)
 
-        # Добавляем последнюю сессию
         if current_session_messages:
             session = self._create_session_from_messages(
                 current_session_messages,
@@ -459,28 +432,22 @@ class SmartRollingAggregator:
         chat_name: str,
         min_messages_per_week: int = 20,
     ) -> List[Dict[str, Any]]:
-        """
-        Группирует сообщения по неделям с минимальным количеством сообщений
-        """
+        """Группирует сообщения по неделям с минимальным количеством сообщений."""
         if not messages:
             return []
 
-        # Сортируем сообщения по времени
         sorted_messages = sorted(
             messages, key=lambda x: self._parse_date(x.get("date_utc", ""))
         )
 
-        # Группируем по неделям (ISO недели)
         week_groups = defaultdict(list)
         for msg in sorted_messages:
             msg_date = self._parse_date(msg.get("date_utc", ""))
             if msg_date:
-                # Получаем год и номер недели
                 year, week, _ = msg_date.isocalendar()
                 week_key = f"{year}-W{week:02d}"
                 week_groups[week_key].append(msg)
 
-        # Объединяем маленькие недели в более крупные сессии
         sessions = []
         current_session_messages = []
         current_session_weeks = []
@@ -488,13 +455,11 @@ class SmartRollingAggregator:
         for week_key in sorted(week_groups.keys()):
             week_messages = week_groups[week_key]
 
-            # Если текущая сессия + эта неделя >= min_messages_per_week, создаем сессию
             if (
                 len(current_session_messages) + len(week_messages)
                 >= min_messages_per_week
             ):
                 if current_session_messages:
-                    # Создаем сессию из накопленных сообщений
                     session = self._create_session_from_messages(
                         current_session_messages,
                         chat_name,
@@ -502,15 +467,12 @@ class SmartRollingAggregator:
                     )
                     sessions.append(session)
 
-                # Начинаем новую сессию с текущей недели
                 current_session_messages = week_messages.copy()
                 current_session_weeks = [week_key]
             else:
-                # Добавляем к текущей сессии
                 current_session_messages.extend(week_messages)
                 current_session_weeks.append(week_key)
 
-        # Добавляем последнюю сессию
         if current_session_messages:
             session = self._create_session_from_messages(
                 current_session_messages,
@@ -529,10 +491,10 @@ class SmartRollingAggregator:
         messages: List[Dict[str, Any]],
         chat_name: str,
         min_messages_per_month: int = 50,
-        force_split_by_month: bool = True,  # Новый параметр для принудительного разбиения
+        force_split_by_month: bool = True,
     ) -> List[Dict[str, Any]]:
         """
-        Группирует сообщения по месяцам с минимальным количеством сообщений
+        Группирует сообщения по месяцам с минимальным количеством сообщений.
 
         Args:
             messages: Список сообщений
@@ -543,12 +505,10 @@ class SmartRollingAggregator:
         if not messages:
             return []
 
-        # Сортируем сообщения по времени
         sorted_messages = sorted(
             messages, key=lambda x: self._parse_date(x.get("date_utc", ""))
         )
 
-        # Группируем по месяцам
         month_groups = defaultdict(list)
         for msg in sorted_messages:
             msg_date = self._parse_date(msg.get("date_utc", ""))
@@ -559,11 +519,9 @@ class SmartRollingAggregator:
         sessions = []
 
         if force_split_by_month:
-            # Создаем отдельную сессию для каждого месяца
             for month_key in sorted(month_groups.keys()):
                 month_messages = month_groups[month_key]
 
-                # Создаем сессию для каждого месяца, даже если сообщений мало
                 session = self._create_session_from_messages(
                     month_messages,
                     chat_name,
@@ -575,20 +533,17 @@ class SmartRollingAggregator:
                 f"Создано {len(sessions)} сессий по месяцам (принудительное разбиение по месяцам)"
             )
         else:
-            # Старая логика с объединением маленьких месяцев
             current_session_messages = []
             current_session_months = []
 
             for month_key in sorted(month_groups.keys()):
                 month_messages = month_groups[month_key]
 
-                # Если текущая сессия + этот месяц >= min_messages_per_month, создаем сессию
                 if (
                     len(current_session_messages) + len(month_messages)
                     >= min_messages_per_month
                 ):
                     if current_session_messages:
-                        # Создаем сессию из накопленных сообщений
                         session = self._create_session_from_messages(
                             current_session_messages,
                             chat_name,
@@ -596,15 +551,12 @@ class SmartRollingAggregator:
                         )
                         sessions.append(session)
 
-                    # Начинаем новую сессию с текущего месяца
                     current_session_messages = month_messages.copy()
                     current_session_months = [month_key]
                 else:
-                    # Добавляем к текущей сессии
                     current_session_messages.extend(month_messages)
                     current_session_months.append(month_key)
 
-            # Добавляем последнюю сессию
             if current_session_messages:
                 session = self._create_session_from_messages(
                     current_session_messages,
@@ -622,7 +574,7 @@ class SmartRollingAggregator:
     def _create_session_from_messages(
         self, messages: List[Dict[str, Any]], chat_name: str, time_range: str
     ) -> Dict[str, Any]:
-        """Создает сессию из списка сообщений"""
+        """Создает сессию из списка сообщений."""
         if not messages:
             return {}
 
@@ -641,9 +593,9 @@ class SmartRollingAggregator:
         }
 
     def _group_by_time_period(
-        self, messages: List[Dict[str, Any]], period: str  # 'day', 'week', 'month'
+        self, messages: List[Dict[str, Any]], period: str
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """Группирует сообщения по временным периодам"""
+        """Группирует сообщения по временным периодам ('day', 'week', 'month')."""
         blocks = defaultdict(list)
 
         for msg in messages:
@@ -675,26 +627,22 @@ class SmartRollingAggregator:
         previous_context: Optional[str] = None,
     ) -> str:
         """
-        Саммаризация с учетом контекста
+        Саммаризация с учетом контекста.
 
         Для NOW окна использует контекст из предыдущих сообщений.
-        Использует LargeContextProcessor для больших окон.
+        Использует LargeContextProcessor для больших окон (>100K токенов).
         """
         if not messages:
             return ""
 
-        # Проверяем размер контекста
-        # Используем большие контексты только для действительно больших окон (>100K токенов)
-        # чтобы не замедлять обработку маленьких окон
         estimated_tokens = self.large_context_processor.estimate_messages_tokens(messages)
-        use_large_context = estimated_tokens > 100000  # Используем для окон > 100K токенов
+        use_large_context = estimated_tokens > 100000
 
         if use_large_context:
             logger.info(
                 f"Используется обработка большим контекстом для окна {window_name} "
                 f"(~{estimated_tokens} токенов)"
             )
-            # Создаем промпт с контекстом
             context_part = ""
             if previous_context:
                 context_part = (
@@ -710,16 +658,13 @@ class SmartRollingAggregator:
 
 Саммаризация (3-4 предложения):"""
 
-            # Используем LargeContextProcessor
             result = await self.large_context_processor.process_large_context(
                 messages, chat_name, prompt
             )
             return result.get("summary", "").strip()
         else:
-            # Стандартная обработка для небольших окон
-            # Формируем текст сообщений
             text_parts = []
-            for msg in messages[:50]:  # Ограничиваем количество
+            for msg in messages[:50]:
                 date = msg.get("date_utc", "Unknown")
                 sender = msg.get("from", {})
                 sender_name = (
@@ -734,7 +679,6 @@ class SmartRollingAggregator:
 
             conversation_text = "\n".join(text_parts)
 
-            # Создаем промпт с контекстом
             context_part = ""
             if previous_context:
                 context_part = (
@@ -758,7 +702,7 @@ class SmartRollingAggregator:
                     summary = await self.embedding_client.generate_summary(
                         prompt=prompt,
                         temperature=0.3,
-                        max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
+                        max_tokens=131072,
                     )
                 return summary.strip()
             except Exception as e:
@@ -772,24 +716,17 @@ class SmartRollingAggregator:
         state: SmartAggregationState,
         dry_run: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Обрабатывает окно NOW - самые актуальные сообщения
-
-        Создает отдельный файл с саммаризацией и контекстом
-        """
+        """Обрабатывает окно NOW - самые актуальные сообщения."""
         if not messages:
             return {"messages_count": 0}
 
         logger.info(f"Обработка NOW окна: {len(messages)} сообщений")
 
-        # Получаем контекст из предыдущих окон
         previous_context = self.context_manager.get_previous_context(chat_name, "NOW")
 
-        # Группируем по сессиям если это чат/группа
         if state.chat_type in ["chat", "group"]:
             sessions = self._group_by_sessions(messages, chat_name)
 
-            # Саммаризируем каждую сессию
             summaries = []
             for session in sessions:
                 summary = await self._summarize_with_context(
@@ -805,9 +742,8 @@ class SmartRollingAggregator:
                     }
                 )
 
-                await asyncio.sleep(0.3)  # Задержка между запросами
+                await asyncio.sleep(0.3)
         else:
-            # Для канала - одна саммаризация
             summary = await self._summarize_with_context(
                 messages, chat_name, "now", previous_context
             )
@@ -818,7 +754,6 @@ class SmartRollingAggregator:
                 }
             ]
 
-        # Сохраняем в отдельный файл
         if not dry_run:
             now_file = self.now_summaries_dir / f"{chat_name}_NOW.md"
 
@@ -856,43 +791,34 @@ class SmartRollingAggregator:
     async def aggregate_chat(
         self, chat_name: str, dry_run: bool = False
     ) -> Dict[str, Any]:
-        """
-        Выполняет умную агрегацию для чата
-        """
+        """Выполняет умную агрегацию для чата."""
         logger.info(f"Начало умной агрегации чата: {chat_name}")
 
-        # Загружаем состояние
         state = self._load_state(chat_name)
 
-        # Находим файл чата
         chat_file = self.chats_dir / chat_name / "unknown.json"
         if not chat_file.exists():
             logger.warning(f"Файл чата не найден: {chat_file}")
             return {"error": "chat_file_not_found"}
 
-        # Загружаем сообщения
         messages = self._load_messages(chat_file)
         if not messages:
             logger.warning(f"Нет сообщений в чате {chat_name}")
             return {"messages_count": 0}
 
-        # Определяем тип чата
         if not state.chat_type:
             state.chat_type = self._detect_chat_type(messages)
             logger.info(f"Тип чата определен: {state.chat_type}")
 
-        # Выбираем стратегию
         strategy = CHANNEL_STRATEGY if state.chat_type == "channel" else SMART_STRATEGY
 
         current_date = datetime.now(datetime.now().astimezone().tzinfo)
 
-        # Сначала сортируем все сообщения по времени для правильной хронологии
         sorted_messages = sorted(
             messages,
             key=lambda x: self._parse_date(x.get("date_utc", "")) or datetime.min,
         )
 
-        # Группируем по окнам
         windowed_messages = self._group_messages_by_window(
             sorted_messages, current_date, strategy
         )
@@ -903,25 +829,22 @@ class SmartRollingAggregator:
             "total_messages": len(messages),
             "windows": {},
             "now_window": None,
-            "sessions": [],  # Добавляем пустой список сессий для совместимости
+            "sessions": [],
         }
 
-        # Создаем временно сгруппированные сессии (временная группировка)
         temp_sessions = self._create_sessions_for_indexing(
             windowed_messages, chat_name, state.chat_type
         )
 
-        # Обрабатываем NOW окно отдельно (без батч-обработки)
         if "now" in windowed_messages:
             now_stats = await self._process_now_window(
                 windowed_messages["now"], chat_name, state, dry_run
             )
             stats["now_window"] = now_stats
 
-        # Обрабатываем остальные окна
         for window in strategy:
             if window.name == "now":
-                continue  # Уже обработали
+                continue
 
             window_messages = windowed_messages.get(window.name, [])
             if not window_messages:
@@ -937,7 +860,6 @@ class SmartRollingAggregator:
                 "summarize": window.summarize,
             }
 
-        # Батч-обработка с семантической перегруппировкой
         if not dry_run and temp_sessions:
             processed_sessions = await self._process_sessions_with_batching(
                 temp_sessions, chat_name
@@ -946,11 +868,9 @@ class SmartRollingAggregator:
         else:
             stats["sessions"] = temp_sessions
 
-        # Сохраняем накопительный контекст в файл
         if not dry_run:
             self.context_manager.flush_accumulative_context(chat_name)
 
-        # Обновляем состояние
         state.last_aggregation_time = current_date
 
         if not dry_run:
@@ -971,18 +891,8 @@ class SmartRollingAggregator:
         Алгоритм:
         1. Получаем накопительный контекст
         2. Создаем батчи из сессий
-        3. Для каждого батча:
-           a) Семантическая перегруппировка через LLM
-           b) Батч-саммаризация
-           c) Обновление накопительного контекста
+        3. Для каждого батча: семантическая перегруппировка → батч-саммаризация → обновление контекста
         4. Возвращаем обработанные сессии
-
-        Args:
-            sessions: Список временно сгруппированных сессий
-            chat_name: Название чата
-
-        Returns:
-            Список обработанных сессий
         """
         if not sessions:
             return []
@@ -991,31 +901,25 @@ class SmartRollingAggregator:
             f"Батч-обработка {len(sessions)} сессий для чата {chat_name}"
         )
 
-        # Получаем накопительный контекст
         accumulative_context = self.context_manager.get_accumulative_context(chat_name)
 
-        # Создаем батчи
         batches = self.batch_processor.create_batches(
             sessions, accumulative_context
         )
 
         processed_sessions = []
 
-        # Обрабатываем каждый батч
         for batch_idx, batch in enumerate(batches, 1):
             logger.info(
                 f"Обработка батча {batch_idx}/{len(batches)}: {len(batch)} сессий"
             )
 
-            # Получаем актуальный накопительный контекст для этого батча
             current_context = self.context_manager.get_accumulative_context(chat_name)
 
-            # Шаг 1: Семантическая перегруппировка
             regrouped_sessions = await self.semantic_regrouper.regroup_sessions(
                 batch, chat_name, current_context
             )
 
-            # Шаг 2: Батч-саммаризация перегруппированных сессий
             try:
                 batch_result = await self.batch_processor.process_batch(
                     regrouped_sessions,
@@ -1025,7 +929,6 @@ class SmartRollingAggregator:
                 )
             except Exception as e:
                 logger.error(f"Ошибка при батч-обработке: {e}")
-                # В случае ошибки используем оригинальные сессии без саммаризации
                 batch_result = {
                     "sessions": regrouped_sessions,
                     "total_tokens": 0,
@@ -1033,7 +936,6 @@ class SmartRollingAggregator:
                     "detailed_summaries": [],
                 }
 
-            # Шаг 3: Обновляем накопительный контекст после каждого обработанного батча
             if isinstance(batch_result, dict):
                 for processed_session in batch_result.get("sessions", []):
                     if isinstance(processed_session, dict):
@@ -1064,17 +966,15 @@ class SmartRollingAggregator:
         chat_type: str,
     ) -> List[Dict[str, Any]]:
         """
-        Создает сессии для основного пайплайна индексации
+        Создает сессии для основного пайплайна индексации.
 
-        Для чатов/групп: сначала объединяет все сообщения, потом группирует по связанности
-        Для каналов: создает сессии по окнам
+        Для чатов/групп: объединяет все сообщения и группирует по связанности.
+        Для каналов: создает сессии по окнам.
         """
         sessions = []
         session_counter = 1
 
         if chat_type in ["chat", "group"]:
-            # Для чатов/групп объединяем все сообщения и группируем по связанности
-            # Порядок: от старых к новым для правильной хронологии
             all_messages = []
             for window_name in ["old", "recent", "fresh", "now"]:
                 window_messages = windowed_messages.get(window_name, [])
@@ -1085,13 +985,9 @@ class SmartRollingAggregator:
                     f"Создание сессий по связанности для чата '{chat_name}': {len(all_messages)} сообщений"
                 )
 
-                # Группируем все сообщения по связанности (не по окнам!)
                 all_sessions = self._group_by_sessions(all_messages, chat_name)
 
-                # Если сессий слишком много, используем умную стратегию группировки
-                if (
-                    len(all_sessions) > len(all_messages) // 10
-                ):  # Если больше 10% от сообщений
+                if len(all_sessions) > len(all_messages) // 10:
                     logger.info(
                         f"Слишком много сессий ({len(all_sessions)}), переключаемся на умную группировку"
                     )
@@ -1100,13 +996,11 @@ class SmartRollingAggregator:
                     )
 
                 for session in all_sessions:
-                    # Определяем окно для сессии на основе времени
                     session_start = self._parse_date(session.get("start_time", ""))
                     if session_start:
                         current_date = datetime.now(datetime.now().astimezone().tzinfo)
                         age_days = (current_date - session_start).days
 
-                        # Определяем окно для сессии
                         if age_days <= 1:
                             window_name = "now"
                         elif age_days <= 14:
@@ -1118,7 +1012,6 @@ class SmartRollingAggregator:
                     else:
                         window_name = "unknown"
 
-                    # Добавляем информацию о окне
                     session["window"] = window_name
                     session["chat"] = chat_name
                     session["session_id"] = f"{chat_name}-S{session_counter:04d}"
@@ -1126,8 +1019,6 @@ class SmartRollingAggregator:
                     session_counter += 1
 
         else:
-            # Для каналов создаем сессии по окнам с правильным разбиением
-            # Порядок: от старых к новым для правильной хронологии
             window_order = ["old", "recent", "fresh", "now"]
 
             for window_name in window_order:
@@ -1139,7 +1030,6 @@ class SmartRollingAggregator:
                     f"Создание сессий из окна '{window_name}': {len(window_messages)} сообщений"
                 )
 
-                # Определяем стратегию группировки для окна
                 if window_name == "old":
                     group_strategy = "month"
                 elif window_name == "recent":
@@ -1149,7 +1039,6 @@ class SmartRollingAggregator:
                 else:  # now
                     group_strategy = "session"
 
-                # Используем DayGroupingSegmenter для разбиения сообщений
                 from ..analysis.day_grouping import DayGroupingSegmenter
 
                 segmenter = DayGroupingSegmenter()
@@ -1158,7 +1047,6 @@ class SmartRollingAggregator:
                     window_messages, chat_name, group_strategy
                 )
 
-                # Добавляем информацию об окне к каждой сессии
                 for session in window_sessions:
                     session["window"] = window_name
                     session["chat"] = chat_name
@@ -1178,19 +1066,13 @@ class SmartRollingAggregator:
     async def _update_chat_context(
         self, chat_name: str, sessions: List[Dict[str, Any]], chat_type: str
     ) -> None:
-        """
-        Создает/обновляет накопительный контекст чата
-
-        Создает файл {chat_name}_context.md с единым образом чата
-        """
+        """Создает/обновляет накопительный контекст чата в файле {chat_name}_context.md."""
         if not sessions:
             return
 
-        # Создаем директорию для контекстных файлов
         context_dir = Path("artifacts/chat_contexts")
         context_dir.mkdir(exist_ok=True)
 
-        # Загружаем существующий контекст
         context_file = context_dir / f"{chat_name}_context.md"
         existing_context = ""
         if context_file.exists():
@@ -1200,10 +1082,8 @@ class SmartRollingAggregator:
             except Exception as e:
                 logger.warning(f"Не удалось загрузить существующий контекст: {e}")
 
-        # Получаем последние сессии для обновления контекста
-        recent_sessions = sessions[-10:]  # Последние 10 сессий
+        recent_sessions = sessions[-10:]
 
-        # Создаем промпт для обновления контекста
         sessions_text = []
         for session in recent_sessions:
             session_id = session.get("session_id", "unknown")
@@ -1211,7 +1091,7 @@ class SmartRollingAggregator:
             messages = session.get("messages", [])
 
             session_summary = f"Сессия {session_id} (окно: {window}):\n"
-            for msg in messages[:5]:  # Первые 5 сообщений
+            for msg in messages[:5]:
                 sender = msg.get("from", {})
                 sender_name = (
                     sender.get("display", "Unknown")
@@ -1247,21 +1127,18 @@ class SmartRollingAggregator:
                 updated_context = await self.ollama_client.generate_summary(
                     prompt=prompt,
                     temperature=0.3,
-                    max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
+                    max_tokens=131072,
                 )
 
-            # Извлекаем данные из сессий для новых разделов
             all_key_points = []
             all_important_items = []
             all_discussions = []
-            all_risks_with_time = []  # Риски с информацией о времени
+            all_risks_with_time = []
 
-            # Определяем временную границу для актуальных рисков (30 дней назад)
             now = datetime.now(ZoneInfo("UTC"))
             thirty_days_ago = now - timedelta(days=30)
 
             for session in sessions:
-                # Извлекаем key_points и important_items из topics или напрямую
                 topics = session.get("topics", [])
                 for topic in topics:
                     if topic.get("key_points"):
@@ -1271,7 +1148,6 @@ class SmartRollingAggregator:
                     if topic.get("discussion"):
                         all_discussions.extend(topic.get("discussion", []))
 
-                # Если не нашли в topics, пробуем напрямую из session
                 if not all_key_points:
                     all_key_points.extend(session.get("key_points", []))
                 if not all_important_items:
@@ -1279,7 +1155,6 @@ class SmartRollingAggregator:
                 if not all_discussions:
                     all_discussions.extend(session.get("discussion", []))
 
-                # Извлекаем риски с информацией о времени
                 meta = session.get("meta", {})
                 end_time_utc = meta.get("end_time_utc", "")
                 risks = session.get("risks", [])
@@ -1292,7 +1167,6 @@ class SmartRollingAggregator:
                             "session_id": session.get("session_id", "unknown"),
                         })
 
-            # Нормализуем формат элементов
             def normalize_items(items):
                 result = []
                 for item in items:
@@ -1307,17 +1181,14 @@ class SmartRollingAggregator:
             all_important_items = normalize_items(all_important_items)
             all_discussions = normalize_items(all_discussions)
 
-            # Объединяем планы и задачи
             plans_and_tasks = all_key_points + all_important_items
 
-            # Фильтруем актуальные риски
             recent_sessions_ids = {s.get("session_id", "") for s in sessions[-10:]}
             active_risks = []
             for risk_info in all_risks_with_time:
                 is_recent = False
                 end_time_utc = risk_info.get("end_time_utc", "")
 
-                # Проверяем по времени
                 if end_time_utc:
                     try:
                         from ..utils.datetime_utils import parse_datetime_utc
@@ -1329,7 +1200,6 @@ class SmartRollingAggregator:
                     except Exception:
                         pass
 
-                # Проверяем по последним сессиям
                 if risk_info["session_id"] in recent_sessions_ids:
                     is_recent = True
 
@@ -1346,24 +1216,21 @@ class SmartRollingAggregator:
                 f.write(updated_context.strip())
                 f.write("\n\n")
 
-                # Добавляем раздел "Планы и задачи"
                 if plans_and_tasks:
                     f.write("## Планы и задачи\n\n")
-                    for item in plans_and_tasks[-20:]:  # Последние 20 элементов
+                    for item in plans_and_tasks[-20:]:
                         f.write(f"- {item}\n")
                     f.write("\n")
 
-                # Добавляем раздел "Проблемы и открытые вопросы"
                 if active_risks:
                     f.write("## Проблемы и открытые вопросы\n\n")
-                    for risk in active_risks[-15:]:  # Последние 15 рисков
+                    for risk in active_risks[-15:]:
                         f.write(f"- {risk}\n")
                     f.write("\n")
 
-                # Добавляем раздел "Активные обсуждения"
                 if all_discussions:
                     f.write("## Активные обсуждения\n\n")
-                    for discussion in all_discussions[-10:]:  # Последние 10 обсуждений
+                    for discussion in all_discussions[-10:]:
                         f.write(f"- {discussion}\n")
                     f.write("\n")
 
