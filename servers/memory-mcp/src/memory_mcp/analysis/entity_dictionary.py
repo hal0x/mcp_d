@@ -1897,57 +1897,130 @@ class EntityDictionary:
             # Ищем EntityNode для этой сущности
             entity_id = f"entity-{normalized_value.replace(' ', '-')}"
             
-            # Пытаемся использовать FTS поиск, но если это вызывает thread safety ошибку, пропускаем
+            # ВАЖНО: Ищем напрямую в DocChunk узлах по полю entities в properties
+            # Это более надежный способ, так как сущности могут быть сохранены без создания EntityNode
+            try:
+                # Ищем через SQLite напрямую в properties узлов
+                cursor = self.graph.conn.cursor()
+                # Ищем узлы, где entities содержит нормализованное значение
+                # Используем LIKE для поиска в JSON массиве
+                cursor.execute("""
+                    SELECT id, properties, content, source, timestamp, author
+                    FROM nodes
+                    WHERE type = 'DocChunk'
+                    AND properties IS NOT NULL
+                    AND (
+                        properties LIKE ? OR
+                        properties LIKE ?
+                    )
+                    LIMIT 200
+                """, (
+                    f'%"entities"%{normalized_value}%',
+                    f'%{normalized_value}%"entities"%',
+                ))
+                
+                rows = cursor.fetchall()
+                for row in rows:
+                    node_id = row[0]
+                    properties_json = row[1]
+                    content = row[2] or ""
+                    source = row[3] or ""
+                    timestamp = row[4] or ""
+                    author = row[5] or ""
+                    
+                    # Парсим properties и проверяем, что сущность действительно есть в списке
+                    try:
+                        import json
+                        properties = json.loads(properties_json) if isinstance(properties_json, str) else properties_json
+                        entities = properties.get("entities", [])
+                        
+                        # Проверяем, что нормализованное значение есть в списке сущностей
+                        # Используем нормализацию для сравнения
+                        entity_found = False
+                        for entity in entities:
+                            if entity and self._normalize_entity_value(str(entity)) == normalized_value:
+                                entity_found = True
+                                break
+                        
+                        if entity_found and content and len(content) > 10:
+                            context = {
+                                "node_id": node_id,
+                                "content": content[:500],  # Ограничиваем длину
+                                "source": source or properties.get("source", ""),
+                                "chat": properties.get("chat") or properties.get("source", "") or source,
+                                "author": author or properties.get("author", ""),
+                                "timestamp": timestamp or properties.get("timestamp") or properties.get("date_utc", ""),
+                                "tags": properties.get("tags", []),
+                            }
+                            contexts.append(context)
+                    except Exception as parse_error:
+                        logger.debug(f"Ошибка при парсинге properties для узла {node_id}: {parse_error}")
+                        continue
+            except Exception as sql_error:
+                if "thread" in str(sql_error).lower() or "SQLite" in str(sql_error):
+                    logger.debug(f"Пропускаем SQL поиск из-за thread safety: {sql_error}")
+                else:
+                    logger.warning(f"Ошибка при SQL поиске контекстов: {sql_error}")
+            
+            # Также ищем через FTS5 в поле entities
+            try:
+                cursor = self.graph.conn.cursor()
+                # Ищем в FTS5 таблице node_search по полю entities
+                cursor.execute("""
+                    SELECT node_id, content, source, tags
+                    FROM node_search
+                    WHERE entities MATCH ?
+                    LIMIT 100
+                """, (normalized_value,))
+                
+                rows = cursor.fetchall()
+                seen_node_ids = {ctx["node_id"] for ctx in contexts}
+                for row in rows:
+                    node_id = row[0]
+                    if node_id in seen_node_ids:
+                        continue
+                    
+                    # Получаем полные данные узла из графа
+                    if node_id in self.graph.graph:
+                        node_data = self.graph.graph.nodes[node_id]
+                        node_type = node_data.get("type")
+                        
+                        if node_type == NodeType.DOC_CHUNK.value or node_type == NodeType.DOC_CHUNK:
+                            content = node_data.get("content", "") or row[1] or ""
+                            properties = node_data.get("properties", {})
+                            
+                            if content and len(content) > 10:
+                                context = {
+                                    "node_id": node_id,
+                                    "content": content[:500],
+                                    "source": row[2] or properties.get("source", ""),
+                                    "chat": properties.get("chat") or properties.get("source", "") or row[2] or "",
+                                    "author": properties.get("author", ""),
+                                    "timestamp": properties.get("timestamp") or properties.get("date_utc", ""),
+                                    "tags": properties.get("tags", []) or (row[3].split() if row[3] else []),
+                                }
+                                contexts.append(context)
+                                seen_node_ids.add(node_id)
+            except Exception as fts_error:
+                if "thread" in str(fts_error).lower() or "SQLite" in str(fts_error):
+                    logger.debug(f"Пропускаем FTS5 поиск из-за thread safety: {fts_error}")
+                else:
+                    logger.debug(f"Ошибка при FTS5 поиске контекстов: {fts_error}")
+            
+            # Пытаемся использовать FTS поиск по содержимому, но если это вызывает thread safety ошибку, пропускаем
             search_results = []
             try:
                 search_results, _ = self.graph.search_text(
                     query=normalized_value,
-                    limit=100,  # Берем больше результатов для полной картины
+                    limit=50,  # Берем меньше результатов, так как уже есть результаты из SQL
                 )
             except Exception as search_error:
                 if "thread" in str(search_error).lower() or "SQLite" in str(search_error):
                     logger.debug(f"Пропускаем FTS поиск из-за thread safety: {search_error}")
                 else:
-                    raise
+                    logger.debug(f"Ошибка при FTS поиске: {search_error}")
             
-            # Также ищем через граф - находим DocChunk узлы, связанные с EntityNode
-            # Используем только NetworkX граф, без обращения к SQLite
-            try:
-                if entity_id in self.graph.graph:
-                    # Получаем все узлы, которые упоминают эту сущность
-                    neighbors = self.graph.get_neighbors(
-                        entity_id,
-                        edge_type=EdgeType.MENTIONS,
-                        direction="in",  # Входящие связи (DocChunk -> mentions -> Entity)
-                    )
-                    
-                    for neighbor_id, edge_data in neighbors:
-                        if neighbor_id in self.graph.graph:
-                            node_data = self.graph.graph.nodes[neighbor_id]
-                            node_type = node_data.get("type")
-                            
-                            if node_type == NodeType.DOC_CHUNK.value or node_type == NodeType.DOC_CHUNK:
-                                content = node_data.get("content", "")
-                                properties = node_data.get("properties", {})
-                                
-                                if content and len(content) > 10:
-                                    context = {
-                                        "node_id": neighbor_id,
-                                        "content": content,
-                                        "source": properties.get("source", ""),
-                                        "chat": properties.get("chat") or properties.get("source", ""),
-                                        "author": properties.get("author", ""),
-                                        "timestamp": properties.get("timestamp") or properties.get("date_utc", ""),
-                                        "tags": properties.get("tags", []),
-                                    }
-                                    contexts.append(context)
-            except Exception as graph_error:
-                if "thread" in str(graph_error).lower() or "SQLite" in str(graph_error):
-                    logger.debug(f"Пропускаем поиск через граф из-за thread safety: {graph_error}")
-                else:
-                    raise
-            
-            # Добавляем контексты из FTS поиска
+            # Добавляем контексты из FTS поиска (если еще не добавлены)
             seen_node_ids = {ctx["node_id"] for ctx in contexts}
             for result in search_results:
                 node_id = result.get("node_id")
@@ -1978,7 +2051,48 @@ class EntityDictionary:
                         if "thread" in str(node_error).lower() or "SQLite" in str(node_error):
                             logger.debug(f"Пропускаем узел {node_id} из-за thread safety: {node_error}")
                         else:
-                            raise
+                            logger.debug(f"Ошибка при обработке узла {node_id}: {node_error}")
+            
+            # Также ищем через граф - находим DocChunk узлы, связанные с EntityNode
+            # Используем только NetworkX граф, без обращения к SQLite
+            try:
+                if entity_id in self.graph.graph:
+                    # Получаем все узлы, которые упоминают эту сущность
+                    neighbors = self.graph.get_neighbors(
+                        entity_id,
+                        edge_type=EdgeType.MENTIONS,
+                        direction="in",  # Входящие связи (DocChunk -> mentions -> Entity)
+                    )
+                    
+                    seen_node_ids = {ctx["node_id"] for ctx in contexts}
+                    for neighbor_id, edge_data in neighbors:
+                        if neighbor_id in seen_node_ids:
+                            continue
+                        if neighbor_id in self.graph.graph:
+                            node_data = self.graph.graph.nodes[neighbor_id]
+                            node_type = node_data.get("type")
+                            
+                            if node_type == NodeType.DOC_CHUNK.value or node_type == NodeType.DOC_CHUNK:
+                                content = node_data.get("content", "")
+                                properties = node_data.get("properties", {})
+                                
+                                if content and len(content) > 10:
+                                    context = {
+                                        "node_id": neighbor_id,
+                                        "content": content,
+                                        "source": properties.get("source", ""),
+                                        "chat": properties.get("chat") or properties.get("source", ""),
+                                        "author": properties.get("author", ""),
+                                        "timestamp": properties.get("timestamp") or properties.get("date_utc", ""),
+                                        "tags": properties.get("tags", []),
+                                    }
+                                    contexts.append(context)
+                                    seen_node_ids.add(neighbor_id)
+            except Exception as graph_error:
+                if "thread" in str(graph_error).lower() or "SQLite" in str(graph_error):
+                    logger.debug(f"Пропускаем поиск через граф из-за thread safety: {graph_error}")
+                else:
+                    logger.debug(f"Ошибка при поиске через граф: {graph_error}")
             
             # Группируем по чатам и сортируем по времени
             contexts_by_chat = {}
