@@ -1395,18 +1395,24 @@ class MemoryServiceAdapter:
             logger.warning(f"Не удалось проверить схему таблицы 'nodes': {e}")
 
         # Подсчитываем источники из графа
+        # ВАЖНО: Используем ту же логику, что и в get_timeline для консистентности
         try:
             cursor.execute(
                 """
                 SELECT properties FROM nodes
-                WHERE type = 'DocChunk'
+                WHERE type = 'DocChunk' AND properties IS NOT NULL
             """
             )
             for row in cursor.fetchall():
                 if row["properties"]:
-                    props = json.loads(row["properties"])
-                    source = props.get("source", "unknown")
-                    sources_count[source] = sources_count.get(source, 0) + 1
+                    try:
+                        props = json.loads(row["properties"]) if isinstance(row["properties"], str) else row["properties"]
+                        # Используем ту же логику, что и в get_timeline: source или chat
+                        source = props.get("source") or props.get("chat", "unknown")
+                        sources_count[source] = sources_count.get(source, 0) + 1
+                    except (json.JSONDecodeError, TypeError):
+                        logger.debug(f"Не удалось распарсить properties для подсчёта статистики: {row.get('id', 'unknown')}")
+                        continue
         except Exception as e:
             logger.warning(f"Ошибка при подсчёте источников из графа: {e}")
 
@@ -1427,67 +1433,10 @@ class MemoryServiceAdapter:
         except Exception as e:
             logger.warning(f"Ошибка при подсчёте тегов из графа: {e}")
 
-        # Добавляем статистику из Qdrant коллекций
-        try:
-            from ..memory.qdrant_collections import QdrantCollectionsManager
-            from ..config import get_settings
-            
-            settings = get_settings()
-            qdrant_url = settings.get_qdrant_url()
-            if qdrant_url:
-                # Получаем размерность эмбеддингов
-                embedding_dimension = self.embedding_service.dimension if self.embedding_service else 1024
-                qdrant_manager = QdrantCollectionsManager(url=qdrant_url, vector_size=embedding_dimension)
-                
-                if qdrant_manager.available():
-                    for collection_name in ["chat_messages", "chat_sessions", "chat_tasks"]:
-                        try:
-                            # Используем count() для получения общего количества записей
-                            total_count = qdrant_manager.count(collection_name)
-                            
-                            # Получаем все метаданные для подсчёта источников и тегов
-                            # Используем get с limit для больших коллекций
-                            all_metadatas = []
-                            limit = 1000
-                            offset = None
-                            
-                            # Qdrant не поддерживает offset напрямую, получаем все сразу
-                            # Для больших коллекций это может быть медленно, но для статистики приемлемо
-                            result = qdrant_manager.get(
-                                collection_name=collection_name,
-                                limit=total_count if total_count < 10000 else 10000  # Ограничиваем для производительности
-                            )
-                            
-                            batch_metadatas = result.get("metadatas", [])
-                            all_metadatas.extend(batch_metadatas)
-                            
-                            # Подсчитываем источники и теги
-                            for metadata in all_metadatas:
-                                if not isinstance(metadata, dict):
-                                    continue
-                                
-                                # Подсчитываем источники (чаты)
-                                chat = metadata.get("chat")
-                                if chat:
-                                    sources_count[chat] = sources_count.get(chat, 0) + 1
-                                else:
-                                    # Если chat не указан, используем имя коллекции
-                                    source_name = collection_name.replace("chat_", "")
-                                    sources_count[source_name] = sources_count.get(source_name, 0) + 1
-                                
-                                # Подсчитываем теги
-                                tags = metadata.get("tags", [])
-                                if isinstance(tags, str):
-                                    tags = [tags] if tags else []
-                                if isinstance(tags, list):
-                                    for tag in tags:
-                                        if tag:  # Пропускаем пустые теги
-                                            tags_count[tag] = tags_count.get(tag, 0) + 1
-                        except Exception as e:
-                            logger.debug(f"Ошибка при подсчёте статистики из коллекции {collection_name}: {e}")
-                            continue
-        except Exception as e:
-            logger.debug(f"Ошибка при подсчёте статистики из Qdrant: {e}")
+        # ВАЖНО: НЕ добавляем статистику из Qdrant коллекций в sources_count
+        # Это приводит к дублированию, так как записи уже учтены в графе
+        # Qdrant используется только для векторного поиска, а граф - основной источник истины
+        # Если нужно добавить статистику из Qdrant, это должно быть отдельным полем
 
         # Получаем размер БД
         db_size = None
