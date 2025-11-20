@@ -880,12 +880,12 @@ class LMStudioEmbeddingClient:
                                 logger.error("LM Studio вернул неожиданный формат данных")
                                 return "Ошибка генерации: неожиданный формат ответа"
                         else:
-                        error_text = await response.text()
-                        logger.error(f"Ошибка API LM Studio: {response.status} - {error_text}")
-                        if attempt < 1:
-                            await asyncio.sleep(3 + random.uniform(0, 1))
-                            continue
-                        return f"Ошибка генерации: HTTP {response.status}"
+                            error_text = await response.text()
+                            logger.error(f"Ошибка API LM Studio: {response.status} - {error_text}")
+                            if attempt < 1:
+                                await asyncio.sleep(3 + random.uniform(0, 1))
+                                continue
+                            return f"Ошибка генерации: HTTP {response.status}"
             except aiohttp.ClientError as e:
                 error_str = str(e)
                 is_connection_reset = "Connection reset" in error_str or "Errno 54" in error_str
