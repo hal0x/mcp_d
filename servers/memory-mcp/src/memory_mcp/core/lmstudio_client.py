@@ -846,7 +846,7 @@ class LMStudioEmbeddingClient:
                     ) as response:
                         if response.status == 200:
                             data = await response.json()
-                        if "choices" in data and len(data["choices"]) > 0:
+                            if "choices" in data and len(data["choices"]) > 0:
                             choice = data["choices"][0]
                             message = choice.get("message", {})
                             
