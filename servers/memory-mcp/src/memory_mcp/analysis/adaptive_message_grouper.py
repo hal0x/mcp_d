@@ -24,7 +24,7 @@ class AdaptiveMessageGrouper:
 
     def __init__(
         self,
-        max_tokens: int = 126000,  # Доступно для сообщений (131072 - 5000 резерв)
+        max_tokens: int = 25000,  # Доступно для сообщений (30000 - 5000 резерв)
         prompt_reserve_tokens: int = 5000,
         avg_tokens_per_char: float = 0.25,  # ~4 символа на токен
         min_group_size_tokens: int = 50000,  # Минимум для эффективного использования

@@ -25,9 +25,9 @@ class LargeContextProcessor:
 
     def __init__(
         self,
-        max_tokens: int = 131072,  # Максимальный контекст модели
+        max_tokens: int = 30000,  # Максимальный контекст модели (уменьшено для предотвращения таймаутов)
         prompt_reserve_tokens: int = 5000,
-        hierarchical_threshold: int = 100000,  # Порог для иерархической обработки
+        hierarchical_threshold: int = 25000,  # Порог для иерархической обработки (уменьшено)
         embedding_client: Optional[LMStudioEmbeddingClient | OllamaEmbeddingClient] = None,
         enable_hierarchical: bool = True,
         enable_caching: bool = True,
