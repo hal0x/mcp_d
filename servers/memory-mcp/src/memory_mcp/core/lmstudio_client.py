@@ -801,11 +801,51 @@ class LMStudioEmbeddingClient:
                         headers={"Connection": "keep-alive"},  # Keep-alive для длительных запросов
                     )
                 
-                async with self.session.post(
-                    f"{self.base_url}/v1/chat/completions", json=payload
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
+                # Для очень длинных промптов используем streaming, чтобы предотвратить отключение
+                # Streaming позволяет клиенту получать данные во время генерации
+                use_streaming = len(prompt) > 50000  # ~12.5k токенов
+                
+                if use_streaming:
+                    payload["stream"] = True
+                    logger.debug(f"Используется streaming для длинного промпта ({len(prompt)} символов)")
+                    
+                    async with self.session.post(
+                        f"{self.base_url}/v1/chat/completions", json=payload
+                    ) as response:
+                        if response.status == 200:
+                            content_parts = []
+                            async for line in response.content:
+                                if line:
+                                    try:
+                                        line_text = line.decode('utf-8').strip()
+                                        if line_text.startswith('data: '):
+                                            json_str = line_text[6:]  # Убираем 'data: '
+                                            if json_str == '[DONE]':
+                                                break
+                                            chunk_data = await asyncio.to_thread(lambda: __import__('json').loads(json_str))
+                                            if 'choices' in chunk_data and len(chunk_data['choices']) > 0:
+                                                delta = chunk_data['choices'][0].get('delta', {})
+                                                if 'content' in delta:
+                                                    content_parts.append(delta['content'])
+                                    except Exception as e:
+                                        logger.debug(f"Ошибка парсинга streaming chunk: {e}")
+                                        continue
+                            
+                            content = ''.join(content_parts).strip()
+                            if content:
+                                return content
+                            else:
+                                logger.warning("Streaming вернул пустой контент, пробуем обычный запрос")
+                                payload["stream"] = False
+                
+                # Обычный запрос (без streaming или fallback)
+                if not use_streaming or payload.get("stream") is False:
+                    payload["stream"] = False
+                    async with self.session.post(
+                        f"{self.base_url}/v1/chat/completions", json=payload
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
                         if "choices" in data and len(data["choices"]) > 0:
                             choice = data["choices"][0]
                             message = choice.get("message", {})
