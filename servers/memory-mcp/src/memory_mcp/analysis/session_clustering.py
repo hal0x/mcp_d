@@ -6,6 +6,7 @@
 Вдохновлено системой schemas из архитектуры HALv1.
 """
 
+import asyncio
 import logging
 from collections import Counter
 from datetime import datetime
@@ -351,14 +352,14 @@ class SessionClusterer:
         }
 
     def generate_cluster_summary(
-        self, cluster: Dict[str, Any], llm_summarizer=None
+        self, cluster: Dict[str, Any], embedding_client=None
     ) -> Dict[str, Any]:
         """
         Генерация сводки для кластера
 
         Args:
             cluster: Данные кластера
-            llm_summarizer: LLM для генерации сводки (опционально)
+            embedding_client: Embedding client для генерации LLM сводки (опционально)
 
         Returns:
             Кластер с добавленной сводкой
@@ -371,11 +372,32 @@ class SessionClusterer:
         # Базовая сводка на основе метаданных
         summary = self._generate_basic_summary(cluster)
 
-        # Если есть LLM, генерируем детальную сводку
-        if llm_summarizer:
+        # Если есть embedding_client, генерируем детальную сводку через ClusterSummarizer
+        if embedding_client:
             try:
-                llm_summary = self._generate_llm_summary(cluster, llm_summarizer)
-                summary.update(llm_summary)
+                from .cluster_summarizer import ClusterSummarizer
+                
+                summarizer = ClusterSummarizer(embedding_client)
+                # ClusterSummarizer.summarize_cluster - async метод
+                # Пытаемся запустить через asyncio.run
+                try:
+                    llm_summary = asyncio.run(summarizer.summarize_cluster(cluster))
+                except RuntimeError:
+                    # Если event loop уже запущен, пропускаем LLM генерацию
+                    logger.warning(
+                        "Не удалось запустить async генерацию сводки: event loop уже запущен. "
+                        "Используйте async версию метода или вызывайте из синхронного контекста."
+                    )
+                    llm_summary = None
+                
+                # Обновляем сводку данными из LLM
+                if llm_summary:
+                    if llm_summary.get("title"):
+                        summary["llm_title"] = llm_summary["title"]
+                    if llm_summary.get("description"):
+                        summary["llm_description"] = llm_summary["description"]
+                    if llm_summary.get("key_insights"):
+                        summary["key_insights"] = llm_summary["key_insights"]
             except Exception as e:
                 logger.error(f"Ошибка генерации LLM сводки: {e}")
 
@@ -477,31 +499,3 @@ class SessionClusterer:
         logger.info(f"Большой кластер разбит на {len(sub_clusters)} подкластеров")
         return sub_clusters
 
-    def _generate_llm_summary(
-        self, cluster: Dict[str, Any], llm_summarizer
-    ) -> Dict[str, Any]:
-        """
-        Детальная сводка через LLM
-
-        NOTE: Для полноценной генерации через LLM рекомендуется использовать
-        класс ClusterSummarizer из cluster_summarizer.py, который предоставляет
-        более продвинутую функциональность.
-
-        Args:
-            cluster: Данные кластера
-            llm_summarizer: LLM для генерации (не используется, оставлен для совместимости)
-
-        Returns:
-            Детальная сводка (пустая, так как функциональность реализована в ClusterSummarizer)
-        """
-        # Функциональность генерации через LLM реализована в ClusterSummarizer
-        # Используйте ClusterSummarizer.summarize_cluster() для полноценной генерации
-        logger.debug(
-            f"Метод _generate_llm_summary не реализован. "
-            f"Используйте ClusterSummarizer для генерации LLM сводок."
-        )
-        return {
-            "llm_title": None,
-            "llm_description": None,
-            "key_insights": [],
-        }

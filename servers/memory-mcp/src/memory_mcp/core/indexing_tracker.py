@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..utils.paths import find_project_root
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,14 +27,7 @@ class IndexingJobTracker:
         """
         # Резолвим относительный путь
         if not os.path.isabs(storage_path):
-            current_dir = Path(__file__).parent
-            project_root = current_dir
-            while project_root.parent != project_root:
-                if (project_root / "pyproject.toml").exists():
-                    break
-                project_root = project_root.parent
-            if not (project_root / "pyproject.toml").exists():
-                project_root = Path.cwd()
+            project_root = find_project_root(Path(__file__).parent)
             storage_path = str(project_root / storage_path)
 
         self.storage_path = Path(storage_path)

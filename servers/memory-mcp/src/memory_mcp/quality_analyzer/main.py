@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any, Iterable
 
-from .config import load_config
+from ..config import get_quality_analysis_settings
 from .quality_analyzer import QualityAnalyzer
 from .utils import load_chats_from_directory
 
@@ -65,7 +65,7 @@ def run_quality_analysis(
         batch_size,
     )
     try:
-        config = load_config(config_path)
+        settings = get_quality_analysis_settings(config_path)
     except Exception as exc:  # pragma: no cover - defensive
         logger.error("Failed to load quality analysis config", exc_info=True)
         raise QualityAnalysisError(
@@ -74,29 +74,29 @@ def run_quality_analysis(
 
     logger.info(
         "Конфигурация загружена: chats_dir=%s, reports_dir=%s, history_dir=%s",
-        config.chats_dir,
-        config.reports_dir,
-        config.history_dir,
+        settings.chats_dir,
+        settings.reports_dir,
+        settings.history_dir,
     )
 
     try:
         analyzer = QualityAnalyzer(
-            ollama_model=config.ollama_model,
-            ollama_base_url=config.ollama_base_url,
-            max_context_tokens=config.max_context_tokens,
-            ollama_temperature=config.temperature,
-            ollama_max_tokens=config.max_response_tokens,
-            ollama_thinking_level=config.thinking_level,
-            reports_dir=config.reports_dir,
-            history_dir=config.history_dir,
-            reports_subdir=config.quality_reports_subdir,
-            results_per_query=config.results_per_query,
-            chroma_path=config.chroma_path,
-            search_collection=config.search_collection,
-            hybrid_alpha=config.hybrid_alpha,
-            batch_max_size=config.batch_max_size,
-            system_prompt_reserve=config.system_prompt_reserve,
-            max_query_tokens=config.max_query_tokens,
+            ollama_model=settings.ollama_model,
+            ollama_base_url=settings.ollama_base_url,
+            max_context_tokens=settings.max_context_tokens,
+            ollama_temperature=settings.temperature,
+            ollama_max_tokens=settings.max_response_tokens,
+            ollama_thinking_level=settings.thinking_level,
+            reports_dir=settings.reports_dir,
+            history_dir=settings.history_dir,
+            reports_subdir=settings.quality_reports_subdir,
+            results_per_query=settings.results_per_query,
+            chroma_path=settings.chroma_path,
+            search_collection=settings.search_collection,
+            hybrid_alpha=settings.hybrid_alpha,
+            batch_max_size=settings.batch_max_size,
+            system_prompt_reserve=settings.system_prompt_reserve,
+            max_query_tokens=settings.max_query_tokens,
         )
     except Exception as exc:  # pragma: no cover - initialization errors
         logger.error("Failed to initialize QualityAnalyzer", exc_info=True)
@@ -126,7 +126,7 @@ def run_quality_analysis(
 
     try:
         filtered = load_chats_from_directory(
-            config.chats_dir,
+            settings.chats_dir,
             selected_chats,
         )
 
@@ -170,8 +170,8 @@ def run_quality_analysis(
             _analyze(
                 filtered,
                 analyzer,
-                max_queries=max_queries or config.max_queries_per_chat,
-                batch_size=batch_size or config.batch_size,
+                max_queries=max_queries or settings.max_queries_per_chat,
+                batch_size=batch_size or settings.batch_size,
                 custom_queries=custom_queries,
             )
         )

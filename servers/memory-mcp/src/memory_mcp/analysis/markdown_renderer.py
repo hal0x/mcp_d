@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-Модуль для рендеринга Markdown отчётов
-Согласно спецификации TelegramDumpManager_Spec.md
-"""
+"""Модуль для рендеринга Markdown отчётов."""
 
 import json
 import logging
@@ -12,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from ..utils.datetime_utils import format_datetime_display
 from ..utils.naming import slugify
+from ..utils.paths import find_project_root
 
 logger = logging.getLogger(__name__)
 
@@ -24,27 +22,12 @@ class MarkdownRenderer:
         output_dir: Path = Path("artifacts/reports"),
         chat_links_path: Optional[Path] = None,
     ):
-        """
-        Инициализация рендерера
-
-        Args:
-            output_dir: Директория для сохранения отчётов
-            chat_links_path: Путь к файлу chat_links.json (по умолчанию config/chat_links.json)
-        """
+        """Инициализация рендерера."""
         self.output_dir = output_dir
         self.output_dir.mkdir(exist_ok=True)
         
-        # Загружаем конфигурацию chat_links
         if chat_links_path is None:
-            # Пытаемся найти корень проекта (где находится pyproject.toml)
-            current_dir = Path(__file__).parent
-            project_root = current_dir
-            while project_root.parent != project_root:
-                if (project_root / "pyproject.toml").exists():
-                    break
-                project_root = project_root.parent
-            if not (project_root / "pyproject.toml").exists():
-                project_root = Path.cwd()
+            project_root = find_project_root(Path(__file__).parent)
             chat_links_path = project_root / "config" / "chat_links.json"
         self.chat_links = self._load_chat_links(chat_links_path)
 
@@ -80,7 +63,6 @@ class MarkdownRenderer:
         )
         md_path = sessions_dir / md_filename
 
-        # Проверяем существование артефактов
         if not force and json_path.exists() and md_path.exists():
             logger.info(f"Артефакты сессии уже существуют: {md_path}, {json_path}")
             return {"markdown": md_path, "json": json_path}
@@ -92,7 +74,6 @@ class MarkdownRenderer:
             logger.error(f"Ошибка прав доступа при сохранении {json_path}: {e}")
             raise
 
-        # Используем переданные chat_links или загруженные по умолчанию
         effective_chat_links = chat_links if chat_links is not None else self.chat_links
         
         if profile == "broadcast":
@@ -115,17 +96,15 @@ class MarkdownRenderer:
         return {"markdown": md_path, "json": json_path}
 
     def render_chat_index(
-        self, chat: str, sessions: List[Dict[str, Any]], force: bool = False
+        self, chat: str, sessions: List[Dict[str, Any]], force: bool = False, has_new_data: bool = False
     ) -> Path:
         """Создаёт JSON индекс сессий для чата."""
-
         chat_id = self._safe_name(chat)
         chat_dir = self.output_dir / chat_id
         chat_dir.mkdir(parents=True, exist_ok=True)
         index_path = chat_dir / "index.json"
 
-        # Проверяем существование индекса
-        if not force and index_path.exists():
+        if not force and not has_new_data and index_path.exists():
             logger.info(f"Индекс чата уже существует: {index_path}")
             return index_path
 
@@ -426,13 +405,13 @@ class MarkdownRenderer:
         sessions: List[Dict[str, Any]],
         top_sessions: Optional[List[Dict[str, Any]]] = None,
         force: bool = False,
+        has_new_data: bool = False,
     ) -> Path:
         """Генерирует сводный отчёт по чату в Markdown."""
         chat_id = self._safe_name(chat)
         file_path = self.output_dir / f"{chat_id}.md"
 
-        # Проверяем существование сводки
-        if not force and file_path.exists():
+        if not force and not has_new_data and file_path.exists():
             logger.info(f"Сводка чата уже существует: {file_path}")
             return file_path
 
@@ -500,41 +479,27 @@ class MarkdownRenderer:
         return file_path
 
     def render_snippets(self, session: Dict[str, Any], force: bool = False) -> Path:
-        """
-        Рендеринг ключевых сниппетов сессии
-
-        Args:
-            session: Сессия
-            force: Принудительно пересоздать файл
-
-        Returns:
-            Путь к файлу со сниппетами
-        """
+        """Рендеринг ключевых сниппетов сессии."""
         session_id = session["session_id"]
         chat = session["chat"]
 
-        # Создаём директорию для сниппетов
         snippets_dir = self.output_dir / self._safe_name(chat) / "snippets"
         snippets_dir.mkdir(parents=True, exist_ok=True)
 
-        # Создаём файл
         file_path = snippets_dir / f"{session_id}.jsonl"
 
-        # Проверяем существование файла сниппетов
         if not force and file_path.exists():
             logger.info(f"Файл сниппетов уже существует: {file_path}")
             return file_path
 
-        # Отбираем ключевые сообщения
         messages = session.get("messages", [])
         key_messages = self._select_key_messages(messages)
 
-        # Записываем в JSONL
         with open(file_path, "w", encoding="utf-8") as f:
             for msg in key_messages:
                 snippet = {
                     "msg_id": msg.get("id", ""),
-                    "text": msg.get("text", "")[:220],  # Максимум 220 символов
+                    "text": msg.get("text", "")[:220],
                     "date": msg.get("date_utc", ""),
                     "from": msg.get("from", {}),
                 }
@@ -546,35 +511,18 @@ class MarkdownRenderer:
     def _select_key_messages(
         self, messages: List[Dict[str, Any]], max_count: int = 5
     ) -> List[Dict[str, Any]]:
-        """
-        Отбор ключевых сообщений из сессии
-
-        Args:
-            messages: Список сообщений
-            max_count: Максимальное количество сниппетов
-
-        Returns:
-            Список ключевых сообщений
-        """
-        # Простая эвристика: берём первое, последнее и самые длинные
+        """Отбор ключевых сообщений из сессии."""
         if len(messages) <= max_count:
             return messages
 
-        key_messages = []
-
-        # Первое сообщение
-        key_messages.append(messages[0])
-
-        # Самые длинные сообщения (информативные)
+        key_messages = [messages[0]]
+        
         sorted_by_length = sorted(
             messages[1:-1], key=lambda x: len(x.get("text", "")), reverse=True
         )
         key_messages.extend(sorted_by_length[: max_count - 2])
-
-        # Последнее сообщение
         key_messages.append(messages[-1])
-
-        # Сортируем по времени
+        
         key_messages.sort(key=lambda x: x.get("date_utc", ""))
 
         return key_messages[:max_count]
@@ -597,17 +545,7 @@ class MarkdownRenderer:
         decision: Dict[str, Any],
         chat_links: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
-        """
-        Генерация Telegram deeplink
-
-        Args:
-            chat: Название чата
-            decision: Решение
-            chat_links: Конфигурация ссылок
-
-        Returns:
-            Deeplink или None
-        """
+        """Генерация Telegram deeplink."""
         if not chat_links:
             return None
 
@@ -624,16 +562,7 @@ class MarkdownRenderer:
         return None
 
     def _generate_fallback(self, chat: str, decision: Dict[str, Any]) -> str:
-        """
-        Генерация fallback ссылки
-
-        Args:
-            chat: Название чата
-            decision: Решение
-
-        Returns:
-            Fallback ссылка
-        """
+        """Генерация fallback ссылки."""
         msg_id = decision.get("msg_id", "")
         date = decision.get("date", "")[:10] if decision.get("date") else "unknown"
 
@@ -644,15 +573,7 @@ class MarkdownRenderer:
         return slugify(name)
 
     def _load_chat_links(self, chat_links_path: Path) -> Optional[Dict[str, Any]]:
-        """
-        Загружает конфигурацию chat_links из JSON файла.
-
-        Args:
-            chat_links_path: Путь к файлу chat_links.json
-
-        Returns:
-            Словарь с конфигурацией или None, если файл не найден
-        """
+        """Загружает конфигурацию chat_links из JSON файла."""
         if not chat_links_path.exists():
             logger.debug(f"Файл chat_links не найден: {chat_links_path}")
             return None
@@ -670,7 +591,7 @@ class MarkdownRenderer:
             return None
 
     def render_cumulative_context(
-        self, chat: str, sessions: List[Dict[str, Any]], force: bool = False
+        self, chat: str, sessions: List[Dict[str, Any]], force: bool = False, has_new_data: bool = False
     ) -> Path:
         """Создаёт файл с накопленным контекстом чата."""
         chat_id = self._safe_name(chat)
@@ -679,8 +600,7 @@ class MarkdownRenderer:
 
         file_path = chat_dir / f"{chat_id}_context.md"
 
-        # Проверяем существование файла контекста
-        if not force and file_path.exists():
+        if not force and not has_new_data and file_path.exists():
             logger.info(f"Файл контекста уже существует: {file_path}")
             return file_path
 

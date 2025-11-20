@@ -2562,7 +2562,8 @@ class MemoryServiceAdapter:
 
         summaries_dir = Path(request.summaries_dir or "artifacts/reports")
         # chroma_path больше не используется, заменено на Qdrant
-        chroma_path = Path("./chroma_db")  # Deprecated, не используется
+        # Используем дефолтное значение для SummaryInsightAnalyzer (он все еще использует ChromaDB для некоторых операций)
+        chroma_path = Path("./chroma_db")
 
         analyzer = SummaryInsightAnalyzer(
             summaries_dir=summaries_dir,
@@ -2619,7 +2620,6 @@ class MemoryServiceAdapter:
         
         # Инициализируем индексатор с графом памяти
         indexer = TwoLevelIndexer(
-            chroma_path=settings.chroma_path,  # Deprecated, не используется (заменено на Qdrant)
             artifacts_path=settings.artifacts_path,
             embedding_client=embedding_client,
             enable_smart_aggregation=True,

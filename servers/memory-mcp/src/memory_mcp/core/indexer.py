@@ -36,7 +36,6 @@ class TwoLevelIndexer:
 
     def __init__(
         self,
-        chroma_path: str = "./artifacts/chroma_db",  # Deprecated: оставлено для совместимости, не используется
         artifacts_path: str = "./artifacts",
         embedding_client: Optional[LMStudioEmbeddingClient] = None,
         enable_quality_check: bool = True,
@@ -63,7 +62,6 @@ class TwoLevelIndexer:
         """Инициализирует индексатор с указанными параметрами.
 
         Args:
-            chroma_path: Deprecated параметр (не используется, заменено на Qdrant)
             artifacts_path: Каталог с артефактами (reports, контексты, коллекции)
             embedding_client: Клиент для генерации эмбеддингов (LM Studio)
             enable_quality_check: Включить проверку качества саммаризации
@@ -105,7 +103,6 @@ class TwoLevelIndexer:
             self.qdrant_manager = None
         
         # Qdrant используется для векторного хранилища
-        self.chroma_client = None  # Deprecated (не используется)
         
         self.artifacts_path = Path(artifacts_path).expanduser()
         self.artifacts_path.mkdir(parents=True, exist_ok=True)

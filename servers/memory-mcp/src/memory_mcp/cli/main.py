@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Set, Tuple
 import click
 
 from ..utils.russian_tokenizer import tokenize_text as enhanced_tokenize
+from ..utils.paths import find_project_root
 
 # Отключаем телеметрию ChromaDB
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -665,7 +666,6 @@ def index(
             llm_model_name=settings.lmstudio_llm_model,
             base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
         )
-        chroma_path = os.getenv("MEMORY_MCP_CHROMA_PATH") or settings.chroma_path
         
         # Определяем callback функцию для обновления прогресса
         def progress_callback(job_id: str, event: str, data: Dict) -> None:
@@ -730,15 +730,8 @@ def index(
         from ..memory.typed_graph import TypedGraphMemory
         db_path = settings.db_path
         if not Path(db_path).is_absolute():
-            # Ищем корень проекта по pyproject.toml (как в mcp/server.py)
-            current_dir = Path(__file__).parent
-            project_root = current_dir
-            while project_root.parent != project_root:
-                if (project_root / "pyproject.toml").exists():
-                    break
-                project_root = project_root.parent
-            if not (project_root / "pyproject.toml").exists():
-                project_root = Path.cwd()
+            # Ищем корень проекта по pyproject.toml
+            project_root = find_project_root(Path(__file__).parent)
             db_path = str(project_root / db_path)
         db_path_obj = Path(db_path)
         db_path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -746,7 +739,6 @@ def index(
         logger.info(f"Инициализирован граф памяти: {db_path}")
         
         indexer = TwoLevelIndexer(
-            chroma_path=chroma_path,
             artifacts_path=settings.artifacts_path,
             embedding_client=embedding_client,
             enable_quality_check=not no_quality_check,

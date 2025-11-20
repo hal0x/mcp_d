@@ -204,6 +204,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      memory-qdrant:
+        condition: service_started
     # healthcheck:
     #   test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8050), 3).close()'"]
     #   interval: 30s

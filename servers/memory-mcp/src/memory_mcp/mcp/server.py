@@ -18,6 +18,8 @@ from pydantic import BaseModel
 
 from ..quality_analyzer.utils.error_handler import format_error_message
 from ..config import get_settings
+from ..utils.paths import find_project_root
+from ..utils.datetime_utils import parse_datetime_utc
 
 from .adapters import MemoryServiceAdapter
 from ..memory.artifacts_reader import ArtifactsReader
@@ -132,14 +134,7 @@ def _get_adapter() -> MemoryServiceAdapter:
         settings = get_settings()
         db_path = settings.db_path
         if not os.path.isabs(db_path):
-            current_dir = Path(__file__).parent
-            project_root = current_dir
-            while project_root.parent != project_root:
-                if (project_root / "pyproject.toml").exists():
-                    break
-                project_root = project_root.parent
-            if not (project_root / "pyproject.toml").exists():
-                project_root = Path.cwd()
+            project_root = find_project_root(Path(__file__).parent)
             db_path = str(project_root / db_path)
         db_path_obj = Path(db_path)
         db_path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -176,14 +171,7 @@ def _get_smart_search_engine():
         
         session_db_path = os.getenv("SMART_SEARCH_SESSION_STORE_PATH", "data/search_sessions.db")
         if not os.path.isabs(session_db_path):
-            current_dir = Path(__file__).parent
-            project_root = current_dir
-            while project_root.parent != project_root:
-                if (project_root / "pyproject.toml").exists():
-                    break
-                project_root = project_root.parent
-            if not (project_root / "pyproject.toml").exists():
-                project_root = Path.cwd()
+            project_root = find_project_root(Path(__file__).parent)
             session_db_path = str(project_root / session_db_path)
         
         session_store = SearchSessionStore(db_path=session_db_path)
@@ -225,21 +213,6 @@ def _format_tool_response(payload: Any, *, root_key: str = "result") -> ToolResp
         text_payload = {root_key: serialized}
     text = json.dumps(text_payload, indent=2, ensure_ascii=False)
     return ([TextContent(type="text", text=text)], structured)
-
-
-def _parse_date_safe(date_str: str | None) -> datetime | None:
-    """Парсит ISO 8601 дату с обработкой ошибок.
-    
-    Поддерживает формат с 'Z' (UTC), заменяя его на '+00:00' для fromisoformat.
-    """
-    if not date_str:
-        return None
-    try:
-        normalized = date_str.replace("Z", "+00:00")
-        return datetime.fromisoformat(normalized)
-    except (ValueError, AttributeError) as e:
-        logger.warning(f"Не удалось распарсить дату '{date_str}': {e}")
-        return None
 
 
 @server.list_tools()  # type: ignore[misc]
@@ -748,10 +721,6 @@ async def list_tools() -> List[Tool]:
                         "type": "string",
                         "description": "Директория с саммаризациями (опционально, по умолчанию artifacts/reports)",
                     },
-                    "chroma_path": {
-                        "type": "string",
-                        "description": "Deprecated: не используется, заменено на Qdrant",
-                    },
                     "similarity_threshold": {
                         "type": "number",
                         "description": "Порог схожести",
@@ -901,239 +870,367 @@ async def list_tools() -> List[Tool]:
     return tools
 
 
+# Обработчики инструментов
+async def _handle_health() -> ToolResponse:
+    """Обработчик инструмента health."""
+    result = get_health_payload()
+    return _format_tool_response(result)
+
+
+async def _handle_version() -> ToolResponse:
+    """Обработчик инструмента version."""
+    result = get_version_payload()
+    return _format_tool_response(result)
+
+
+async def _handle_search(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента search."""
+    # Парсим feedback для smart search
+    feedback_data = arguments.get("feedback")
+    feedback_list = None
+    if feedback_data:
+        feedback_list = [SearchFeedback(**item) for item in feedback_data]
+
+    # Парсим даты
+    date_from = parse_datetime_utc(arguments.get("date_from"), return_none_on_error=True)
+    date_to = parse_datetime_utc(arguments.get("date_to"), return_none_on_error=True)
+
+    search_type = arguments.get("search_type", "hybrid")
+    
+    if search_type == "smart":
+        # Smart search требует SmartSearchEngine
+        request = SmartSearchRequest(
+            query=arguments.get("query", ""),
+            session_id=arguments.get("session_id"),
+            feedback=feedback_list,
+            clarify=arguments.get("clarify", False),
+            top_k=arguments.get("top_k", 10),
+            source=arguments.get("source"),
+            tags=arguments.get("tags", []),
+            date_from=date_from,
+            date_to=date_to,
+            artifact_types=arguments.get("artifact_types"),
+        )
+        engine = _get_smart_search_engine()
+        result = await engine.search(request)
+        # Преобразуем SmartSearchResponse в UnifiedSearchResponse
+        unified_result = UnifiedSearchResponse(
+            search_type="smart",
+            results=result.results,
+            total_matches=result.total_matches,
+            clarifying_questions=result.clarifying_questions,
+            suggested_refinements=result.suggested_refinements,
+            session_id=result.session_id,
+            confidence_score=result.confidence_score,
+            artifacts_found=result.artifacts_found,
+            db_records_found=result.db_records_found,
+        )
+        return _format_tool_response(unified_result.model_dump())
+    else:
+        # Остальные типы поиска через адаптер
+        unified_request = UnifiedSearchRequest(
+            search_type=search_type,
+            query=arguments.get("query"),
+            embedding=arguments.get("embedding"),
+            record_id=arguments.get("record_id"),
+            top_k=arguments.get("top_k", 5),
+            source=arguments.get("source"),
+            tags=arguments.get("tags", []),
+            date_from=date_from,
+            date_to=date_to,
+            include_embeddings=arguments.get("include_embeddings", False),
+            session_id=arguments.get("session_id"),
+            feedback=feedback_list,
+            clarify=arguments.get("clarify", False),
+            artifact_types=arguments.get("artifact_types"),
+            symbol=arguments.get("symbol"),
+            limit=arguments.get("limit"),
+        )
+        result = await adapter.unified_search(unified_request)
+        return _format_tool_response(result.model_dump())
+
+
+async def _handle_batch_operations(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента batch_operations."""
+    from .schema import BatchUpdateRecordItem
+    
+    operation = arguments.get("operation")
+    if operation == "update":
+        updates_data = arguments.get("updates", [])
+        updates = [BatchUpdateRecordItem(**item) for item in updates_data]
+        request = BatchOperationsRequest(operation="update", updates=updates)
+    elif operation in ("delete", "fetch"):
+        record_ids = arguments.get("record_ids", [])
+        request = BatchOperationsRequest(operation=operation, record_ids=record_ids)
+    else:
+        raise ValueError(f"Unknown operation: {operation}")
+    
+    result = adapter.batch_operations(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_graph_query(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента graph_query."""
+    request = GraphQueryRequest(**arguments)
+    result = adapter.graph_query(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_background_indexing(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента background_indexing."""
+    request = BackgroundIndexingRequest(**arguments)
+    action = request.action
+    
+    if action == "start":
+        result_obj = await _start_background_indexing(adapter)
+        return _format_tool_response(BackgroundIndexingResponse(
+            action="start",
+            success=result_obj.success,
+            message=result_obj.message,
+        ).model_dump())
+    elif action == "stop":
+        result_obj = await _stop_background_indexing()
+        return _format_tool_response(BackgroundIndexingResponse(
+            action="stop",
+            success=result_obj.success,
+            message=result_obj.message,
+        ).model_dump())
+    elif action == "status":
+        result_obj = _get_background_indexing_status()
+        return _format_tool_response(BackgroundIndexingResponse(
+            action="status",
+            message=result_obj.message,
+            running=result_obj.running,
+            check_interval=result_obj.check_interval,
+            last_check_time=result_obj.last_check_time,
+            input_path=result_obj.input_path,
+            chats_path=result_obj.chats_path,
+        ).model_dump())
+    else:
+        raise ValueError(f"Unknown action: {action}")
+
+
+async def _handle_summaries(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента summaries."""
+    request = SummariesRequest(**arguments)
+    result = await adapter.summaries(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_ingest(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента ingest."""
+    from .schema import MemoryRecordPayload
+    
+    source_type = arguments.get("source_type", "records")
+    if source_type == "scraped":
+        # Преобразуем аргументы в IngestRequest для scraped
+        request = IngestRequest(
+            records=[],
+            source_type="scraped",
+            url=arguments.get("url"),
+            title=arguments.get("title"),
+            content=arguments.get("content"),
+            metadata=arguments.get("metadata"),
+            source=arguments.get("source", "bright_data"),
+            tags=arguments.get("tags", []),
+            entities=arguments.get("entities", []),
+        )
+    else:
+        # Обычная индексация записей
+        records_data = arguments.get("records", [])
+        records = [MemoryRecordPayload(**item) for item in records_data]
+        request = IngestRequest(records=records, source_type="records")
+    
+    result = adapter.ingest_unified(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_store_trading_signal(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента store_trading_signal."""
+    request = StoreTradingSignalRequest(**arguments)
+    result = adapter.store_trading_signal(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_search_trading_patterns(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента search_trading_patterns."""
+    request = SearchTradingPatternsRequest(**arguments)
+    result = adapter.search_trading_patterns(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_get_signal_performance(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента get_signal_performance."""
+    request = GetSignalPerformanceRequest(**arguments)
+    result = adapter.get_signal_performance(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_search_entities(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента search_entities."""
+    request = SearchEntitiesRequest(**arguments)
+    result = adapter.search_entities(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_get_entity_profile(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента get_entity_profile."""
+    request = GetEntityProfileRequest(**arguments)
+    result = adapter.get_entity_profile(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_generate_embedding(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента generate_embedding."""
+    request = GenerateEmbeddingRequest(**arguments)
+    result = adapter.generate_embedding(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_update_record(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента update_record."""
+    request = UpdateRecordRequest(**arguments)
+    result = adapter.update_record(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_get_statistics(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента get_statistics."""
+    request = GetStatisticsRequest(**arguments) if arguments else GetStatisticsRequest()
+    result = adapter.get_statistics_unified(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_search_explain(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента search_explain."""
+    request = SearchExplainRequest(**arguments)
+    result = adapter.search_explain(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_get_timeline(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента get_timeline."""
+    if "date_from" in arguments and arguments["date_from"]:
+        parsed_date = parse_datetime_utc(arguments["date_from"], return_none_on_error=True)
+        if parsed_date is not None:
+            arguments["date_from"] = parsed_date
+        else:
+            del arguments["date_from"]
+    if "date_to" in arguments and arguments["date_to"]:
+        parsed_date = parse_datetime_utc(arguments["date_to"], return_none_on_error=True)
+        if parsed_date is not None:
+            arguments["date_to"] = parsed_date
+        else:
+            del arguments["date_to"]
+    request = GetTimelineRequest(**arguments)
+    result = adapter.get_timeline(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_analyze_entities(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента analyze_entities."""
+    request = AnalyzeEntitiesRequest(**arguments)
+    result = adapter.analyze_entities(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_export_records(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента export_records."""
+    if "date_from" in arguments and arguments["date_from"]:
+        parsed_date = parse_datetime_utc(arguments["date_from"], return_none_on_error=True)
+        if parsed_date is not None:
+            arguments["date_from"] = parsed_date
+        else:
+            del arguments["date_from"]
+    if "date_to" in arguments and arguments["date_to"]:
+        parsed_date = parse_datetime_utc(arguments["date_to"], return_none_on_error=True)
+        if parsed_date is not None:
+            arguments["date_to"] = parsed_date
+        else:
+            del arguments["date_to"]
+    request = ExportRecordsRequest(**arguments)
+    result = adapter.export_records(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_import_records(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента import_records."""
+    request = ImportRecordsRequest(**arguments)
+    result = adapter.import_records(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_build_insight_graph(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента build_insight_graph."""
+    request = BuildInsightGraphRequest(**arguments)
+    result = await adapter.build_insight_graph(request)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_index_chat(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента index_chat."""
+    request = IndexChatRequest(**arguments)
+    result = await _start_indexing_job(request, adapter)
+    return _format_tool_response(result.model_dump())
+
+
+async def _handle_get_available_chats(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
+    """Обработчик инструмента get_available_chats."""
+    request = GetAvailableChatsRequest(**arguments)
+    result = adapter.get_available_chats(request)
+    return _format_tool_response(result.model_dump())
+
+
+# Словарь диспетчеризации инструментов
+_TOOL_HANDLERS: Dict[str, Any] = {
+    "health": _handle_health,
+    "version": _handle_version,
+    "search": _handle_search,
+    "batch_operations": _handle_batch_operations,
+    "graph_query": _handle_graph_query,
+    "background_indexing": _handle_background_indexing,
+    "summaries": _handle_summaries,
+    "ingest": _handle_ingest,
+    "store_trading_signal": _handle_store_trading_signal,
+    "search_trading_patterns": _handle_search_trading_patterns,
+    "get_signal_performance": _handle_get_signal_performance,
+    "search_entities": _handle_search_entities,
+    "get_entity_profile": _handle_get_entity_profile,
+    "generate_embedding": _handle_generate_embedding,
+    "update_record": _handle_update_record,
+    "get_statistics": _handle_get_statistics,
+    "search_explain": _handle_search_explain,
+    "get_timeline": _handle_get_timeline,
+    "analyze_entities": _handle_analyze_entities,
+    "export_records": _handle_export_records,
+    "import_records": _handle_import_records,
+    "build_insight_graph": _handle_build_insight_graph,
+    "index_chat": _handle_index_chat,
+    "get_available_chats": _handle_get_available_chats,
+}
+
+
 @server.call_tool()  # type: ignore[misc]
 async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
     """Обрабатывает вызов MCP инструмента и возвращает форматированный ответ."""
     try:
         logger.info(f"Вызов инструмента: {name} с аргументами: {arguments}")
 
-        if name == "health":
-            result = get_health_payload()
-            return _format_tool_response(result)
+        handler = _TOOL_HANDLERS.get(name)
+        if handler is None:
+            raise ValueError(f"Неизвестный инструмент: {name}")
 
-        if name == "version":
-            result = get_version_payload()
-            return _format_tool_response(result)
+        # Инструменты health и version не требуют адаптера
+        if name in ("health", "version"):
+            return await handler()
 
+        # Остальные инструменты требуют адаптер
         adapter = _get_adapter()
-
-        # Новые универсальные инструменты
-        if name == "search":
+        
+        # Специальная обработка для generate_embedding (ValueError)
+        if name == "generate_embedding":
             try:
-                # Парсим feedback для smart search
-                feedback_data = arguments.get("feedback")
-                feedback_list = None
-                if feedback_data:
-                    feedback_list = [SearchFeedback(**item) for item in feedback_data]
-
-                # Парсим даты
-                date_from = _parse_date_safe(arguments.get("date_from"))
-                date_to = _parse_date_safe(arguments.get("date_to"))
-
-                search_type = arguments.get("search_type", "hybrid")
-                
-                if search_type == "smart":
-                    # Smart search требует SmartSearchEngine
-                    request = SmartSearchRequest(
-                        query=arguments.get("query", ""),
-                        session_id=arguments.get("session_id"),
-                        feedback=feedback_list,
-                        clarify=arguments.get("clarify", False),
-                        top_k=arguments.get("top_k", 10),
-                        source=arguments.get("source"),
-                        tags=arguments.get("tags", []),
-                        date_from=date_from,
-                        date_to=date_to,
-                        artifact_types=arguments.get("artifact_types"),
-                    )
-                    engine = _get_smart_search_engine()
-                    result = await engine.search(request)
-                    # Преобразуем SmartSearchResponse в UnifiedSearchResponse
-                    unified_result = UnifiedSearchResponse(
-                        search_type="smart",
-                        results=result.results,
-                        total_matches=result.total_matches,
-                        clarifying_questions=result.clarifying_questions,
-                        suggested_refinements=result.suggested_refinements,
-                        session_id=result.session_id,
-                        confidence_score=result.confidence_score,
-                        artifacts_found=result.artifacts_found,
-                        db_records_found=result.db_records_found,
-                    )
-                    return _format_tool_response(unified_result.model_dump())
-                else:
-                    # Остальные типы поиска через адаптер
-                    unified_request = UnifiedSearchRequest(
-                        search_type=search_type,
-                        query=arguments.get("query"),
-                        embedding=arguments.get("embedding"),
-                        record_id=arguments.get("record_id"),
-                        top_k=arguments.get("top_k", 5),
-                        source=arguments.get("source"),
-                        tags=arguments.get("tags", []),
-                        date_from=date_from,
-                        date_to=date_to,
-                        include_embeddings=arguments.get("include_embeddings", False),
-                        session_id=arguments.get("session_id"),
-                        feedback=feedback_list,
-                        clarify=arguments.get("clarify", False),
-                        artifact_types=arguments.get("artifact_types"),
-                        symbol=arguments.get("symbol"),
-                        limit=arguments.get("limit"),
-                    )
-                    result = await adapter.unified_search(unified_request)
-                    return _format_tool_response(result.model_dump())
-            except Exception as e:
-                logger.exception(f"search failed: {e}")
-                raise RuntimeError(format_error_message(e)) from e
-
-        elif name == "batch_operations":
-            try:
-                from .schema import BatchUpdateRecordItem
-                
-                operation = arguments.get("operation")
-                if operation == "update":
-                    updates_data = arguments.get("updates", [])
-                    updates = [BatchUpdateRecordItem(**item) for item in updates_data]
-                    request = BatchOperationsRequest(operation="update", updates=updates)
-                elif operation in ("delete", "fetch"):
-                    record_ids = arguments.get("record_ids", [])
-                    request = BatchOperationsRequest(operation=operation, record_ids=record_ids)
-                else:
-                    raise ValueError(f"Unknown operation: {operation}")
-                
-                result = adapter.batch_operations(request)
-                return _format_tool_response(result.model_dump())
-            except Exception as e:
-                logger.exception(f"batch_operations failed: {e}")
-                raise RuntimeError(format_error_message(e)) from e
-
-        elif name == "graph_query":
-            try:
-                request = GraphQueryRequest(**arguments)
-                result = adapter.graph_query(request)
-                return _format_tool_response(result.model_dump())
-            except Exception as e:
-                logger.exception(f"graph_query failed: {e}")
-                raise RuntimeError(format_error_message(e)) from e
-
-        elif name == "background_indexing":
-            try:
-                request = BackgroundIndexingRequest(**arguments)
-                action = request.action
-                
-                if action == "start":
-                    result_obj = await _start_background_indexing(adapter)
-                    return _format_tool_response(BackgroundIndexingResponse(
-                        action="start",
-                        success=result_obj.success,
-                        message=result_obj.message,
-                    ).model_dump())
-                elif action == "stop":
-                    result_obj = await _stop_background_indexing()
-                    return _format_tool_response(BackgroundIndexingResponse(
-                        action="stop",
-                        success=result_obj.success,
-                        message=result_obj.message,
-                    ).model_dump())
-                elif action == "status":
-                    result_obj = _get_background_indexing_status()
-                    return _format_tool_response(BackgroundIndexingResponse(
-                        action="status",
-                        message=result_obj.message,
-                        running=result_obj.running,
-                        check_interval=result_obj.check_interval,
-                        last_check_time=result_obj.last_check_time,
-                        input_path=result_obj.input_path,
-                        chats_path=result_obj.chats_path,
-                    ).model_dump())
-                else:
-                    raise ValueError(f"Unknown action: {action}")
-            except Exception as e:
-                logger.exception(f"background_indexing failed: {e}")
-                raise RuntimeError(format_error_message(e)) from e
-
-        elif name == "summaries":
-            try:
-                request = SummariesRequest(**arguments)
-                result = await adapter.summaries(request)
-                return _format_tool_response(result.model_dump())
-            except Exception as e:
-                logger.exception(f"summaries failed: {e}")
-                raise RuntimeError(format_error_message(e)) from e
-
-        elif name == "ingest":
-            try:
-                from .schema import MemoryRecordPayload
-                
-                source_type = arguments.get("source_type", "records")
-                if source_type == "scraped":
-                    # Преобразуем аргументы в IngestRequest для scraped
-                    request = IngestRequest(
-                        records=[],
-                        source_type="scraped",
-                        url=arguments.get("url"),
-                        title=arguments.get("title"),
-                        content=arguments.get("content"),
-                        metadata=arguments.get("metadata"),
-                        source=arguments.get("source", "bright_data"),
-                        tags=arguments.get("tags", []),
-                        entities=arguments.get("entities", []),
-                    )
-                else:
-                    # Обычная индексация записей
-                    records_data = arguments.get("records", [])
-                    records = [MemoryRecordPayload(**item) for item in records_data]
-                    request = IngestRequest(records=records, source_type="records")
-                
-                result = adapter.ingest_unified(request)
-                return _format_tool_response(result.model_dump())
-            except Exception as e:
-                logger.exception(f"ingest failed: {e}")
-                raise RuntimeError(format_error_message(e)) from e
-
-        elif name == "store_trading_signal":
-            request = StoreTradingSignalRequest(**arguments)
-            result = adapter.store_trading_signal(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "search_trading_patterns":
-            try:
-                request = SearchTradingPatternsRequest(**arguments)
-                result = adapter.search_trading_patterns(request)
-                return _format_tool_response(result.model_dump())
-            except Exception as e:
-                logger.exception(f"search_trading_patterns failed: {e}")
-                raise RuntimeError(format_error_message(e)) from e
-
-        elif name == "get_signal_performance":
-            request = GetSignalPerformanceRequest(**arguments)
-            result = adapter.get_signal_performance(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "search_entities":
-            try:
-                request = SearchEntitiesRequest(**arguments)
-                result = adapter.search_entities(request)
-                return _format_tool_response(result.model_dump())
-            except Exception as e:
-                logger.exception(f"search_entities failed: {e}")
-                raise RuntimeError(format_error_message(e)) from e
-
-        elif name == "get_entity_profile":
-            try:
-                request = GetEntityProfileRequest(**arguments)
-                result = adapter.get_entity_profile(request)
-                return _format_tool_response(result.model_dump())
-            except Exception as e:
-                logger.exception(f"get_entity_profile failed: {e}")
-                raise RuntimeError(format_error_message(e)) from e
-
-        elif name == "generate_embedding":
-            try:
-                request = GenerateEmbeddingRequest(**arguments)
-                result = adapter.generate_embedding(request)
-                return _format_tool_response(result.model_dump())
+                return await handler(arguments, adapter)
             except ValueError as e:
                 original_msg = str(e)
                 error_msg = format_error_message(e)
@@ -1142,84 +1239,13 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
                     exc_info=True,
                 )
                 raise RuntimeError(f"{error_msg} (original: {original_msg})") from e
-
-        elif name == "update_record":
-            request = UpdateRecordRequest(**arguments)
-            result = adapter.update_record(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "get_statistics":
-            # Поддержка нового универсального формата
-            request = GetStatisticsRequest(**arguments) if arguments else GetStatisticsRequest()
-            result = adapter.get_statistics_unified(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "search_explain":
-            request = SearchExplainRequest(**arguments)
-            result = adapter.search_explain(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "get_timeline":
-            if "date_from" in arguments and arguments["date_from"]:
-                parsed_date = _parse_date_safe(arguments["date_from"])
-                if parsed_date is not None:
-                    arguments["date_from"] = parsed_date
-                else:
-                    del arguments["date_from"]
-            if "date_to" in arguments and arguments["date_to"]:
-                parsed_date = _parse_date_safe(arguments["date_to"])
-                if parsed_date is not None:
-                    arguments["date_to"] = parsed_date
-                else:
-                    del arguments["date_to"]
-            request = GetTimelineRequest(**arguments)
-            result = adapter.get_timeline(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "analyze_entities":
-            request = AnalyzeEntitiesRequest(**arguments)
-            result = adapter.analyze_entities(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "export_records":
-            if "date_from" in arguments and arguments["date_from"]:
-                parsed_date = _parse_date_safe(arguments["date_from"])
-                if parsed_date is not None:
-                    arguments["date_from"] = parsed_date
-                else:
-                    del arguments["date_from"]
-            if "date_to" in arguments and arguments["date_to"]:
-                parsed_date = _parse_date_safe(arguments["date_to"])
-                if parsed_date is not None:
-                    arguments["date_to"] = parsed_date
-                else:
-                    del arguments["date_to"]
-            request = ExportRecordsRequest(**arguments)
-            result = adapter.export_records(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "import_records":
-            request = ImportRecordsRequest(**arguments)
-            result = adapter.import_records(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "build_insight_graph":
-            request = BuildInsightGraphRequest(**arguments)
-            result = await adapter.build_insight_graph(request)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "index_chat":
-            request = IndexChatRequest(**arguments)
-            result = await _start_indexing_job(request, adapter)
-            return _format_tool_response(result.model_dump())
-
-        elif name == "get_available_chats":
-            request = GetAvailableChatsRequest(**arguments)
-            result = adapter.get_available_chats(request)
-            return _format_tool_response(result.model_dump())
-
-        else:
-            raise ValueError(f"Неизвестный инструмент: {name}")
+        
+        # Остальные инструменты с общей обработкой ошибок
+        try:
+            return await handler(arguments, adapter)
+        except Exception as e:
+            logger.exception(f"{name} failed: {e}")
+            raise RuntimeError(format_error_message(e)) from e
 
     except ValueError as exc:
         logger.warning(f"Ошибка при выполнении инструмента {name}: {exc}")
@@ -1257,7 +1283,6 @@ async def _run_indexing_job(
         )
         
         indexer = TwoLevelIndexer(
-            chroma_path=settings.chroma_path,
             artifacts_path=settings.artifacts_path,
             embedding_client=embedding_client,
             enable_quality_check=request.enable_quality_check if request.enable_quality_check is not None else True,

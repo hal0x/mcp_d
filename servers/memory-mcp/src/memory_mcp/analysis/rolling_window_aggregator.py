@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 """
-Система континуальной агрегации с скользящим окном и инкрементальной саммаризацией
+Система континуальной агрегации с скользящим окном и инкрементальной саммаризацией.
 
 Стратегия:
-1. Свежие сообщения (0-30 дней) - детальное хранение
-2. Средние (30-90 дней) - группировка по дням с саммаризацией
-3. Старые (90-180 дней) - группировка по неделям с саммаризацией
-4. Архивные (>180 дней) - группировка по месяцам с саммаризацией
-
-Обратная совместимость:
-- Использует существующий indexing_progress для отслеживания
-- Создает отдельную коллекцию для агрегированных саммари
-- Не удаляет оригинальные данные, только дополняет
+- Свежие (0-30 дней): детальное хранение
+- Средние (30-90 дней): группировка по дням с саммаризацией
+- Старые (90-180 дней): группировка по неделям с саммаризацией
+- Архивные (>180 дней): группировка по месяцам с саммаризацией
 """
 
 import asyncio
@@ -28,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class TimeWindow:
-    """Определение временного окна для агрегации"""
+    """Временное окно для агрегации сообщений."""
 
     def __init__(
         self,
@@ -47,14 +42,13 @@ class TimeWindow:
         self.summarize = summarize
 
     def matches(self, age_days: int) -> bool:
-        """Проверяет, попадает ли возраст в это окно"""
+        """Проверяет, попадает ли возраст сообщения в это окно."""
         return self.age_days_min <= age_days < self.age_days_max
 
     def __repr__(self):
         return f"<TimeWindow {self.name}: {self.age_days_min}-{self.age_days_max} days, group_by={self.group_by}>"
 
 
-# Предустановленные стратегии
 CONSERVATIVE_STRATEGY = [
     TimeWindow("fresh", 0, 30, "hour", keep_original=True, summarize=False),
     TimeWindow("recent", 30, 90, "day", keep_original=False, summarize=True),
@@ -77,19 +71,17 @@ MINIMAL_STRATEGY = [
 
 
 class AggregationState:
-    """Состояние агрегации для чата"""
+    """Состояние агрегации для чата."""
 
     def __init__(self, chat_name: str):
         self.chat_name = chat_name
         self.last_aggregation_time: Optional[datetime] = None
-        self.window_boundaries: Dict[str, datetime] = {}  # window_name -> last_date
-        self.aggregated_blocks: List[
-            Dict[str, Any]
-        ] = []  # Список агрегированных блоков
-        self.summary_cache: Dict[str, str] = {}  # block_id -> summary
+        self.window_boundaries: Dict[str, datetime] = {}
+        self.aggregated_blocks: List[Dict[str, Any]] = []
+        self.summary_cache: Dict[str, str] = {}
 
     def to_dict(self) -> Dict[str, Any]:
-        """Сериализация состояния"""
+        """Сериализация состояния в словарь."""
         return {
             "chat_name": self.chat_name,
             "last_aggregation_time": self.last_aggregation_time.isoformat()
@@ -104,7 +96,7 @@ class AggregationState:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AggregationState":
-        """Десериализация состояния"""
+        """Десериализация состояния из словаря."""
         from ..utils.datetime_utils import parse_datetime_utc
 
         state = cls(data["chat_name"])
@@ -123,13 +115,13 @@ class AggregationState:
 
 class RollingWindowAggregator:
     """
-    Система континуальной агрегации с скользящим окном
+    Система континуальной агрегации с скользящим окном.
 
-    Основные возможности:
-    1. Инкрементальная обработка - только новые сообщения
-    2. Автоматическая миграция сообщений между окнами
-    3. Групповая саммаризация для минимизации запросов к Ollama
-    4. Сохранение состояния для обратной совместимости
+    Возможности:
+    - Инкрементальная обработка только новых сообщений
+    - Автоматическая миграция сообщений между окнами
+    - Групповая саммаризация для минимизации запросов к LLM
+    - Сохранение состояния для обратной совместимости
     """
 
     def __init__(
@@ -138,14 +130,23 @@ class RollingWindowAggregator:
         state_dir: Path = Path("aggregation_state"),
         strategy: List[TimeWindow] = None,
         embedding_client: Optional[LMStudioEmbeddingClient] = None,
-        batch_size: int = 50,  # Сколько сообщений группировать для одной саммаризации
+        batch_size: int = 50,
     ):
         self.chats_dir = chats_dir
         self.state_dir = state_dir
         self.state_dir.mkdir(exist_ok=True)
 
         self.strategy = strategy or CONSERVATIVE_STRATEGY
-        self.embedding_client = embedding_client or LMStudioEmbeddingClient()
+        if embedding_client is None:
+            from ..config import get_settings
+            settings = get_settings()
+            self.embedding_client = LMStudioEmbeddingClient(
+                model_name=settings.lmstudio_model,
+                llm_model_name=settings.lmstudio_llm_model,
+                base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}",
+            )
+        else:
+            self.embedding_client = embedding_client
         self.batch_size = batch_size
 
         logger.info(
@@ -153,13 +154,13 @@ class RollingWindowAggregator:
         )
 
     def _parse_date(self, date_str: str) -> Optional[datetime]:
-        """Парсит дату из строки (использует общую утилиту)."""
+        """Парсинг даты из строки."""
         from ..utils.datetime_utils import parse_datetime_utc
 
         return parse_datetime_utc(date_str, return_none_on_error=True, use_zoneinfo=True)
 
     def _load_state(self, chat_name: str) -> AggregationState:
-        """Загружает состояние агрегации для чата"""
+        """Загружает состояние агрегации для чата."""
         from ..utils.state_manager import StateManager
 
         manager = StateManager(self.state_dir)
@@ -170,14 +171,14 @@ class RollingWindowAggregator:
         )
 
     def _save_state(self, state: AggregationState):
-        """Сохраняет состояние агрегации"""
+        """Сохраняет состояние агрегации."""
         from ..utils.state_manager import StateManager
 
         manager = StateManager(self.state_dir)
         manager.save_state(state)
 
     def _load_messages(self, chat_file: Path) -> List[Dict[str, Any]]:
-        """Загружает сообщения из файла чата"""
+        """Загрузка сообщений из JSONL файла чата."""
         messages = []
 
         try:
@@ -198,7 +199,7 @@ class RollingWindowAggregator:
     def _group_messages_by_window(
         self, messages: List[Dict[str, Any]], current_date: datetime
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """Группирует сообщения по временным окнам"""
+        """Группировка сообщений по временным окнам на основе возраста."""
         grouped = defaultdict(list)
 
         for msg in messages:
@@ -211,7 +212,6 @@ class RollingWindowAggregator:
 
             age_days = (current_date - msg_date).days
 
-            # Находим подходящее окно
             for window in self.strategy:
                 if window.matches(age_days):
                     grouped[window.name].append(msg)
@@ -220,13 +220,12 @@ class RollingWindowAggregator:
         return grouped
 
     def _create_aggregation_key(self, msg_date: datetime, group_by: str) -> str:
-        """Создает ключ агрегации на основе даты и группировки"""
+        """Создание ключа агрегации на основе даты и типа группировки."""
         if group_by == "hour":
             return msg_date.strftime("%Y-%m-%d-%H")
         elif group_by == "day":
             return msg_date.strftime("%Y-%m-%d")
         elif group_by == "week":
-            # ISO неделя
             return f"{msg_date.year}-W{msg_date.isocalendar()[1]:02d}"
         elif group_by == "month":
             return msg_date.strftime("%Y-%m")
@@ -236,7 +235,7 @@ class RollingWindowAggregator:
     def _group_messages_for_aggregation(
         self, messages: List[Dict[str, Any]], window: TimeWindow
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """Группирует сообщения для агрегации по временным блокам"""
+        """Группировка сообщений для агрегации по временным блокам."""
         blocks = defaultdict(list)
 
         for msg in messages:
@@ -255,25 +254,19 @@ class RollingWindowAggregator:
     async def _summarize_message_block(
         self, messages: List[Dict[str, Any]], block_id: str, window: TimeWindow
     ) -> str:
-        """
-        Создает саммаризацию блока сообщений
-
-        Группирует сообщения в батчи для эффективной саммаризации
-        """
+        """Создание саммаризации блока сообщений через LLM."""
         if not messages:
             return ""
 
-        # Сортируем по времени
         sorted_messages = sorted(
             messages,
             key=lambda m: self._parse_date(m.get("date_utc", "")) or datetime.min,
         )
 
-        # Формируем текст для саммаризации
         text_parts = []
         text_parts.append(f"=== Блок: {block_id} ({len(messages)} сообщений) ===\n")
 
-        for msg in sorted_messages[: self.batch_size]:  # Ограничиваем размер батча
+        for msg in sorted_messages[: self.batch_size]:
             date = msg.get("date_utc", "Unknown")
             sender = msg.get("from", {})
             sender_name = (
@@ -293,7 +286,6 @@ class RollingWindowAggregator:
 
         conversation_text = "\n".join(text_parts)
 
-        # Создаем промпт для саммаризации
         prompt = f"""Создай краткую саммаризацию следующего блока сообщений.
 Укажи:
 1. Основные темы обсуждения
@@ -315,38 +307,27 @@ class RollingWindowAggregator:
             return summary.strip()
         except Exception as e:
             logger.error(f"Ошибка саммаризации блока {block_id}: {e}")
-            # Fallback: простое описание
             return f"Блок из {len(messages)} сообщений за период {block_id}"
 
     async def aggregate_chat(
         self, chat_name: str, dry_run: bool = False
     ) -> Dict[str, Any]:
-        """
-        Выполняет агрегацию для одного чата
-
-        Returns:
-            Статистика агрегации
-        """
+        """Выполнение агрегации для одного чата."""
         logger.info(f"Начало агрегации чата: {chat_name}")
 
-        # Загружаем состояние
         state = self._load_state(chat_name)
 
-        # Находим файл чата
         chat_file = self.chats_dir / chat_name / "unknown.json"
         if not chat_file.exists():
             logger.warning(f"Файл чата не найден: {chat_file}")
             return {"error": "chat_file_not_found"}
 
-        # Загружаем сообщения
         messages = self._load_messages(chat_file)
         if not messages:
             logger.warning(f"Нет сообщений в чате {chat_name}")
             return {"messages_count": 0}
 
         current_date = datetime.now(datetime.now().astimezone().tzinfo)
-
-        # Группируем по окнам
         windowed_messages = self._group_messages_by_window(messages, current_date)
 
         stats = {
@@ -357,7 +338,6 @@ class RollingWindowAggregator:
             "blocks_aggregated": 0,
         }
 
-        # Обрабатываем каждое окно
         for window in self.strategy:
             window_messages = windowed_messages.get(window.name, [])
 
@@ -373,15 +353,12 @@ class RollingWindowAggregator:
             }
 
             if window.summarize:
-                # Группируем для агрегации
                 blocks = self._group_messages_for_aggregation(window_messages, window)
 
                 logger.info(f"Создано {len(blocks)} блоков для окна '{window.name}'")
                 stats["windows"][window.name]["blocks_count"] = len(blocks)
 
-                # Саммаризируем каждый блок
                 for block_id, block_messages in blocks.items():
-                    # Проверяем, есть ли уже саммаризация
                     cache_key = f"{window.name}_{block_id}"
 
                     if cache_key in state.summary_cache:
@@ -395,11 +372,9 @@ class RollingWindowAggregator:
                             block_messages, block_id, window
                         )
 
-                        # Сохраняем в кэш
                         state.summary_cache[cache_key] = summary
                         stats["summaries_created"] += 1
 
-                        # Добавляем в список блоков
                         state.aggregated_blocks.append(
                             {
                                 "block_id": cache_key,
@@ -412,11 +387,8 @@ class RollingWindowAggregator:
                         )
 
                         stats["blocks_aggregated"] += 1
-
-                        # Небольшая задержка между запросами
                         await asyncio.sleep(0.5)
 
-        # Обновляем состояние
         state.last_aggregation_time = current_date
 
         if not dry_run:
@@ -432,17 +404,7 @@ class RollingWindowAggregator:
     async def aggregate_all_chats(
         self, dry_run: bool = False, max_concurrent: int = 3
     ) -> Dict[str, Any]:
-        """
-        Агрегирует все чаты
-
-        Args:
-            dry_run: Тестовый запуск без сохранения
-            max_concurrent: Максимум параллельных агрегаций
-
-        Returns:
-            Общая статистика
-        """
-        # Находим все чаты
+        """Агрегация всех чатов с ограничением параллелизма."""
         chat_dirs = [d for d in self.chats_dir.iterdir() if d.is_dir()]
 
         logger.info(f"Найдено {len(chat_dirs)} чатов для агрегации")
@@ -455,7 +417,6 @@ class RollingWindowAggregator:
             "chats": {},
         }
 
-        # Обрабатываем чаты с ограничением параллелизма
         semaphore = asyncio.Semaphore(max_concurrent)
 
         async def process_chat(chat_dir):
@@ -471,7 +432,6 @@ class RollingWindowAggregator:
         tasks = [process_chat(chat_dir) for chat_dir in chat_dirs]
         results = await asyncio.gather(*tasks)
 
-        # Собираем статистику
         for chat_name, stats in results:
             if "error" not in stats:
                 total_stats["processed_chats"] += 1
@@ -483,7 +443,7 @@ class RollingWindowAggregator:
         return total_stats
 
     def get_aggregation_report(self, chat_name: str) -> Dict[str, Any]:
-        """Получает отчет об агрегации для чата"""
+        """Получение отчёта об агрегации для чата."""
         state = self._load_state(chat_name)
 
         return {
@@ -503,7 +463,7 @@ class RollingWindowAggregator:
 
 
 async def main():
-    """Пример использования"""
+    """Пример использования."""
     logging.basicConfig(level=logging.INFO)
 
     aggregator = RollingWindowAggregator(
