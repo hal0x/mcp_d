@@ -791,8 +791,9 @@ class LMStudioEmbeddingClient:
                         ssl=False,
                     )
                     timeout = aiohttp.ClientTimeout(
-                        total=1200,  # 20 минут для LLM (увеличено для генерации саммари)
+                        total=1800,  # 30 минут для LLM (увеличено для генерации длинных саммари)
                         connect=DEFAULT_TIMEOUT_CONNECT,
+                        sock_read=1800,  # Таймаут чтения сокета
                     )
                     self.session = aiohttp.ClientSession(
                         connector=connector,
@@ -871,8 +872,9 @@ class LMStudioEmbeddingClient:
                             ssl=False,
                         )
                         timeout = aiohttp.ClientTimeout(
-                            total=1200,  # 20 минут для LLM (увеличено для генерации саммари)
+                            total=1800,  # 30 минут для LLM (увеличено для генерации длинных саммари)
                             connect=DEFAULT_TIMEOUT_CONNECT,
+                            sock_read=1800,  # Таймаут чтения сокета
                         )
                         self.session = aiohttp.ClientSession(
                             connector=connector,
