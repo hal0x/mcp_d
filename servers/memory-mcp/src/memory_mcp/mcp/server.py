@@ -750,7 +750,7 @@ async def list_tools() -> List[Tool]:
                     },
                     "chroma_path": {
                         "type": "string",
-                        "description": "Путь к ChromaDB (опционально, по умолчанию ./chroma_db)",
+                        "description": "Deprecated: не используется, заменено на Qdrant",
                     },
                     "similarity_threshold": {
                         "type": "number",

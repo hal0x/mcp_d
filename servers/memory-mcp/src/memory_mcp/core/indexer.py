@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-import chromadb
+from ..memory.qdrant_collections import QdrantCollectionsManager
 
 from ..analysis.cluster_summarizer import ClusterSummarizer
 from ..analysis.day_grouping import DayGroupingSegmenter
@@ -36,7 +36,7 @@ class TwoLevelIndexer:
 
     def __init__(
         self,
-        chroma_path: str = "./artifacts/chroma_db",
+        chroma_path: str = "./artifacts/chroma_db",  # Deprecated: оставлено для совместимости, не используется
         artifacts_path: str = "./artifacts",
         embedding_client: Optional[LMStudioEmbeddingClient] = None,
         enable_quality_check: bool = True,
@@ -63,7 +63,7 @@ class TwoLevelIndexer:
         """Инициализирует индексатор с указанными параметрами.
 
         Args:
-            chroma_path: Путь к ChromaDB
+            chroma_path: Deprecated параметр (не используется, заменено на Qdrant)
             artifacts_path: Каталог с артефактами (reports, контексты, коллекции)
             embedding_client: Клиент для генерации эмбеддингов (LM Studio)
             enable_quality_check: Включить проверку качества саммаризации
@@ -88,7 +88,25 @@ class TwoLevelIndexer:
             progress_callback: Callback функция для отслеживания прогресса (job_id, event, data)
         """
         self.progress_callback = progress_callback
-        self.chroma_client = chromadb.PersistentClient(path=chroma_path)
+        
+        # Инициализируем Qdrant для векторного хранилища
+        from ..config import get_settings
+        settings = get_settings()
+        qdrant_url = settings.get_qdrant_url()
+        if qdrant_url:
+            # Получаем размерность эмбеддингов
+            embedding_dimension = self.embedding_client.dimension if self.embedding_client else 1024
+            self.qdrant_manager = QdrantCollectionsManager(url=qdrant_url, vector_size=embedding_dimension)
+            if not self.qdrant_manager.available():
+                logger.warning("Qdrant недоступен, коллекции не будут созданы")
+                self.qdrant_manager = None
+        else:
+            logger.warning("QDRANT_URL не установлен, коллекции не будут созданы")
+            self.qdrant_manager = None
+        
+        # Qdrant используется для векторного хранилища
+        self.chroma_client = None  # Deprecated (не используется)
+        
         self.artifacts_path = Path(artifacts_path).expanduser()
         self.artifacts_path.mkdir(parents=True, exist_ok=True)
         self.reports_path = self.artifacts_path / "reports"
@@ -188,7 +206,24 @@ class TwoLevelIndexer:
             logger.info("TwoLevelIndexer: граф памяти подключен, записи будут синхронизироваться")
         else:
             self.ingestor = None
-            logger.debug("TwoLevelIndexer: граф памяти не подключен, записи будут только в ChromaDB")
+            logger.debug("TwoLevelIndexer: граф памяти не подключен, записи будут только в Qdrant")
+        
+        # Инициализируем VectorStore для сохранения эмбеддингов в Qdrant
+        from ..memory.vector_store import build_vector_store_from_env
+        self.vector_store = build_vector_store_from_env()
+        if self.vector_store and self.vector_store.available():
+            logger.info("VectorStore (Qdrant) инициализирован для векторного поиска")
+            # Убеждаемся, что коллекция создана с правильной размерностью
+            if self.embedding_client:
+                try:
+                    dimension = self.embedding_client.dimension
+                    if dimension:
+                        self.vector_store.ensure_collection(dimension)
+                except Exception as e:
+                    logger.warning(f"Не удалось инициализировать коллекцию Qdrant: {e}")
+        else:
+            logger.warning("VectorStore (Qdrant) недоступен - векторный поиск не будет работать")
+            self.vector_store = None
         
         # Инициализируем EntityVectorStore для индексации сущностей
         if enable_entity_learning:
@@ -239,64 +274,37 @@ class TwoLevelIndexer:
             return None
 
     def _check_and_recreate_collection(self, collection_name: str, description: str, force_recreate: bool = False):
-        """Проверить коллекцию и пересоздать при несоответствии размерности."""
-        expected_dimension = self._get_embedding_dimension()
+        """Проверить коллекцию Qdrant и пересоздать при несоответствии размерности."""
+        if not self.qdrant_manager or not self.qdrant_manager.available():
+            logger.warning(f"Qdrant недоступен, коллекция {collection_name} не будет создана")
+            return None
         
-        try:
-            collection = self.chroma_client.get_collection(collection_name)
-            
-            if expected_dimension:
-                try:
-                    collection_info = collection.get()
-                    if collection_info.get("embeddings") and len(collection_info["embeddings"]) > 0:
-                        existing_dimension = len(collection_info["embeddings"][0])
-                        if existing_dimension != expected_dimension:
-                            logger.warning(
-                                f"Коллекция {collection_name} имеет размерность {existing_dimension}, "
-                                f"ожидается {expected_dimension}. Пересоздаём коллекцию..."
-                            )
-                            self.chroma_client.delete_collection(collection_name)
-                            collection = None
-                        else:
-                            logger.info(
-                                f"Найдена коллекция {collection_name} с {collection.count()} записями "
-                                f"(размерность: {existing_dimension})"
-                            )
-                    else:
-                        logger.info(
-                            f"Найдена пустая коллекция {collection_name}"
-                        )
-                except Exception as e:
-                    logger.debug(f"Не удалось проверить размерность коллекции {collection_name}: {e}")
-                    logger.info(
-                        f"Найдена коллекция {collection_name} с {collection.count()} записями"
-                    )
-            else:
-                logger.info(
-                    f"Найдена коллекция {collection_name} с {collection.count()} записями"
-                )
-            
-            if collection is None or force_recreate:
-                if collection:
-                    self.chroma_client.delete_collection(collection_name)
-                collection = self.chroma_client.create_collection(
-                    name=collection_name,
-                    metadata={"description": description},
-                )
-                logger.info(f"Создана новая коллекция {collection_name}")
-            
-            return collection
-            
-        except Exception:
-            collection = self.chroma_client.create_collection(
-                name=collection_name,
-                metadata={"description": description},
-            )
-            logger.info(f"Создана новая коллекция {collection_name}")
-            return collection
+        # Обновляем размерность в менеджере, если нужно
+        expected_dimension = self._get_embedding_dimension()
+        if expected_dimension and expected_dimension != self.qdrant_manager.vector_size:
+            logger.info(f"Обновление размерности Qdrant менеджера: {self.qdrant_manager.vector_size} -> {expected_dimension}")
+            self.qdrant_manager.vector_size = expected_dimension
+        
+        # Создаем/проверяем коллекцию через менеджер
+        if self.qdrant_manager.ensure_collection(collection_name, force_recreate=force_recreate):
+            count = self.qdrant_manager.count(collection_name)
+            logger.info(f"Коллекция Qdrant {collection_name} готова ({count} записей)")
+            return collection_name  # Возвращаем имя коллекции вместо объекта
+        else:
+            logger.error(f"Не удалось создать коллекцию Qdrant {collection_name}")
+            return None
 
     def _initialize_collections(self):
-        """Инициализирует коллекции ChromaDB с проверкой размерности эмбеддингов."""
+        """Инициализирует коллекции Qdrant с проверкой размерности эмбеддингов."""
+        if not self.qdrant_manager or not self.qdrant_manager.available():
+            logger.warning("Qdrant недоступен, коллекции не будут инициализированы")
+            self.sessions_collection = None
+            self.messages_collection = None
+            self.tasks_collection = None
+            self.clusters_collection = None
+            self.progress_collection = None
+            return
+        
         try:
             self.sessions_collection = self._check_and_recreate_collection(
                 "chat_sessions",
@@ -322,21 +330,10 @@ class TwoLevelIndexer:
                 force_recreate=self.force
             )
 
-            try:
-                self.progress_collection = self.chroma_client.get_collection(
-                    "indexing_progress"
-                )
-                logger.info(
-                    f"Найдена коллекция indexing_progress с {self.progress_collection.count()} записями"
-                )
-            except Exception:
-                self.progress_collection = self.chroma_client.create_collection(
-                    name="indexing_progress",
-                    metadata={
-                        "description": "Отслеживание прогресса индексации для инкрементальных обновлений"
-                    },
-                )
-                logger.info("Создана новая коллекция indexing_progress")
+            # indexing_progress теперь хранится в SQLite через IndexingJobTracker
+            # Qdrant не используется для прогресса
+            self.progress_collection = None
+            logger.info("Коллекции Qdrant инициализированы")
 
         except Exception as e:
             logger.error(f"Ошибка при инициализации коллекций: {e}")
@@ -742,7 +739,7 @@ class TwoLevelIndexer:
                             f"✅ Очистка завершена: "
                             f"узлов={cleanup_stats.get('nodes_deleted', 0)}, "
                             f"векторов={cleanup_stats.get('vectors_deleted', 0)}, "
-                            f"ChromaDB={cleanup_stats.get('chromadb_deleted', 0)}"
+                            f"Qdrant={cleanup_stats.get('qdrant_deleted', 0)}"
                         )
                     except Exception as e:
                         logger.warning(
@@ -840,9 +837,12 @@ class TwoLevelIndexer:
                 if not force_full:
                     try:
                         # Получаем все session_id для данного чата
-                        result = self.sessions_collection.get(
-                            where={"chat": chat_name}, include=["metadatas"]
-                        )
+                        result = None
+                        if self.qdrant_manager and self.sessions_collection:
+                            result = self.qdrant_manager.get(
+                                collection_name=self.sessions_collection,
+                                where={"chat": chat_name}
+                            )
                         if result and result.get("ids"):
                             existing_session_ids = set(result["ids"])
                             logger.info(
@@ -1230,14 +1230,24 @@ class TwoLevelIndexer:
             else "",  # Сохраняем замененные URL как строку
         }
 
-        # Добавляем в коллекцию
+        # Добавляем в коллекцию Qdrant
+        if self.qdrant_manager and self.sessions_collection:
+            try:
+                self.qdrant_manager.upsert(
+                    collection_name=self.sessions_collection,
+                    ids=[session_id],
+                    embeddings=[embedding],
+                    metadatas=[metadata],
+                    documents=[embedding_text],
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при добавлении сессии {session_id} в Qdrant: {e}")
+        else:
+            logger.warning("Qdrant недоступен, сессия не будет сохранена в векторное хранилище")
+        
+        # Qdrant используется для векторного хранилища (см. код выше)
         try:
-            self.sessions_collection.upsert(
-                ids=[session_id],
-                documents=[embedding_text],
-                embeddings=[embedding],
-                metadatas=[metadata],
-            )
+            pass  # Заглушка для сохранения структуры try-except
         except Exception as e:
             error_msg = str(e)
             if "embedding with dimension" in error_msg or "dimension" in error_msg.lower():
@@ -1246,19 +1256,22 @@ class TwoLevelIndexer:
                     "Пересоздаём коллекцию..."
                 )
                 # Пересоздаём коллекцию
-                self.chroma_client.delete_collection("chat_sessions")
-                self.sessions_collection = self.chroma_client.create_collection(
-                    name="chat_sessions",
-                    metadata={"description": "Саммаризации сессий для векторного поиска (L1)"},
-                )
-                # Повторяем попытку
-                self.sessions_collection.upsert(
-                    ids=[session_id],
-                    documents=[embedding_text],
-                    embeddings=[embedding],
-                    metadatas=[metadata],
-                )
-                logger.info("Коллекция chat_sessions пересоздана и запись добавлена")
+                if self.qdrant_manager and self.sessions_collection:
+                    self.qdrant_manager.delete_collection(self.sessions_collection)
+                    self.sessions_collection = self._check_and_recreate_collection(
+                        "chat_sessions",
+                        "Саммаризации сессий для векторного поиска (L1)",
+                        force_recreate=True
+                    )
+                    if self.sessions_collection:
+                        self.qdrant_manager.upsert(
+                            collection_name=self.sessions_collection,
+                            ids=[session_id],
+                            embeddings=[embedding],
+                            metadatas=[metadata],
+                            documents=[embedding_text],
+                        )
+                        logger.info("Коллекция chat_sessions пересоздана и запись добавлена")
             else:
                 raise
 
@@ -1304,13 +1317,35 @@ class TwoLevelIndexer:
                 # Сохраняем в граф
                 self.ingestor.ingest([record])
                 
-                # Сохраняем эмбеддинг в граф
+                # Сохраняем эмбеддинг в граф и Qdrant
                 if embedding:
                     try:
+                        # Сохраняем в граф
                         self.graph.update_node(
                             session_id,
                             embedding=embedding,
                         )
+                        
+                        # Сохраняем в Qdrant для векторного поиска
+                        if self.vector_store and self.vector_store.available():
+                            try:
+                                payload_data = {
+                                    "record_id": session_id,
+                                    "source": meta.get("chat_name", ""),
+                                    "tags": [],
+                                    "timestamp": start_time_utc.timestamp() if start_time_utc else 0,
+                                    "timestamp_iso": start_time_utc.isoformat() if start_time_utc else "",
+                                    "content_preview": summary.get("context", "")[:200],
+                                    "session_type": "session_summary",
+                                }
+                                chat_name = meta.get("chat_name")
+                                if isinstance(chat_name, str):
+                                    payload_data["chat"] = chat_name
+                                
+                                self.vector_store.upsert(session_id, embedding, payload_data)
+                                logger.debug(f"Эмбеддинг сессии сохранен в Qdrant для {session_id}")
+                            except Exception as e:
+                                logger.debug(f"Ошибка при сохранении эмбеддинга сессии {session_id} в Qdrant: {e}")
                     except Exception as e:
                         logger.debug(f"Ошибка при сохранении эмбеддинга сессии {session_id}: {e}")
                 
@@ -1374,84 +1409,136 @@ class TwoLevelIndexer:
                 
                 # Всегда проверяем дубликаты по telegram_id (даже при force_full)
                 if telegram_msg_id:
-                    # Проверяем по telegram ID в ChromaDB
-                    try:
-                        existing_by_id = self.messages_collection.get(
-                            where={"$or": [
-                                {"msg_id": {"$eq": f"{chat}:{telegram_msg_id}"}},
-                                {"telegram_id": {"$eq": str(telegram_msg_id)}},
-                            ]},
-                            limit=1
-                        )
-                        if existing_by_id and existing_by_id.get("ids"):
-                            logger.debug(f"Дубликат сообщения найден по telegram_id={telegram_msg_id}, пропускаем")
-                            skipped_duplicate = True
-                    except Exception as e:
-                        logger.debug(f"Не удалось проверить дубликаты по telegram_id: {e}")
+                    # 1. Проверяем в графе памяти по точному ID
+                    if self.graph:
+                        try:
+                            cursor = self.graph.conn.cursor()
+                            cursor.execute("SELECT id FROM nodes WHERE id = ? LIMIT 1", (msg_id,))
+                            if cursor.fetchone():
+                                logger.debug(f"Дубликат сообщения найден в графе по msg_id={msg_id}, пропускаем")
+                                skipped_duplicate = True
+                        except Exception as e:
+                            logger.debug(f"Не удалось проверить дубликаты в графе: {e}")
+                    
+                    # 2. Проверяем по telegram ID в Qdrant
+                    if not skipped_duplicate and self.qdrant_manager and self.messages_collection:
+                        try:
+                            existing_by_id = self.qdrant_manager.get(
+                                collection_name=self.messages_collection,
+                                where={"$or": [
+                                    {"msg_id": {"$eq": f"{chat}:{telegram_msg_id}"}},
+                                    {"telegram_id": {"$eq": str(telegram_msg_id)}},
+                                ]},
+                                limit=1
+                            )
+                            if existing_by_id and existing_by_id.get("ids"):
+                                logger.debug(f"Дубликат сообщения найден по telegram_id={telegram_msg_id}, пропускаем")
+                                skipped_duplicate = True
+                        except Exception as e:
+                            logger.debug(f"Не удалось проверить дубликаты по telegram_id: {e}")
                 
                 # Дополнительная проверка по content_hash (даже при force_full)
                 if not skipped_duplicate:
                     import hashlib
                     content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
-                    try:
-                        existing_by_hash = self.messages_collection.get(
-                            where={"content_hash": {"$eq": content_hash}},
-                            limit=1
-                        )
-                        if existing_by_hash and existing_by_hash.get("ids"):
-                            # Проверяем, что это действительно то же сообщение (из того же чата)
-                            existing_metadata = existing_by_hash.get("metadatas", [])
-                            if existing_metadata and len(existing_metadata) > 0:
-                                existing_chat = existing_metadata[0].get("chat", "")
-                                if existing_chat == chat:
-                                    logger.debug(f"Дубликат сообщения найден по content_hash={content_hash} в чате {chat}, пропускаем")
-                                    skipped_duplicate = True
-                    except Exception as e:
-                        logger.debug(f"Не удалось проверить дубликаты по content_hash: {e}")
-                
-                # Дополнительная проверка по точному ID (только если не force_full)
-                if not self.force and not skipped_duplicate:
-                    # Сначала проверяем по точному ID
-                    existing_msg = self.messages_collection.get(ids=[msg_id])
-                    if existing_msg and existing_msg.get("ids"):
-                        # Сообщение уже существует, пропускаем
-                        logger.debug(f"Сообщение {msg_id} уже существует, пропускаем")
-                        skipped_duplicate = True
                     
-                    # Дополнительная проверка: ищем дубликаты по содержимому и telegram ID
-                    # Это предотвращает дублирование, когда одно сообщение попадает в разные сессии
-                    if not skipped_duplicate and telegram_msg_id:
-                        # Ищем по telegram ID в других сессиях
-                        import hashlib
-                        content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
-                        # Ищем записи с таким же telegram ID или хешем содержимого
+                    # Проверяем в графе памяти по content_hash в метаданных
+                    if self.graph:
                         try:
-                            # Проверяем в ChromaDB по метаданным
-                            existing_by_id = self.messages_collection.get(
-                                where={"$or": [
-                                    {"msg_id": {"$eq": f"{chat}:{telegram_msg_id}"}},
-                                    {"telegram_id": {"$eq": str(telegram_msg_id)}},
-                                    {"content_hash": {"$eq": content_hash}}
-                                ]},
-                                limit=1
-                            )
-                            if existing_by_id and existing_by_id.get("ids"):
-                                logger.debug(f"Дубликат сообщения найден по telegram_id={telegram_msg_id} или content_hash={content_hash}, пропускаем")
+                            cursor = self.graph.conn.cursor()
+                            cursor.execute("""
+                                SELECT id FROM nodes 
+                                WHERE type = 'DocChunk' 
+                                AND properties IS NOT NULL
+                                AND json_extract(properties, '$.content_hash') = ?
+                                AND (
+                                    json_extract(properties, '$.chat') = ?
+                                    OR json_extract(properties, '$.source') = ?
+                                )
+                                LIMIT 1
+                            """, (content_hash, chat, chat))
+                            if cursor.fetchone():
+                                logger.debug(f"Дубликат сообщения найден в графе по content_hash={content_hash} в чате {chat}, пропускаем")
                                 skipped_duplicate = True
                         except Exception as e:
-                            # Если поиск по метаданным не работает, продолжаем
-                            logger.debug(f"Не удалось проверить дубликаты по метаданным: {e}")
-                    elif not skipped_duplicate:
-                        # Для сообщений без telegram ID проверяем по хешу содержимого
-                        import hashlib
-                        content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
+                            logger.debug(f"Не удалось проверить дубликаты в графе по content_hash: {e}")
+                    
+                    # Проверяем в Qdrant
+                    if not skipped_duplicate and self.qdrant_manager and self.messages_collection:
                         try:
-                            existing_by_hash = self.messages_collection.get(
+                            existing_by_hash = self.qdrant_manager.get(
+                                collection_name=self.messages_collection,
                                 where={"content_hash": {"$eq": content_hash}},
                                 limit=1
                             )
                             if existing_by_hash and existing_by_hash.get("ids"):
-                                logger.debug(f"Дубликат сообщения найден по content_hash={content_hash}, пропускаем")
+                                # Проверяем, что это действительно то же сообщение (из того же чата)
+                                existing_metadata = existing_by_hash.get("metadatas", [])
+                                if existing_metadata and len(existing_metadata) > 0:
+                                    existing_chat = existing_metadata[0].get("chat", "")
+                                    if existing_chat == chat:
+                                        logger.debug(f"Дубликат сообщения найден по content_hash={content_hash} в чате {chat}, пропускаем")
+                                        skipped_duplicate = True
+                        except Exception as e:
+                            logger.debug(f"Не удалось проверить дубликаты по content_hash: {e}")
+                
+                # Дополнительная проверка по точному ID (только если не force_full)
+                # ВАЖНО: даже при force_full проверяем дубликаты по telegram_id и content_hash
+                # чтобы предотвратить дублирование одного сообщения в разных сессиях
+                if not self.force and not skipped_duplicate and self.qdrant_manager and self.messages_collection:
+                    # Сначала проверяем по точному ID
+                    existing_msg = self.qdrant_manager.get(
+                        collection_name=self.messages_collection,
+                        ids=[msg_id]
+                    )
+                    if existing_msg and existing_msg.get("ids"):
+                        # Сообщение уже существует, пропускаем
+                        logger.debug(f"Сообщение {msg_id} уже существует, пропускаем")
+                        skipped_duplicate = True
+                
+                # Глобальная проверка дубликатов по telegram_id и content_hash (всегда, даже при force_full)
+                # Это предотвращает дублирование, когда одно сообщение попадает в разные сессии
+                if not skipped_duplicate and telegram_msg_id:
+                    # Ищем по telegram ID в других сессиях (глобально по чату)
+                    import hashlib
+                    content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
+                    # Ищем записи с таким же telegram ID или хешем содержимого в том же чате
+                    if self.qdrant_manager and self.messages_collection:
+                        try:
+                            # Проверяем в Qdrant по метаданным (глобально по чату)
+                            existing_by_id = self.qdrant_manager.get(
+                                collection_name=self.messages_collection,
+                                where={"$and": [
+                                    {"chat": {"$eq": chat}},
+                                    {"$or": [
+                                        {"telegram_id": {"$eq": str(telegram_msg_id)}},
+                                        {"content_hash": {"$eq": content_hash}}
+                                    ]}
+                                ]},
+                                limit=1
+                            )
+                            if existing_by_id and existing_by_id.get("ids"):
+                                logger.debug(f"Дубликат сообщения найден глобально по telegram_id={telegram_msg_id} или content_hash={content_hash} в чате {chat}, пропускаем")
+                                skipped_duplicate = True
+                        except Exception as e:
+                            # Если поиск по метаданным не работает, продолжаем
+                            logger.debug(f"Не удалось проверить дубликаты по метаданным: {e}")
+                elif not skipped_duplicate:
+                    # Для сообщений без telegram ID проверяем по хешу содержимого (глобально по чату)
+                    import hashlib
+                    content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
+                    if self.qdrant_manager and self.messages_collection:
+                        try:
+                            existing_by_hash = self.qdrant_manager.get(
+                                collection_name=self.messages_collection,
+                                where={"$and": [
+                                    {"chat": {"$eq": chat}},
+                                    {"content_hash": {"$eq": content_hash}}
+                                ]},
+                                limit=1
+                            )
+                            if existing_by_hash and existing_by_hash.get("ids"):
+                                logger.debug(f"Дубликат сообщения найден глобально по content_hash={content_hash} в чате {chat}, пропускаем")
                                 skipped_duplicate = True
                         except Exception as e:
                             logger.debug(f"Не удалось проверить дубликаты по хешу: {e}")
@@ -1569,36 +1656,44 @@ class TwoLevelIndexer:
                     documents = [msg["msg_text"] for msg in messages_to_index]
                     metadatas = [msg["metadata"] for msg in messages_to_index]
                     
-                    try:
-                        self.messages_collection.upsert(
-                            ids=ids,
-                            documents=documents,
-                            embeddings=embeddings,
-                            metadatas=metadatas,
-                        )
-                    except Exception as e:
-                        error_msg = str(e)
-                        if "embedding with dimension" in error_msg or "dimension" in error_msg.lower():
-                            logger.warning(
-                                f"Ошибка размерности эмбеддингов в коллекции chat_messages: {error_msg}. "
-                                "Пересоздаём коллекцию..."
-                            )
-                            # Пересоздаём коллекцию
-                            self.chroma_client.delete_collection("chat_messages")
-                            self.messages_collection = self.chroma_client.create_collection(
-                                name="chat_messages",
-                                metadata={"description": "Сообщения с контекстом для уточняющего поиска (L2)"},
-                            )
-                            # Повторяем попытку
-                            self.messages_collection.upsert(
+                    # Сохраняем в Qdrant
+                    if self.qdrant_manager and self.messages_collection:
+                        try:
+                            self.qdrant_manager.upsert(
+                                collection_name=self.messages_collection,
                                 ids=ids,
-                                documents=documents,
                                 embeddings=embeddings,
                                 metadatas=metadatas,
+                                documents=documents,
                             )
-                            logger.info("Коллекция chat_messages пересоздана и записи добавлены")
-                        else:
-                            raise
+                        except Exception as e:
+                            error_msg = str(e)
+                            if "dimension" in error_msg.lower():
+                                logger.warning(
+                                    f"Ошибка размерности эмбеддингов в коллекции chat_messages: {error_msg}. "
+                                    "Пересоздаём коллекцию..."
+                                )
+                                # Пересоздаём коллекцию
+                                if self.qdrant_manager:
+                                    self.qdrant_manager.delete_collection(self.messages_collection)
+                                    self.messages_collection = self._check_and_recreate_collection(
+                                        "chat_messages",
+                                        "Сообщения с контекстом для уточняющего поиска (L2)",
+                                        force_recreate=True
+                                    )
+                                    if self.messages_collection:
+                                        self.qdrant_manager.upsert(
+                                            collection_name=self.messages_collection,
+                                            ids=ids,
+                                            embeddings=embeddings,
+                                            metadatas=metadatas,
+                                            documents=documents,
+                                        )
+                                        logger.info("Коллекция chat_messages пересоздана и записи добавлены")
+                            else:
+                                logger.error(f"Ошибка при добавлении сообщений в Qdrant: {e}")
+                    else:
+                        logger.warning("Qdrant недоступен, сообщения не будут сохранены в векторное хранилище")
                     
                     # Синхронизация с графом памяти
                     logger.debug(f"Проверка синхронизации с графом: ingestor={self.ingestor is not None}, graph={self.graph is not None}")
@@ -1677,6 +1772,8 @@ class TwoLevelIndexer:
                                         "context_length": metadata.get("context_length", 0),
                                         "chat_mode": metadata.get("chat_mode", "group"),
                                         "date_utc": date_utc,
+                                        "content_hash": metadata.get("content_hash", ""),  # Сохраняем для проверки дубликатов
+                                        "telegram_id": metadata.get("telegram_id"),  # Сохраняем для проверки дубликатов
                                     },
                                 )
                                 records_to_ingest.append((record, embedding))
@@ -1721,7 +1818,7 @@ class TwoLevelIndexer:
                                                 embeddings_failed += 1
                                                 continue
                                             
-                                            # Сохраняем эмбеддинг
+                                            # Сохраняем эмбеддинг в граф
                                             success = self.graph.update_node(
                                                 record.record_id,
                                                 embedding=embedding,
@@ -1729,13 +1826,35 @@ class TwoLevelIndexer:
                                             if success:
                                                 embeddings_saved += 1
                                                 logger.debug(
-                                                    f"Эмбеддинг сохранен для {record.record_id}: "
+                                                    f"Эмбеддинг сохранен в граф для {record.record_id}: "
                                                     f"размер={len(embedding)}"
                                                 )
+                                                
+                                                # Сохраняем эмбеддинг в Qdrant для векторного поиска
+                                                if self.vector_store and self.vector_store.available():
+                                                    try:
+                                                        payload_data = {
+                                                            "record_id": record.record_id,
+                                                            "source": record.source,
+                                                            "tags": record.tags,
+                                                            "timestamp": record.timestamp.timestamp(),
+                                                            "timestamp_iso": record.timestamp.isoformat(),
+                                                            "content_preview": record.content[:200],
+                                                        }
+                                                        chat_name = record.metadata.get("chat")
+                                                        if isinstance(chat_name, str):
+                                                            payload_data["chat"] = chat_name
+                                                        
+                                                        self.vector_store.upsert(record.record_id, embedding, payload_data)
+                                                        logger.debug(f"Эмбеддинг сохранен в Qdrant для {record.record_id}")
+                                                    except Exception as e:
+                                                        logger.warning(
+                                                            f"Не удалось сохранить эмбеддинг в Qdrant для {record.record_id}: {e}"
+                                                        )
                                             else:
                                                 embeddings_failed += 1
                                                 logger.warning(
-                                                    f"Не удалось сохранить эмбеддинг для {record.record_id}"
+                                                    f"Не удалось сохранить эмбеддинг в граф для {record.record_id}"
                                                 )
                                         except Exception as e:
                                             embeddings_failed += 1
@@ -1880,12 +1999,14 @@ class TwoLevelIndexer:
                 }
 
                 # Добавляем в коллекцию
-                self.tasks_collection.upsert(
-                    ids=[task_id],
-                    documents=[task_text],
-                    embeddings=[embedding],
-                    metadatas=[metadata],
-                )
+                if self.qdrant_manager and self.tasks_collection:
+                    self.qdrant_manager.upsert(
+                        collection_name=self.tasks_collection,
+                        ids=[task_id],
+                        documents=[task_text],
+                        embeddings=[embedding],
+                        metadatas=[metadata],
+                    )
 
                 indexed_count += 1
 
@@ -1922,13 +2043,19 @@ class TwoLevelIndexer:
         if not self.session_clusterer or not self.cluster_summarizer:
             return {"clusters_count": 0, "sessions_clustered": 0}
 
-        # Получаем эмбеддинги из ChromaDB для сессий
+        # Получаем эмбеддинги из Qdrant для сессий
         session_ids = [s["session_id"] for s in summaries]
 
         try:
-            result = self.sessions_collection.get(
-                ids=session_ids, include=["embeddings", "metadatas", "documents"]
-            )
+            result = None
+            if self.qdrant_manager and self.sessions_collection:
+                result = self.qdrant_manager.get(
+                    collection_name=self.sessions_collection,
+                    ids=session_ids
+                )
+            else:
+                logger.warning("Qdrant недоступен, кластеризация невозможна")
+                return {"clusters_count": 0, "sessions_clustered": 0}
 
             if not result["ids"]:
                 logger.warning(f"Не найдены эмбеддинги для сессий чата {chat_name}")
@@ -1957,7 +2084,7 @@ class TwoLevelIndexer:
             clusters = clustering_result.get("clusters", [])
             logger.info(f"Найдено {len(clusters)} кластеров")
 
-            # Сохраняем кластеры в ChromaDB и обновляем метаданные сессий
+            # Сохраняем кластеры в Qdrant и обновляем метаданные сессий
             clusters_saved = 0
             sessions_clustered = 0
 
@@ -1968,20 +2095,35 @@ class TwoLevelIndexer:
                 for session_id in cluster["session_ids"]:
                     try:
                         # Получаем текущую метаданные сессии
-                        session_data = self.sessions_collection.get(
-                            ids=[session_id], include=["metadatas"]
-                        )
+                        session_data = None
+                        if self.qdrant_manager and self.sessions_collection:
+                            session_data = self.qdrant_manager.get(
+                                collection_name=self.sessions_collection,
+                                ids=[session_id]
+                            )
 
-                        if session_data["ids"]:
-                            metadata = session_data["metadatas"][0]
+                        if session_data and session_data.get("ids"):
+                            metadata = session_data["metadatas"][0].copy()
                             metadata["cluster_id"] = cluster_id
                             metadata["cluster_label"] = cluster.get("label", "")
 
-                            # Обновляем метаданные
-                            self.sessions_collection.update(
-                                ids=[session_id], metadatas=[metadata]
-                            )
-                            sessions_clustered += 1
+                            # Обновляем метаданные через upsert (Qdrant не имеет отдельного update)
+                            if self.qdrant_manager and self.sessions_collection:
+                                # Получаем текущие данные для обновления
+                                current_data = self.qdrant_manager.get(
+                                    collection_name=self.sessions_collection,
+                                    ids=[session_id]
+                                )
+                                if current_data and current_data.get("ids"):
+                                    # Обновляем через upsert с новыми метаданными
+                                    self.qdrant_manager.upsert(
+                                        collection_name=self.sessions_collection,
+                                        ids=[session_id],
+                                        embeddings=current_data.get("embeddings", [[]])[:1] or [[]],
+                                        metadatas=[metadata],
+                                        documents=current_data.get("documents", [""])[:1] or [""],
+                                    )
+                                    sessions_clustered += 1
                     except Exception as e:
                         logger.error(
                             f"Ошибка при обновлении метаданных сессии {session_id}: {e}"
@@ -2023,12 +2165,14 @@ class TwoLevelIndexer:
 
                 # Сохраняем кластер
                 try:
-                    self.clusters_collection.upsert(
-                        ids=[cluster_id],
-                        documents=[cluster_doc],
-                        embeddings=[cluster_embedding],
-                        metadatas=[cluster_metadata],
-                    )
+                    if self.qdrant_manager and self.clusters_collection:
+                        self.qdrant_manager.upsert(
+                            collection_name=self.clusters_collection,
+                            ids=[cluster_id],
+                            documents=[cluster_doc],
+                            embeddings=[cluster_embedding],
+                            metadatas=[cluster_metadata],
+                        )
                     clusters_saved += 1
                     logger.info(
                         f"Сохранён кластер {cluster_id}: {cluster.get('label', '')}"
@@ -2060,14 +2204,16 @@ class TwoLevelIndexer:
         Returns:
             Список кластеров
         """
-        if not self.clusters_collection:
+        if not self.qdrant_manager or not self.clusters_collection:
             return []
 
         try:
             where_filter = {"chat": chat} if chat else None
 
-            result = self.clusters_collection.get(
-                where=where_filter, limit=limit, include=["metadatas", "documents"]
+            result = self.qdrant_manager.get(
+                collection_name=self.clusters_collection,
+                where=where_filter,
+                limit=limit
             )
 
             clusters = []
@@ -2095,12 +2241,13 @@ class TwoLevelIndexer:
         Returns:
             Список сессий
         """
-        if not self.sessions_collection:
+        if not self.qdrant_manager or not self.sessions_collection:
             return []
 
         try:
-            result = self.sessions_collection.get(
-                where={"cluster_id": cluster_id}, include=["metadatas", "documents"]
+            result = self.qdrant_manager.get(
+                collection_name=self.sessions_collection,
+                where={"cluster_id": cluster_id}
             )
 
             sessions = []
@@ -2127,8 +2274,13 @@ class TwoLevelIndexer:
         """
         try:
             # Получаем все сообщения из коллекции chat_messages для данного чата
-            messages_collection = self.chroma_client.get_collection("chat_messages")
-            existing_messages = messages_collection.get(where={"chat": chat_name})
+            # Используем Qdrant для векторного хранилища
+            existing_messages = None
+            if self.qdrant_manager and self.messages_collection:
+                existing_messages = self.qdrant_manager.get(
+                    collection_name=self.messages_collection,
+                    where={"chat": chat_name}
+                )
 
             if existing_messages and existing_messages.get("ids") is not None:
                 message_count = len(existing_messages["ids"])
@@ -2195,7 +2347,12 @@ class TwoLevelIndexer:
         # Определяем начальный номер сессии на основе существующих сессий
         existing_session_ids = set()
         try:
-            existing_sessions = self.sessions_collection.get(where={"chat": chat_name})
+            existing_sessions = None
+            if self.qdrant_manager and self.sessions_collection:
+                existing_sessions = self.qdrant_manager.get(
+                    collection_name=self.sessions_collection,
+                    where={"chat": chat_name}
+                )
             if existing_sessions and existing_sessions.get("ids"):
                 existing_session_ids = set(existing_sessions["ids"])
                 logger.info(
@@ -2236,7 +2393,12 @@ class TwoLevelIndexer:
             str: текущая стратегия (fresh, recent, old)
         """
         try:
-            existing_sessions = self.sessions_collection.get(where={"chat": chat_name})
+            existing_sessions = None
+            if self.qdrant_manager and self.sessions_collection:
+                existing_sessions = self.qdrant_manager.get(
+                    collection_name=self.sessions_collection,
+                    where={"chat": chat_name}
+                )
 
             if not existing_sessions or not existing_sessions.get("ids"):
                 return "fresh"  # По умолчанию начинаем с fresh
@@ -2382,7 +2544,12 @@ class TwoLevelIndexer:
         # Определяем максимальный номер сессии для каждого окна
         existing_session_ids = set()
         try:
-            existing_sessions = self.sessions_collection.get(where={"chat": chat_name})
+            existing_sessions = None
+            if self.qdrant_manager and self.sessions_collection:
+                existing_sessions = self.qdrant_manager.get(
+                    collection_name=self.sessions_collection,
+                    where={"chat": chat_name}
+                )
             if existing_sessions and existing_sessions.get("ids"):
                 existing_session_ids = set(existing_sessions["ids"])
         except Exception as e:
@@ -2447,25 +2614,42 @@ class TwoLevelIndexer:
             from ..memory.graph_types import GraphEdge, EdgeType
             cursor = self.graph.conn.cursor()
             
+            # Нормализуем имя чата для поиска (сессии могут иметь формат "semya-old-S0001")
+            # Используем функцию slugify для получения нормализованного имени
+            from ..utils.naming import slugify
+            chat_slug = slugify(chat) if chat else ""
+            
             # Ищем предыдущие сессии того же чата
+            # Сессии могут иметь формат: "semya-old-S0001", "Семья-old-S0001", "semya-S0001" и т.д.
+            # Ищем по паттерну, который включает нормализованное имя чата или оригинальное имя
             query = """
                 SELECT id, properties FROM nodes
                 WHERE type = 'DocChunk' 
                 AND id != ?
-                AND id LIKE ?
                 AND properties IS NOT NULL
                 AND json_extract(properties, '$.session_type') = 'session_summary'
                 AND (
                     json_extract(properties, '$.chat') = ?
                     OR json_extract(properties, '$.source') = ?
                 )
+                AND (
+                    id LIKE ? 
+                    OR id LIKE ?
+                    OR (id LIKE ? AND ? != '')
+                )
                 ORDER BY json_extract(properties, '$.timestamp') DESC
                 LIMIT 5
             """
             
-            # Ищем сессии с префиксом чата (например, "Семья-S" или "semya-")
-            chat_prefix = f"{chat}-S%"
-            cursor.execute(query, (session_id, chat_prefix, chat, chat))
+            # Ищем сессии с различными форматами:
+            # 1. С нормализованным именем: "semya-old-S%", "semya-S%"
+            # 2. С оригинальным именем: "Семья-old-S%", "Семья-S%"
+            # 3. С любым префиксом, если chat_slug пустой
+            pattern1 = f"{chat_slug}-%-S%" if chat_slug else "%"
+            pattern2 = f"{chat}-%-S%" if chat else "%"
+            pattern3 = f"{chat_slug}-S%" if chat_slug else "%"
+            
+            cursor.execute(query, (session_id, chat, chat, pattern1, pattern2, pattern3, chat_slug))
             existing_sessions = cursor.fetchall()
             
             for row in existing_sessions:

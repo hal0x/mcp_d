@@ -792,7 +792,7 @@ class BuildInsightGraphRequest(BaseModel):
     """Request for building insight graph."""
 
     summaries_dir: Optional[str] = Field(None, description="Директория с саммаризациями")
-    chroma_path: Optional[str] = Field(None, description="Путь к ChromaDB")
+    chroma_path: Optional[str] = Field(None, description="Deprecated: не используется, заменено на Qdrant (оставлено для обратной совместимости)")
     similarity_threshold: float = Field(default=0.76, description="Порог схожести")
     max_similar_results: int = Field(default=8, description="Максимальное количество похожих результатов")
 

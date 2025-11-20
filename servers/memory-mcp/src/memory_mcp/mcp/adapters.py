@@ -362,11 +362,11 @@ class MemoryServiceAdapter:
             self.vector_store.close()
 
     def clear_chat_data(self, chat_name: str) -> Dict[str, int]:
-        """Удаляет все данные чата из графа, Qdrant и ChromaDB."""
+        """Удаляет все данные чата из графа и Qdrant."""
         stats = {
             "nodes_deleted": 0,
             "vectors_deleted": 0,
-            "chromadb_deleted": 0,
+            "qdrant_deleted": 0,
         }
 
         logger.info(f"Начало очистки данных чата: {chat_name}")
@@ -397,27 +397,27 @@ class MemoryServiceAdapter:
             logger.debug("Qdrant недоступен, пропускаем очистку векторов")
 
         try:
-            chromadb_deleted = self._clear_chromadb_chat(chat_name)
-            stats["chromadb_deleted"] = chromadb_deleted
+            qdrant_deleted = self._clear_qdrant_chat(chat_name)
+            stats["qdrant_deleted"] = qdrant_deleted
             logger.info(
-                f"Удалено {chromadb_deleted} записей из ChromaDB (чат: {chat_name})"
+                f"Удалено {qdrant_deleted} записей из Qdrant (чат: {chat_name})"
             )
         except Exception as e:
             logger.warning(
-                f"Ошибка при очистке ChromaDB для чата {chat_name}: {e}",
+                f"Ошибка при очистке Qdrant для чата {chat_name}: {e}",
                 exc_info=True,
             )
 
         total_deleted = (
             stats["nodes_deleted"]
             + stats["vectors_deleted"]
-            + stats["chromadb_deleted"]
+            + stats.get("qdrant_deleted", 0)
         )
         logger.info(
             f"Очистка завершена для чата {chat_name}: "
             f"узлов={stats['nodes_deleted']}, "
             f"векторов={stats['vectors_deleted']}, "
-            f"ChromaDB={stats['chromadb_deleted']}, "
+            f"Qdrant={stats.get('qdrant_deleted', 0)}, "
             f"всего={total_deleted}"
         )
 
@@ -529,7 +529,7 @@ class MemoryServiceAdapter:
         Объединяет результаты из разных источников используя Reciprocal Rank Fusion (RRF).
         
         Args:
-            result_lists: Список списков результатов из разных источников (FTS5, Vector, ChromaDB)
+            result_lists: Список списков результатов из разных источников (FTS5, Vector/Qdrant)
             k: Параметр RRF (стандартное значение 60)
             
         Returns:
@@ -545,7 +545,7 @@ class MemoryServiceAdapter:
         return rrf_scores
 
     def search(self, request: SearchRequest) -> SearchResponse:
-        """Выполняет гибридный поиск: FTS5 + векторный + ChromaDB с объединением через RRF."""
+        """Выполняет гибридный поиск: FTS5 + векторный (Qdrant) с объединением через RRF."""
         # Обогащаем запрос контекстом сущностей
         enriched_query = self.entity_enricher.enrich_query_with_entity_context(request.query)
         
@@ -629,7 +629,7 @@ class MemoryServiceAdapter:
 
         # 2. Векторный поиск (Qdrant)
         vector_results: list[SearchResultItem] = []
-        if self.embedding_service and self.vector_store:
+        if self.embedding_service and self.vector_store and self.vector_store.available():
             # Используем обогащенный запрос для векторного поиска
             query_vector = self.embedding_service.embed(enriched_query)
             if query_vector:
@@ -666,52 +666,18 @@ class MemoryServiceAdapter:
                         # Сохраняем в all_items, если еще нет (или обновляем, если векторный результат лучше)
                         if record_id not in all_items:
                             all_items[record_id] = item
-                        elif not all_items[record_id].embedding and item.embedding:
-                            # Обновляем эмбеддинг, если его не было
-                            all_items[record_id].embedding = item.embedding
+                        else:
+                            # Обновляем метаданные, если их не было (сохраняем vector_score)
+                            existing_item = all_items[record_id]
+                            if not existing_item.metadata:
+                                existing_item.metadata = {}
+                            if "vector_score" not in existing_item.metadata:
+                                existing_item.metadata["vector_score"] = match.score
+                            if not existing_item.embedding and item.embedding:
+                                # Обновляем эмбеддинг, если его не было
+                                existing_item.embedding = item.embedding
 
-        # 3. Поиск в ChromaDB коллекциях
-        chromadb_results: list[SearchResultItem] = []
-        chromadb_matches = self._search_chromadb_collections(
-            request.query,
-            limit=request.top_k,
-            source=request.source,
-            tags=request.tags,
-            date_from=request.date_from,
-            date_to=request.date_to,
-        )
-        
-        for match in chromadb_matches:
-            record_id = match.record_id
-            # Пытаемся получить эмбеддинг из графа, если его нет в ChromaDB результате
-            if not match.embedding and record_id in self.graph.graph:
-                node_data = self.graph.graph.nodes[record_id]
-                emb_from_graph = node_data.get("embedding")
-                if emb_from_graph is not None:
-                    # Преобразуем numpy массив в список, если нужно
-                    if hasattr(emb_from_graph, 'tolist'):
-                        emb_from_graph = emb_from_graph.tolist()
-                    elif not isinstance(emb_from_graph, list):
-                        try:
-                            emb_from_graph = list(emb_from_graph)
-                        except (TypeError, ValueError):
-                            emb_from_graph = None
-                    if emb_from_graph:
-                        # Создаем новый SearchResultItem с эмбеддингом из графа
-                        match = SearchResultItem(
-                            record_id=match.record_id,
-                            score=match.score,  # Оригинальный score, RRF пересчитает
-                            content=match.content,
-                            source=match.source,
-                            timestamp=match.timestamp,
-                            author=match.author,
-                            metadata=match.metadata,
-                            embedding=emb_from_graph,
-                        )
-            chromadb_results.append(match)
-            # Добавляем в all_items, если еще нет
-            if record_id not in all_items:
-                all_items[record_id] = match
+        # 3. Векторный поиск выполняется через Qdrant (см. раздел 2 выше)
 
         # 4. Boost для точных совпадений в FTS5 результатах
         query_words = set(request.query.lower().split())
@@ -724,15 +690,13 @@ class MemoryServiceAdapter:
                 item.score *= 1.2
 
         # 5. Объединение результатов с помощью RRF или простого объединения
-        if self._use_rrf and (fts_results or vector_results or chromadb_results):
-            # Применяем RRF для объединения результатов
+        if self._use_rrf and (fts_results or vector_results):
+            # Применяем RRF для объединения результатов (только FTS5 и Qdrant)
             result_lists = []
             if fts_results:
                 result_lists.append(fts_results)
             if vector_results:
                 result_lists.append(vector_results)
-            if chromadb_results:
-                result_lists.append(chromadb_results)
             
             rrf_scores = self._reciprocal_rank_fusion(result_lists, k=self._rrf_k)
             
@@ -787,18 +751,7 @@ class MemoryServiceAdapter:
                     item.score = score
                     combined[item.record_id] = item
             
-            # ChromaDB результаты с низким весом
-            for item in chromadb_results:
-                score = item.score * 0.05
-                existing = combined.get(item.record_id)
-                if existing:
-                    if existing.score < 0.2 and score > existing.score * 2.0:
-                        existing.score = score
-                    if not existing.embedding and item.embedding:
-                        existing.embedding = item.embedding
-                else:
-                    item.score = score
-                    combined[item.record_id] = item
+            # Векторный поиск выполняется через Qdrant (см. раздел выше)
             
             results = sorted(combined.values(), key=lambda item: item.score, reverse=True)
 
@@ -920,115 +873,108 @@ class MemoryServiceAdapter:
                         payload = _node_to_payload(self.graph, found_id, data)
                         return FetchResponse(record=payload)
             
-            # Если не найдено в графе, ищем в ChromaDB коллекциях
-            try:
-                import chromadb
-                from ..config import get_settings
-                
-                settings = get_settings()
-                chroma_path = settings.chroma_path
-                
-                if not os.path.isabs(chroma_path):
-                    current_dir = Path(__file__).parent
-                    project_root = current_dir
-                    while project_root.parent != project_root:
-                        if (project_root / "pyproject.toml").exists():
-                            break
-                        project_root = project_root.parent
-                    if not (project_root / "pyproject.toml").exists():
-                        project_root = Path.cwd()
-                    chroma_path = str(project_root / chroma_path)
-                
-                if os.path.exists(chroma_path):
-                    chroma_client = chromadb.PersistentClient(path=chroma_path)
+            # Если не найдено в графе, ищем в Qdrant коллекциях
+            if self.vector_store and self.vector_store.available():
+                try:
+                    from ..memory.qdrant_collections import QdrantCollectionsManager
+                    from ..config import get_settings
                     
-                    # Ищем в коллекциях chat_messages, chat_sessions, chat_tasks
-                    for collection_name in ["chat_messages", "chat_sessions", "chat_tasks"]:
-                        try:
-                            collection = chroma_client.get_collection(collection_name)
-                            result = collection.get(ids=[request.record_id], include=["documents", "metadatas", "embeddings"])
-                            
-                            if result.get("ids") and len(result["ids"]) > 0:
-                                doc = result["documents"][0] if result.get("documents") else ""
-                                metadata = result["metadatas"][0] if result.get("metadatas") else {}
-                                
-                                # Преобразуем ChromaDB запись в MemoryRecordPayload
-                                chat_name = metadata.get("chat", collection_name.replace("chat_", ""))
-                                
-                                # Парсим timestamp из разных полей
-                                date_utc = metadata.get("date_utc") or metadata.get("start_time_utc") or metadata.get("end_time_utc")
-                                timestamp = None
-                                if date_utc:
-                                    try:
-                                        timestamp = parse_datetime_utc(date_utc, use_zoneinfo=True)
-                                    except Exception:
-                                        timestamp = datetime.now(timezone.utc)
-                                else:
-                                    timestamp = datetime.now(timezone.utc)
-                                
-                                # Извлекаем автора из разных полей
-                                author = metadata.get("sender") or metadata.get("author") or metadata.get("username")
-                                
-                                # Извлекаем теги и сущности
-                                tags = metadata.get("tags", [])
-                                if isinstance(tags, str):
-                                    tags = [tags] if tags else []
-                                
-                                entities = metadata.get("entities", [])
-                                if isinstance(entities, str):
-                                    entities = [entities] if entities else []
-                                
-                                # Получаем эмбеддинг, если доступен
-                                embedding = None
-                                if result.get("embeddings") and len(result["embeddings"]) > 0:
-                                    embedding = result["embeddings"][0]
-                                
-                                payload = MemoryRecordPayload(
-                                    record_id=request.record_id,
-                                    source=chat_name,
-                                    content=doc,
-                                    timestamp=timestamp,
-                                    author=author,
-                                    tags=tags if isinstance(tags, list) else [],
-                                    entities=entities if isinstance(entities, list) else [],
-                                    attachments=[],
-                                    metadata={
-                                        "collection": collection_name,
-                                        "chat": chat_name,
-                                        **metadata,
-                                    },
-                                    embedding=embedding,
+                    settings = get_settings()
+                    qdrant_url = settings.get_qdrant_url()
+                    if qdrant_url:
+                        # Получаем размерность эмбеддингов
+                        embedding_dimension = self.embedding_service.dimension if self.embedding_service else 1024
+                        qdrant_manager = QdrantCollectionsManager(url=qdrant_url, vector_size=embedding_dimension)
+                        
+                        # Ищем в коллекциях chat_messages, chat_sessions, chat_tasks
+                        for collection_name in ["chat_messages", "chat_sessions", "chat_tasks"]:
+                            try:
+                                result = qdrant_manager.get(
+                                    collection_name=collection_name,
+                                    ids=[request.record_id]
                                 )
                                 
-                                # Если эмбеддинг есть, но записи нет в графе, синхронизируем
-                                if embedding and request.record_id not in self.graph.graph:
-                                    try:
-                                        # Создаём узел в графе для синхронизации
-                                        from ..indexing import MemoryRecord
-                                        record = MemoryRecord(
-                                            record_id=request.record_id,
-                                            source=chat_name,
-                                            content=doc,
-                                            timestamp=timestamp,
-                                            author=author,
-                                            tags=tags if isinstance(tags, list) else [],
-                                            entities=entities if isinstance(entities, list) else [],
-                                            attachments=[],
-                                            metadata=payload.metadata,
-                                        )
-                                        self.ingestor.ingest([record])
-                                        # Сохраняем эмбеддинг
-                                        self.graph.update_node(request.record_id, embedding=embedding)
-                                        logger.debug(f"Синхронизирована запись {request.record_id} из ChromaDB в граф")
-                                    except Exception as e:
-                                        logger.debug(f"Ошибка при синхронизации записи {request.record_id}: {e}")
-                                
-                                return FetchResponse(record=payload)
-                        except Exception as e:
-                            logger.debug(f"Failed to fetch from collection {collection_name}: {e}")
-                            continue
-            except Exception as e:
-                logger.debug(f"Failed to fetch from ChromaDB: {e}")
+                                if result.get("ids") and len(result["ids"]) > 0:
+                                    doc = result["documents"][0] if result.get("documents") else ""
+                                    metadata = result["metadatas"][0] if result.get("metadatas") else {}
+                                    
+                                    # Преобразуем Qdrant запись в MemoryRecordPayload
+                                    chat_name = metadata.get("chat", collection_name.replace("chat_", ""))
+                                    
+                                    # Парсим timestamp из разных полей
+                                    date_utc = metadata.get("date_utc") or metadata.get("start_time_utc") or metadata.get("end_time_utc")
+                                    timestamp = None
+                                    if date_utc:
+                                        try:
+                                            timestamp = parse_datetime_utc(date_utc, use_zoneinfo=True)
+                                        except Exception:
+                                            timestamp = datetime.now(timezone.utc)
+                                    else:
+                                        timestamp = datetime.now(timezone.utc)
+                                    
+                                    # Извлекаем автора из разных полей
+                                    author = metadata.get("sender") or metadata.get("author") or metadata.get("username")
+                                    
+                                    # Извлекаем теги и сущности
+                                    tags = metadata.get("tags", [])
+                                    if isinstance(tags, str):
+                                        tags = [tags] if tags else []
+                                    
+                                    entities = metadata.get("entities", [])
+                                    if isinstance(entities, str):
+                                        entities = [entities] if entities else []
+                                    
+                                    # Получаем эмбеддинг, если доступен
+                                    embedding = None
+                                    if result.get("embeddings") and len(result["embeddings"]) > 0:
+                                        embedding = result["embeddings"][0]
+                                    
+                                    payload = MemoryRecordPayload(
+                                        record_id=request.record_id,
+                                        source=chat_name,
+                                        content=doc,
+                                        timestamp=timestamp,
+                                        author=author,
+                                        tags=tags if isinstance(tags, list) else [],
+                                        entities=entities if isinstance(entities, list) else [],
+                                        attachments=[],
+                                        metadata={
+                                            "collection": collection_name,
+                                            "chat": chat_name,
+                                            **metadata,
+                                        },
+                                        embedding=embedding,
+                                    )
+                                    
+                                    # Если эмбеддинг есть, но записи нет в графе, синхронизируем
+                                    if embedding and request.record_id not in self.graph.graph:
+                                        try:
+                                            # Создаём узел в графе для синхронизации
+                                            from ..indexing import MemoryRecord
+                                            record = MemoryRecord(
+                                                record_id=request.record_id,
+                                                source=chat_name,
+                                                content=doc,
+                                                timestamp=timestamp,
+                                                author=author,
+                                                tags=tags if isinstance(tags, list) else [],
+                                                entities=entities if isinstance(entities, list) else [],
+                                                attachments=[],
+                                                metadata=payload.metadata,
+                                            )
+                                            self.ingestor.ingest([record])
+                                            # Сохраняем эмбеддинг
+                                            self.graph.update_node(request.record_id, embedding=embedding)
+                                            logger.debug(f"Синхронизирована запись {request.record_id} из Qdrant в граф")
+                                        except Exception as e:
+                                            logger.debug(f"Ошибка при синхронизации записи {request.record_id}: {e}")
+                                    
+                                    return FetchResponse(record=payload)
+                            except Exception as e:
+                                logger.debug(f"Failed to fetch from collection {collection_name}: {e}")
+                                continue
+                except Exception as e:
+                    logger.debug(f"Failed to fetch from Qdrant: {e}")
             
             return FetchResponse(record=None)
         except Exception as e:
@@ -1481,85 +1427,67 @@ class MemoryServiceAdapter:
         except Exception as e:
             logger.warning(f"Ошибка при подсчёте тегов из графа: {e}")
 
-        # Добавляем статистику из ChromaDB коллекций
+        # Добавляем статистику из Qdrant коллекций
         try:
-            import chromadb
+            from ..memory.qdrant_collections import QdrantCollectionsManager
             from ..config import get_settings
             
             settings = get_settings()
-            chroma_path = settings.chroma_path
-            
-            if not os.path.isabs(chroma_path):
-                current_dir = Path(__file__).parent
-                project_root = current_dir
-                while project_root.parent != project_root:
-                    if (project_root / "pyproject.toml").exists():
-                        break
-                    project_root = project_root.parent
-                if not (project_root / "pyproject.toml").exists():
-                    project_root = Path.cwd()
-                chroma_path = str(project_root / chroma_path)
-            
-            if os.path.exists(chroma_path):
-                chroma_client = chromadb.PersistentClient(path=chroma_path)
+            qdrant_url = settings.get_qdrant_url()
+            if qdrant_url:
+                # Получаем размерность эмбеддингов
+                embedding_dimension = self.embedding_service.dimension if self.embedding_service else 1024
+                qdrant_manager = QdrantCollectionsManager(url=qdrant_url, vector_size=embedding_dimension)
                 
-                for collection_name in ["chat_messages", "chat_sessions", "chat_tasks"]:
-                    try:
-                        collection = chroma_client.get_collection(collection_name)
-                        # Используем count() для получения общего количества записей
-                        total_count = collection.count()
-                        
-                        # Получаем все метаданные для подсчёта источников и тегов
-                        # Используем scroll для больших коллекций
-                        all_metadatas = []
-                        offset = 0
-                        batch_size = 1000
-                        
-                        while offset < total_count:
-                            try:
-                                result = collection.get(
-                                    limit=batch_size,
-                                    offset=offset,
-                                    include=["metadatas"]
-                                )
-                                batch_metadatas = result.get("metadatas", [])
-                                if not batch_metadatas:
-                                    break
-                                all_metadatas.extend(batch_metadatas)
-                                offset += len(batch_metadatas)
-                                if len(batch_metadatas) < batch_size:
-                                    break
-                            except Exception as e:
-                                logger.debug(f"Ошибка при получении метаданных из {collection_name} (offset={offset}): {e}")
-                                break
-                        
-                        # Подсчитываем источники и теги
-                        for metadata in all_metadatas:
-                            if not isinstance(metadata, dict):
-                                continue
+                if qdrant_manager.available():
+                    for collection_name in ["chat_messages", "chat_sessions", "chat_tasks"]:
+                        try:
+                            # Используем count() для получения общего количества записей
+                            total_count = qdrant_manager.count(collection_name)
                             
-                            # Подсчитываем источники (чаты)
-                            chat = metadata.get("chat")
-                            if chat:
-                                sources_count[chat] = sources_count.get(chat, 0) + 1
-                            else:
-                                # Если chat не указан, используем имя коллекции
-                                source_name = collection_name.replace("chat_", "")
-                                sources_count[source_name] = sources_count.get(source_name, 0) + 1
+                            # Получаем все метаданные для подсчёта источников и тегов
+                            # Используем get с limit для больших коллекций
+                            all_metadatas = []
+                            limit = 1000
+                            offset = None
                             
-                            # Подсчитываем теги
-                            tags = metadata.get("tags", [])
-                            if isinstance(tags, str):
-                                tags = [tags] if tags else []
-                            if isinstance(tags, list):
-                                for tag in tags:
-                                    if tag:  # Пропускаем пустые теги
-                                        tags_count[tag] = tags_count.get(tag, 0) + 1
-                    except Exception as e:
-                        logger.debug(f"Ошибка при подсчёте статистики из коллекции {collection_name}: {e}")
-                        continue
+                            # Qdrant не поддерживает offset напрямую, получаем все сразу
+                            # Для больших коллекций это может быть медленно, но для статистики приемлемо
+                            result = qdrant_manager.get(
+                                collection_name=collection_name,
+                                limit=total_count if total_count < 10000 else 10000  # Ограничиваем для производительности
+                            )
+                            
+                            batch_metadatas = result.get("metadatas", [])
+                            all_metadatas.extend(batch_metadatas)
+                            
+                            # Подсчитываем источники и теги
+                            for metadata in all_metadatas:
+                                if not isinstance(metadata, dict):
+                                    continue
+                                
+                                # Подсчитываем источники (чаты)
+                                chat = metadata.get("chat")
+                                if chat:
+                                    sources_count[chat] = sources_count.get(chat, 0) + 1
+                                else:
+                                    # Если chat не указан, используем имя коллекции
+                                    source_name = collection_name.replace("chat_", "")
+                                    sources_count[source_name] = sources_count.get(source_name, 0) + 1
+                                
+                                # Подсчитываем теги
+                                tags = metadata.get("tags", [])
+                                if isinstance(tags, str):
+                                    tags = [tags] if tags else []
+                                if isinstance(tags, list):
+                                    for tag in tags:
+                                        if tag:  # Пропускаем пустые теги
+                                            tags_count[tag] = tags_count.get(tag, 0) + 1
+                        except Exception as e:
+                            logger.debug(f"Ошибка при подсчёте статистики из коллекции {collection_name}: {e}")
+                            continue
         except Exception as e:
-            logger.debug(f"Ошибка при подсчёте статистики из ChromaDB: {e}")
+            logger.debug(f"Ошибка при подсчёте статистики из Qdrant: {e}")
 
         # Получаем размер БД
         db_size = None
@@ -1582,9 +1510,9 @@ class MemoryServiceAdapter:
     def get_indexing_progress(
         self, request: GetIndexingProgressRequest
     ) -> GetIndexingProgressResponse:
-        """Получить прогресс индексации из ChromaDB и активных задач.
-        
-        ВАЖНО: ChromaDB может паниковать (Rust panic), что убьет процесс Python.
+        """Получить прогресс индексации из активных задач и трекера.
+
+        Примечание: Прогресс индексации теперь хранится в SQLite через IndexingJobTracker.
         При ошибках инициализации возвращаем ошибку без попытки восстановления.
         """
         from ..mcp.server import _get_indexing_tracker
@@ -1595,215 +1523,32 @@ class MemoryServiceAdapter:
         # Получаем активные задачи из трекера
         active_jobs = tracker.get_all_jobs(status="running", chat=request.chat) if request.chat else tracker.get_all_jobs(status="running")
         
-        try:
-            import chromadb
-        except ImportError:
-            logger.warning("chromadb is not installed. Cannot get indexing progress.")
-            # Возвращаем только данные из трекера, если ChromaDB недоступен
-            progress_items = []
-            for job in active_jobs:
-                progress_items.append(
-                    IndexingProgressItem(
-                        chat_name=job.get("chat") or job.get("current_chat") or "Unknown",
-                        job_id=job.get("job_id"),
-                        status=job.get("status"),
-                        started_at=job.get("started_at"),
-                        current_stage=job.get("current_stage"),
-                        total_messages=job.get("stats", {}).get("messages_indexed", 0),
-                        total_sessions=job.get("stats", {}).get("sessions_indexed", 0),
-                    )
+        # Прогресс индексации теперь хранится только в IndexingJobTracker (JSON файл)
+        # Прогресс индексации хранится только в IndexingJobTracker (JSON файл)
+        
+        # Формируем ответ из активных задач трекера
+        progress_items = []
+        for job in active_jobs:
+            progress_items.append(
+                IndexingProgressItem(
+                    chat_name=job.get("chat") or job.get("current_chat") or "Unknown",
+                    job_id=job.get("job_id"),
+                    status=job.get("status"),
+                    started_at=job.get("started_at"),
+                    current_stage=job.get("current_stage"),
+                    total_messages=job.get("stats", {}).get("messages_indexed", 0),
+                    total_sessions=job.get("stats", {}).get("sessions_indexed", 0),
                 )
-            return GetIndexingProgressResponse(
-                progress=progress_items,
-                message="ChromaDB is not installed. Showing only active jobs from tracker.",
             )
         
-        try:
-            from ..utils.naming import slugify
-        except ImportError:
-            logger.warning("Failed to import slugify utility")
-            return GetIndexingProgressResponse(
-                progress=[],
-                message="Internal error: failed to import required utilities",
-            )
-        
-        chroma_path = os.getenv("MEMORY_MCP_CHROMA_PATH")
-        if not chroma_path:
-            try:
-                from ..config import get_settings
-                settings = get_settings()
-                chroma_path = settings.chroma_path
-            except Exception:
-                chroma_path = "/app/chroma_db" if os.path.exists("/app") else "./chroma_db"
-        
-        if not os.path.isabs(chroma_path):
-            current_dir = Path(__file__).parent
-            project_root = current_dir
-            while project_root.parent != project_root:
-                if (project_root / "pyproject.toml").exists():
-                    break
-                project_root = project_root.parent
-            if not (project_root / "pyproject.toml").exists():
-                project_root = Path.cwd()
-            chroma_path = str(project_root / chroma_path)
-        
-        chroma_path_obj = Path(chroma_path)
-        
-        if not chroma_path_obj.exists():
-            try:
-                chroma_path_obj.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                logger.warning(f"Cannot create ChromaDB directory {chroma_path_obj}: {e}")
-                return GetIndexingProgressResponse(
-                    progress=[],
-                    message=f"Cannot access ChromaDB directory: {str(e)}",
-                )
-        
-        try:
-            chroma_client = chromadb.PersistentClient(path=str(chroma_path_obj))
-        except Exception as e:
-            logger.error(
-                f"Failed to initialize ChromaDB client at {chroma_path_obj}: {e}. "
-                "The database may be corrupted. Consider removing the ChromaDB directory and re-indexing.",
-                exc_info=True
-            )
-            return GetIndexingProgressResponse(
-                progress=[],
-                message=(
-                    f"ChromaDB is not available: {str(e)}. "
-                    "The database may be corrupted. "
-                    "To fix: remove the ChromaDB directory and re-run indexing."
-                ),
-            )
-        
-        try:
-            progress_collection = chroma_client.get_collection("indexing_progress")
-        except Exception as e:
-            logger.debug(f"Indexing progress collection not found: {e}")
-            # Возвращаем только данные из трекера, если коллекция не найдена
-            progress_items = []
-            for job in active_jobs:
-                progress_items.append(
-                    IndexingProgressItem(
-                        chat_name=job.get("chat") or job.get("current_chat") or "Unknown",
-                        job_id=job.get("job_id"),
-                        status=job.get("status"),
-                        started_at=job.get("started_at"),
-                        current_stage=job.get("current_stage"),
-                        total_messages=job.get("stats", {}).get("messages_indexed", 0),
-                        total_sessions=job.get("stats", {}).get("sessions_indexed", 0),
-                    )
-                )
-            return GetIndexingProgressResponse(
-                progress=progress_items,
-                message="Indexing progress collection not found. Showing only active jobs from tracker.",
-            )
-
+        # Если запрошен конкретный чат, фильтруем результаты
         if request.chat:
-            progress_id = f"progress_{slugify(request.chat)}"
-            try:
-                result = progress_collection.get(
-                    ids=[progress_id], include=["metadatas"]
-                )
-                progress_item = None
-                if result.get("ids") and len(result["ids"]) > 0:
-                    metadata = result["metadatas"][0] if result.get("metadatas") else {}
-                    progress_item = IndexingProgressItem(
-                        chat_name=metadata.get("chat_name", request.chat),
-                        last_indexed_date=metadata.get("last_indexed_date"),
-                        last_indexing_time=metadata.get("last_indexing_time"),
-                        total_messages=metadata.get("total_messages", 0),
-                        total_sessions=metadata.get("total_sessions", 0),
-                    )
-                
-                # Объединяем с данными из трекера
-                active_job = None
-                for job in active_jobs:
-                    if job.get("chat") == request.chat or job.get("current_chat") == request.chat:
-                        active_job = job
-                        break
-                
-                if active_job:
-                    if progress_item:
-                        progress_item.job_id = active_job.get("job_id")
-                        progress_item.status = active_job.get("status")
-                        progress_item.started_at = active_job.get("started_at")
-                        progress_item.current_stage = active_job.get("current_stage")
-                    else:
-                        progress_item = IndexingProgressItem(
-                            chat_name=request.chat,
-                            job_id=active_job.get("job_id"),
-                            status=active_job.get("status"),
-                            started_at=active_job.get("started_at"),
-                            current_stage=active_job.get("current_stage"),
-                            total_messages=active_job.get("stats", {}).get("messages_indexed", 0),
-                            total_sessions=active_job.get("stats", {}).get("sessions_indexed", 0),
-                        )
-                
-                if progress_item:
-                    return GetIndexingProgressResponse(
-                        progress=[progress_item],
-                        message=None,
-                    )
-                else:
-                    return GetIndexingProgressResponse(
-                        progress=[],
-                        message=f"No progress found for chat '{request.chat}'",
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to get progress for chat '{request.chat}': {e}")
-                return GetIndexingProgressResponse(
-                    progress=[],
-                    message=f"Failed to get progress for chat '{request.chat}': {str(e)}",
-                )
-        else:
-            try:
-                result = progress_collection.get(include=["metadatas"])
-                progress_items = []
-                metadatas = result.get("metadatas", [])
-                
-                progress_by_chat = {}
-                for metadata in metadatas:
-                    if not isinstance(metadata, dict):
-                        continue
-                    chat_name = metadata.get("chat_name", "Unknown")
-                    progress_by_chat[chat_name] = IndexingProgressItem(
-                        chat_name=chat_name,
-                        last_indexed_date=metadata.get("last_indexed_date"),
-                        last_indexing_time=metadata.get("last_indexing_time"),
-                        total_messages=metadata.get("total_messages", 0),
-                        total_sessions=metadata.get("total_sessions", 0),
-                    )
-                
-                # Объединяем с данными из трекера
-                for job in active_jobs:
-                    chat_name = job.get("chat") or job.get("current_chat") or "Unknown"
-                    if chat_name in progress_by_chat:
-                        progress_by_chat[chat_name].job_id = job.get("job_id")
-                        progress_by_chat[chat_name].status = job.get("status")
-                        progress_by_chat[chat_name].started_at = job.get("started_at")
-                        progress_by_chat[chat_name].current_stage = job.get("current_stage")
-                    else:
-                        progress_by_chat[chat_name] = IndexingProgressItem(
-                            chat_name=chat_name,
-                            job_id=job.get("job_id"),
-                            status=job.get("status"),
-                            started_at=job.get("started_at"),
-                            current_stage=job.get("current_stage"),
-                            total_messages=job.get("stats", {}).get("messages_indexed", 0),
-                            total_sessions=job.get("stats", {}).get("sessions_indexed", 0),
-                        )
-                
-                return GetIndexingProgressResponse(
-                    progress=list(progress_by_chat.values()),
-                    message=None,
-                )
-            except Exception as e:
-                logger.warning(f"Failed to get all progress: {e}")
-                return GetIndexingProgressResponse(
-                    progress=[],
-                    message=f"Failed to get indexing progress: {str(e)}",
-                )
+            progress_items = [item for item in progress_items if item.chat_name == request.chat]
+        
+        return GetIndexingProgressResponse(
+            progress=progress_items,
+            message=None if progress_items else f"No progress found for chat '{request.chat}'" if request.chat else "No active indexing jobs",
+        )
 
     # Graph Operations
     def get_graph_neighbors(
@@ -2816,7 +2561,8 @@ class MemoryServiceAdapter:
         from ..analysis.insight_graph import SummaryInsightAnalyzer
 
         summaries_dir = Path(request.summaries_dir or "artifacts/reports")
-        chroma_path = Path(request.chroma_path or "./chroma_db")
+        # chroma_path больше не используется, заменено на Qdrant
+        chroma_path = Path("./chroma_db")  # Deprecated, не используется
 
         analyzer = SummaryInsightAnalyzer(
             summaries_dir=summaries_dir,
@@ -2873,7 +2619,7 @@ class MemoryServiceAdapter:
         
         # Инициализируем индексатор с графом памяти
         indexer = TwoLevelIndexer(
-            chroma_path=settings.chroma_path,
+            chroma_path=settings.chroma_path,  # Deprecated, не используется (заменено на Qdrant)
             artifacts_path=settings.artifacts_path,
             embedding_client=embedding_client,
             enable_smart_aggregation=True,
@@ -2960,7 +2706,7 @@ class MemoryServiceAdapter:
             ),
         )
 
-    def _search_chromadb_collections(
+    def _search_qdrant_collections(
         self,
         query: str,
         limit: int = 10,
@@ -2969,32 +2715,18 @@ class MemoryServiceAdapter:
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
     ) -> List[SearchResultItem]:
-        """Поиск в ChromaDB коллекциях, созданных TwoLevelIndexer."""
+        """Поиск в Qdrant коллекциях, созданных TwoLevelIndexer."""
         if not self.embedding_service:
             return []
         
         try:
-            import chromadb
+            from ..memory.vector_store import VectorStore
             from ..config import get_settings
             
             settings = get_settings()
-            chroma_path = settings.chroma_path
-            
-            if not os.path.isabs(chroma_path):
-                current_dir = Path(__file__).parent
-                project_root = current_dir
-                while project_root.parent != project_root:
-                    if (project_root / "pyproject.toml").exists():
-                        break
-                    project_root = project_root.parent
-                if not (project_root / "pyproject.toml").exists():
-                    project_root = Path.cwd()
-                chroma_path = str(project_root / chroma_path)
-            
-            if not os.path.exists(chroma_path):
+            qdrant_url = settings.get_qdrant_url()
+            if not qdrant_url:
                 return []
-            
-            chroma_client = chromadb.PersistentClient(path=chroma_path)
             
             query_vector = self.embedding_service.embed(query)
             if not query_vector:
@@ -3002,29 +2734,29 @@ class MemoryServiceAdapter:
             
             results: List[SearchResultItem] = []
             
+            # Используем векторный поиск через VectorStore для каждой коллекции
             for collection_name in ["chat_messages", "chat_sessions", "chat_tasks"]:
                 try:
-                    collection = chroma_client.get_collection(collection_name)
+                    # Создаем временный VectorStore для этой коллекции
+                    temp_vector_store = VectorStore(url=qdrant_url, collection=collection_name)
                     
-                    where_filter = {}
-                    if source:
-                        where_filter["chat"] = source
-                    
-                    search_results = collection.query(
-                        query_embeddings=[query_vector],
-                        n_results=limit,
-                        where=where_filter if where_filter else None,
-                    )
-                    
-                    if not search_results.get("ids") or not search_results["ids"][0]:
+                    if not temp_vector_store.available():
                         continue
                     
-                    for i, doc_id in enumerate(search_results["ids"][0]):
-                        distance = search_results["distances"][0][i] if search_results.get("distances") else 0.0
-                        document = search_results["documents"][0][i] if search_results.get("documents") else ""
-                        metadata = search_results["metadatas"][0][i] if search_results.get("metadatas") else {}
-                        
-                        similarity = 1.0 / (1.0 + distance)
+                    # Выполняем векторный поиск
+                    vector_matches = temp_vector_store.search(
+                        query_vector,
+                        limit=limit,
+                        source=source,
+                        tags=tags,
+                        date_from=date_from,
+                        date_to=date_to,
+                    )
+                    
+                    for match in vector_matches:
+                        payload = match.payload or {}
+                        document = payload.get("document", "")
+                        metadata = payload
                         
                         chat_name = metadata.get("chat", "")
                         date_utc = metadata.get("date_utc", "")
@@ -3047,8 +2779,8 @@ class MemoryServiceAdapter:
                         
                         # Пытаемся получить эмбеддинг из графа, если запись там есть
                         embedding = None
-                        if doc_id in self.graph.graph:
-                            node_data = self.graph.graph.nodes[doc_id]
+                        if match.record_id in self.graph.graph:
+                            node_data = self.graph.graph.nodes[match.record_id]
                             emb_from_graph = node_data.get("embedding")
                             if emb_from_graph is not None:
                                 # Преобразуем numpy массив в список, если нужно
@@ -3063,8 +2795,8 @@ class MemoryServiceAdapter:
                                     embedding = emb_from_graph
                         
                         result = SearchResultItem(
-                            record_id=doc_id,
-                            score=similarity,
+                            record_id=match.record_id,
+                            score=match.score,
                             content=document[:500] if document else "",
                             source=result_source,
                             timestamp=timestamp,
@@ -3072,6 +2804,8 @@ class MemoryServiceAdapter:
                             metadata={
                                 "collection": collection_name,
                                 "chat": chat_name,
+                                "vector_score": match.score,
+                                "search_source": "vector_qdrant",
                                 **metadata,
                             },
                             embedding=embedding,
@@ -3085,51 +2819,43 @@ class MemoryServiceAdapter:
             return results
             
         except Exception as e:
-            logger.debug(f"Ошибка при поиске в ChromaDB коллекциях: {e}", exc_info=True)
+            logger.debug(f"Ошибка при поиске в Qdrant коллекциях: {e}", exc_info=True)
             return []
 
-    def _clear_chromadb_chat(self, chat_name: str) -> int:
-        """Удаление всех записей конкретного чата из ChromaDB коллекций."""
+    def _clear_qdrant_chat(self, chat_name: str) -> int:
+        """Удаление всех записей конкретного чата из Qdrant коллекций."""
         total_deleted = 0
         try:
-            import chromadb
+            from ..memory.qdrant_collections import QdrantCollectionsManager
             from ..config import get_settings
 
             settings = get_settings()
-            chroma_path = settings.chroma_path
-
-            if not os.path.isabs(chroma_path):
-                current_dir = Path(__file__).parent
-                project_root = current_dir
-                while project_root.parent != project_root:
-                    if (project_root / "pyproject.toml").exists():
-                        break
-                    project_root = project_root.parent
-                if not (project_root / "pyproject.toml").exists():
-                    project_root = Path.cwd()
-                chroma_path = str(project_root / chroma_path)
-
-            if not os.path.exists(chroma_path):
-                logger.debug(f"ChromaDB путь не существует: {chroma_path}")
+            qdrant_url = settings.get_qdrant_url()
+            if not qdrant_url:
+                logger.debug("Qdrant URL не установлен, очистка невозможна")
                 return 0
 
-            chroma_client = chromadb.PersistentClient(path=chroma_path)
+            # Получаем размерность эмбеддингов
+            embedding_dimension = self.embedding_service.dimension if self.embedding_service else 1024
+            qdrant_manager = QdrantCollectionsManager(url=qdrant_url, vector_size=embedding_dimension)
+            
+            if not qdrant_manager.available():
+                logger.debug("Qdrant недоступен, очистка невозможна")
+                return 0
 
             for collection_name in ["chat_sessions", "chat_messages", "chat_tasks"]:
                 try:
-                    collection = chroma_client.get_collection(collection_name)
+                    deleted_count = qdrant_manager.delete(
+                        collection_name=collection_name,
+                        where={"chat": chat_name}
+                    )
 
-                    result = collection.get(where={"chat": chat_name})
-                    ids_to_delete = result.get("ids", [])
-
-                    if not ids_to_delete:
+                    if deleted_count == 0:
                         logger.debug(
                             f"Нет записей для удаления в коллекции {collection_name} (чат: {chat_name})"
                         )
                         continue
 
-                    collection.delete(ids=ids_to_delete)
-                    deleted_count = len(ids_to_delete)
                     total_deleted += deleted_count
                     logger.info(
                         f"Удалено {deleted_count} записей из коллекции {collection_name} (чат: {chat_name})"
@@ -3143,13 +2869,13 @@ class MemoryServiceAdapter:
                     continue
 
             logger.info(
-                f"Всего удалено {total_deleted} записей из ChromaDB (чат: {chat_name})"
+                f"Всего удалено {total_deleted} записей из Qdrant (чат: {chat_name})"
             )
             return total_deleted
 
         except Exception as e:
             logger.warning(
-                f"Ошибка при очистке ChromaDB для чата {chat_name}: {e}",
+                f"Ошибка при очистке Qdrant для чата {chat_name}: {e}",
                 exc_info=True,
             )
             return total_deleted
