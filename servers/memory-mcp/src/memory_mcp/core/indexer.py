@@ -1323,7 +1323,8 @@ class TwoLevelIndexer:
                             embedding=embedding,
                         )
                         
-                        # Сохраняем в Qdrant для векторного поиска
+                        # Сохраняем в Qdrant для векторного поиска (коллекция memory-records)
+                        # ВАЖНО: Это основная коллекция для поиска, должна содержать все записи, включая сессии
                         if self.vector_store and self.vector_store.available():
                             try:
                                 payload_data = {
@@ -1334,15 +1335,16 @@ class TwoLevelIndexer:
                                     "timestamp_iso": start_time_utc.isoformat() if start_time_utc else "",
                                     "content_preview": summary.get("context", "")[:200],
                                     "session_type": "session_summary",
+                                    "chat": meta.get("chat_name", ""),
                                 }
                                 chat_name = meta.get("chat_name")
                                 if isinstance(chat_name, str):
                                     payload_data["chat"] = chat_name
                                 
                                 self.vector_store.upsert(session_id, embedding, payload_data)
-                                logger.debug(f"Эмбеддинг сессии сохранен в Qdrant для {session_id}")
+                                logger.debug(f"Эмбеддинг сессии сохранен в Qdrant (memory-records) для {session_id}")
                             except Exception as e:
-                                logger.debug(f"Ошибка при сохранении эмбеддинга сессии {session_id} в Qdrant: {e}")
+                                logger.warning(f"Ошибка при сохранении эмбеддинга сессии {session_id} в Qdrant (memory-records): {e}")
                     except Exception as e:
                         logger.debug(f"Ошибка при сохранении эмбеддинга сессии {session_id}: {e}")
                 
@@ -1417,7 +1419,24 @@ class TwoLevelIndexer:
                         except Exception as e:
                             logger.debug(f"Не удалось проверить дубликаты в графе: {e}")
                     
-                    # 2. Проверяем по telegram ID в Qdrant
+                    # 2. Проверяем в графе по telegram_id глобально (в любом чате)
+                    if not skipped_duplicate and self.graph:
+                        try:
+                            cursor = self.graph.conn.cursor()
+                            cursor.execute("""
+                                SELECT id FROM nodes 
+                                WHERE type = 'DocChunk' 
+                                AND properties IS NOT NULL
+                                AND json_extract(properties, '$.telegram_id') = ?
+                                LIMIT 1
+                            """, (str(telegram_msg_id),))
+                            if cursor.fetchone():
+                                logger.debug(f"Дубликат сообщения найден в графе по telegram_id={telegram_msg_id}, пропускаем")
+                                skipped_duplicate = True
+                        except Exception as e:
+                            logger.debug(f"Не удалось проверить дубликаты в графе по telegram_id: {e}")
+                    
+                    # 3. Проверяем по telegram ID в Qdrant (коллекция chat_messages)
                     if not skipped_duplicate and self.qdrant_manager and self.messages_collection:
                         try:
                             existing_by_id = self.qdrant_manager.get(
@@ -1429,10 +1448,21 @@ class TwoLevelIndexer:
                                 limit=1
                             )
                             if existing_by_id and existing_by_id.get("ids"):
-                                logger.debug(f"Дубликат сообщения найден по telegram_id={telegram_msg_id}, пропускаем")
+                                logger.debug(f"Дубликат сообщения найден в chat_messages по telegram_id={telegram_msg_id}, пропускаем")
                                 skipped_duplicate = True
                         except Exception as e:
-                            logger.debug(f"Не удалось проверить дубликаты по telegram_id: {e}")
+                            logger.debug(f"Не удалось проверить дубликаты в chat_messages по telegram_id: {e}")
+                    
+                    # 4. Проверяем в основной коллекции memory-records (для поиска)
+                    if not skipped_duplicate and self.vector_store and self.vector_store.available():
+                        try:
+                            # Проверяем, существует ли запись с таким telegram_id в payload
+                            # Используем поиск по фильтру (если поддерживается) или проверяем через get
+                            # Пока используем простую проверку по record_id (msg_id)
+                            # TODO: Добавить проверку по telegram_id в payload, если Qdrant поддерживает фильтрацию
+                            pass  # Пока пропускаем, так как vector_store не имеет метода get с фильтром
+                        except Exception as e:
+                            logger.debug(f"Не удалось проверить дубликаты в memory-records: {e}")
                 
                 # Дополнительная проверка по content_hash (даже при force_full)
                 if not skipped_duplicate:
@@ -1495,50 +1525,59 @@ class TwoLevelIndexer:
                 
                 # Глобальная проверка дубликатов по telegram_id и content_hash (всегда, даже при force_full)
                 # Это предотвращает дублирование, когда одно сообщение попадает в разные сессии
-                if not skipped_duplicate and telegram_msg_id:
-                    # Ищем по telegram ID в других сессиях (глобально по чату)
+                if not skipped_duplicate:
                     import hashlib
                     content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
-                    # Ищем записи с таким же telegram ID или хешем содержимого в том же чате
-                    if self.qdrant_manager and self.messages_collection:
+                    
+                    # Проверяем в графе по content_hash глобально (в любом чате)
+                    if self.graph:
                         try:
-                            # Проверяем в Qdrant по метаданным (глобально по чату)
+                            cursor = self.graph.conn.cursor()
+                            cursor.execute("""
+                                SELECT id FROM nodes 
+                                WHERE type = 'DocChunk' 
+                                AND properties IS NOT NULL
+                                AND json_extract(properties, '$.content_hash') = ?
+                                LIMIT 1
+                            """, (content_hash,))
+                            if cursor.fetchone():
+                                logger.debug(f"Дубликат сообщения найден в графе по content_hash={content_hash}, пропускаем")
+                                skipped_duplicate = True
+                        except Exception as e:
+                            logger.debug(f"Не удалось проверить дубликаты в графе по content_hash: {e}")
+                    
+                    # Проверяем в Qdrant коллекции chat_messages (глобально по чату)
+                    if not skipped_duplicate and self.qdrant_manager and self.messages_collection:
+                        try:
+                            if telegram_msg_id:
+                                where_conditions = {
+                                    "$and": [
+                                        {"chat": {"$eq": chat}},
+                                        {"$or": [
+                                            {"telegram_id": {"$eq": str(telegram_msg_id)}},
+                                            {"content_hash": {"$eq": content_hash}}
+                                        ]}
+                                    ]
+                                }
+                            else:
+                                where_conditions = {
+                                    "$and": [
+                                        {"chat": {"$eq": chat}},
+                                        {"content_hash": {"$eq": content_hash}}
+                                    ]
+                                }
+                            
                             existing_by_id = self.qdrant_manager.get(
                                 collection_name=self.messages_collection,
-                                where={"$and": [
-                                    {"chat": {"$eq": chat}},
-                                    {"$or": [
-                                        {"telegram_id": {"$eq": str(telegram_msg_id)}},
-                                        {"content_hash": {"$eq": content_hash}}
-                                    ]}
-                                ]},
+                                where=where_conditions,
                                 limit=1
                             )
                             if existing_by_id and existing_by_id.get("ids"):
-                                logger.debug(f"Дубликат сообщения найден глобально по telegram_id={telegram_msg_id} или content_hash={content_hash} в чате {chat}, пропускаем")
+                                logger.debug(f"Дубликат сообщения найден в chat_messages по telegram_id={telegram_msg_id} или content_hash={content_hash} в чате {chat}, пропускаем")
                                 skipped_duplicate = True
                         except Exception as e:
                             # Если поиск по метаданным не работает, продолжаем
-                            logger.debug(f"Не удалось проверить дубликаты по метаданным: {e}")
-                elif not skipped_duplicate:
-                    # Для сообщений без telegram ID проверяем по хешу содержимого (глобально по чату)
-                    import hashlib
-                    content_hash = hashlib.md5(msg_text.encode("utf-8")).hexdigest()[:16]
-                    if self.qdrant_manager and self.messages_collection:
-                        try:
-                            existing_by_hash = self.qdrant_manager.get(
-                                collection_name=self.messages_collection,
-                                where={"$and": [
-                                    {"chat": {"$eq": chat}},
-                                    {"content_hash": {"$eq": content_hash}}
-                                ]},
-                                limit=1
-                            )
-                            if existing_by_hash and existing_by_hash.get("ids"):
-                                logger.debug(f"Дубликат сообщения найден глобально по content_hash={content_hash} в чате {chat}, пропускаем")
-                                skipped_duplicate = True
-                        except Exception as e:
-                            logger.debug(f"Не удалось проверить дубликаты по хешу: {e}")
+                            logger.debug(f"Не удалось проверить дубликаты в chat_messages: {e}")
                 
                 if skipped_duplicate:
                     skipped_duplicates_count += 1
@@ -1653,7 +1692,8 @@ class TwoLevelIndexer:
                     documents = [msg["msg_text"] for msg in messages_to_index]
                     metadatas = [msg["metadata"] for msg in messages_to_index]
                     
-                    # Сохраняем в Qdrant
+                    # Сохраняем в Qdrant коллекцию chat_messages (для инкрементальной индексации и других целей)
+                    # ВАЖНО: Основная коллекция для поиска - memory-records, она заполняется через vector_store.upsert
                     if self.qdrant_manager and self.messages_collection:
                         try:
                             self.qdrant_manager.upsert(
@@ -1663,6 +1703,7 @@ class TwoLevelIndexer:
                                 metadatas=metadatas,
                                 documents=documents,
                             )
+                            logger.debug(f"Сохранено {len(ids)} сообщений в Qdrant коллекцию {self.messages_collection}")
                         except Exception as e:
                             error_msg = str(e)
                             if "dimension" in error_msg.lower():
@@ -1827,7 +1868,8 @@ class TwoLevelIndexer:
                                                     f"размер={len(embedding)}"
                                                 )
                                                 
-                                                # Сохраняем эмбеддинг в Qdrant для векторного поиска
+                                                # Сохраняем эмбеддинг в Qdrant для векторного поиска (коллекция memory-records)
+                                                # ВАЖНО: Это основная коллекция для поиска, должна содержать все записи
                                                 if self.vector_store and self.vector_store.available():
                                                     try:
                                                         payload_data = {
@@ -1837,16 +1879,20 @@ class TwoLevelIndexer:
                                                             "timestamp": record.timestamp.timestamp(),
                                                             "timestamp_iso": record.timestamp.isoformat(),
                                                             "content_preview": record.content[:200],
+                                                            "chat": record.metadata.get("chat", ""),
+                                                            "session_id": record.metadata.get("session_id", ""),
+                                                            "telegram_id": record.metadata.get("telegram_id"),
+                                                            "content_hash": record.metadata.get("content_hash", ""),
                                                         }
                                                         chat_name = record.metadata.get("chat")
                                                         if isinstance(chat_name, str):
                                                             payload_data["chat"] = chat_name
                                                         
                                                         self.vector_store.upsert(record.record_id, embedding, payload_data)
-                                                        logger.debug(f"Эмбеддинг сохранен в Qdrant для {record.record_id}")
+                                                        logger.debug(f"Эмбеддинг сохранен в Qdrant (memory-records) для {record.record_id}")
                                                     except Exception as e:
                                                         logger.warning(
-                                                            f"Не удалось сохранить эмбеддинг в Qdrant для {record.record_id}: {e}"
+                                                            f"Не удалось сохранить эмбеддинг в Qdrant (memory-records) для {record.record_id}: {e}"
                                                         )
                                             else:
                                                 embeddings_failed += 1
