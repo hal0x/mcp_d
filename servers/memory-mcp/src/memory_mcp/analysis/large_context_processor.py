@@ -632,7 +632,7 @@ class LargeContextProcessor:
             summary = await self.embedding_client.generate_summary(
                 prompt=full_prompt,
                 temperature=0.3,
-                max_tokens=131072,  # Максимальный лимит
+                max_tokens=30000,  # Уменьшено для предотвращения таймаутов
                 top_p=0.9,
                 presence_penalty=0.1,
             )

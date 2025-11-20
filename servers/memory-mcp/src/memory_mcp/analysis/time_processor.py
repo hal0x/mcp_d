@@ -25,15 +25,8 @@ ACTIVITY_PERIODS = {
     "weekend": [5, 6],           # Суббота-воскресенье
 }
 
-# Часовые пояса для определения
-COMMON_TIMEZONES = [
-    "Europe/Moscow",
-    "Europe/London", 
-    "America/New_York",
-    "Asia/Tokyo",
-    "Asia/Shanghai",
-    "UTC",
-]
+# Временная зона по умолчанию
+DEFAULT_TIMEZONE = "Asia/Bangkok"
 
 
 class TimeProcessor:
@@ -60,85 +53,35 @@ class TimeProcessor:
 
     def detect_timezone(self, messages: List[Dict]) -> str:
         """
-        Определение временной зоны на основе паттернов активности
+        Определение временной зоны (упрощенная версия)
+
+        Приоритет:
+        1. Переменная окружения MEMORY_MCP_TIMEZONE
+        2. Значение по умолчанию (Asia/Bangkok)
 
         Args:
-            messages: Список сообщений
+            messages: Список сообщений (не используется, оставлен для совместимости)
 
         Returns:
             Определенная временная зона
         """
-        if not messages:
-            return "UTC"
+        import os
 
-        # Анализируем часы активности
-        hour_counts = Counter()
-        valid_messages = 0
+        # Проверяем переменную окружения
+        env_tz = os.getenv("MEMORY_MCP_TIMEZONE")
+        if env_tz:
+            try:
+                ZoneInfo(env_tz)  # Проверяем валидность
+                self.detected_timezone = env_tz
+                logger.info(f"Используется временная зона из окружения: {env_tz}")
+                return env_tz
+            except Exception as e:
+                logger.warning(f"Неверная временная зона в MEMORY_MCP_TIMEZONE: {env_tz}, ошибка: {e}")
 
-        for msg in messages:
-            timestamp = self.normalize_timestamp(msg.get("date_utc") or msg.get("date", ""))
-            if timestamp:
-                hour_counts[timestamp.hour] += 1
-                valid_messages += 1
-
-        if valid_messages < 10:
-            return "UTC"
-
-        # Определяем наиболее вероятную временную зону
-        best_timezone = "UTC"
-        best_score = 0
-
-        for tz_name in COMMON_TIMEZONES:
-            score = self._calculate_timezone_score(hour_counts, tz_name)
-            if score > best_score:
-                best_score = score
-                best_timezone = tz_name
-
-        self.detected_timezone = best_timezone
-        logger.info(f"Определена временная зона: {best_timezone} (score: {best_score:.2f})")
-        return best_timezone
-
-    def _calculate_timezone_score(self, hour_counts: Counter, timezone: str) -> float:
-        """
-        Расчет скора для временной зоны на основе паттернов активности
-
-        Args:
-            hour_counts: Счетчики часов активности
-            timezone: Название временной зоны
-
-        Returns:
-            Скор временной зоны
-        """
-        try:
-            tz = ZoneInfo(timezone)
-            score = 0.0
-            total_messages = sum(hour_counts.values())
-
-            # Анализируем активность в локальном времени
-            local_hour_counts = Counter()
-            for utc_hour, count in hour_counts.items():
-                # Конвертируем UTC час в локальное время
-                utc_dt = datetime(2024, 1, 1, utc_hour, tzinfo=ZoneInfo("UTC"))
-                local_dt = utc_dt.astimezone(tz)
-                local_hour_counts[local_dt.hour] += count
-
-            # Оцениваем паттерны активности
-            # Высокая активность в рабочие часы (9-18) дает больше очков
-            work_hours = list(range(9, 18))
-            work_activity = sum(local_hour_counts[h] for h in work_hours)
-            work_score = work_activity / total_messages if total_messages > 0 else 0
-
-            # Низкая активность в ночные часы (0-6) дает больше очков
-            night_hours = list(range(0, 6))
-            night_activity = sum(local_hour_counts[h] for h in night_hours)
-            night_score = 1.0 - (night_activity / total_messages) if total_messages > 0 else 0
-
-            score = work_score * 0.7 + night_score * 0.3
-            return score
-
-        except Exception as e:
-            logger.debug(f"Ошибка расчета скора для {timezone}: {e}")
-            return 0.0
+        # Используем значение по умолчанию
+        self.detected_timezone = DEFAULT_TIMEZONE
+        logger.info(f"Используется временная зона по умолчанию: {DEFAULT_TIMEZONE}")
+        return DEFAULT_TIMEZONE
 
     def analyze_activity_patterns(self, messages: List[Dict]) -> Dict[str, Any]:
         """

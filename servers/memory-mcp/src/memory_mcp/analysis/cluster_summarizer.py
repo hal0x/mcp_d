@@ -186,7 +186,7 @@ class ClusterSummarizer:
         try:
             async with self.embedding_client:
                 response = await self.embedding_client.generate_summary(
-                    prompt, max_tokens=131072, temperature=0.3  # Для gpt-oss-20b (максимальный лимит)
+                    prompt, max_tokens=30000, temperature=0.3  # Уменьшено для предотвращения таймаутов
                 )
 
             # Парсим JSON ответ

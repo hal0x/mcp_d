@@ -304,7 +304,7 @@ class SessionSummarizer:
                     summary_text = await ollama_client.generate_summary(
                         prompt=prompt,
                         temperature=0.3,
-                        max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
+                        max_tokens=30000,  # Уменьшено для предотвращения таймаутов
                         top_p=0.93,
                         presence_penalty=0.05,
                     )
@@ -314,7 +314,7 @@ class SessionSummarizer:
                     summary_text = await self.embedding_client.generate_summary(
                         prompt=prompt,
                         temperature=0.3,
-                        max_tokens=131072,  # Для gpt-oss-20b (максимальный лимит)
+                        max_tokens=30000,  # Уменьшено для предотвращения таймаутов
                         top_p=0.93,
                         presence_penalty=0.05,
                     )
