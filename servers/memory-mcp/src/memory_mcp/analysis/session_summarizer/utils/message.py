@@ -11,7 +11,7 @@ from ...utils.datetime_utils import format_datetime_display, parse_datetime_utc
 
 def message_key(msg: Dict[str, Any], fallback_index: Optional[int] = None) -> str:
     """Генерирует стабильный ключ сообщения для привязки служебных данных."""
-    from .session_summarizer_text_utils import extract_message_text
+    from .text import extract_message_text
     
     candidate = msg.get("id")
     if candidate is None:
@@ -151,7 +151,7 @@ def collect_segment_by_ids(
 def find_message_id_for_text(
     text: str, messages: List[Dict[str, Any]]
 ) -> Optional[str]:
-    from .session_summarizer_text_utils import strip_markdown
+    from .text import strip_markdown
     
     plain = strip_markdown(text).lower()
     if not plain:

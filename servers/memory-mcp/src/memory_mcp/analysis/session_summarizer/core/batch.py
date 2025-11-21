@@ -6,7 +6,7 @@
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..utils.session_summarizer_utils import detect_chat_mode, map_profile, prepare_conversation_text
+from ..utils import detect_chat_mode, map_profile, prepare_conversation_text
 
 logger = logging.getLogger(__name__)
 

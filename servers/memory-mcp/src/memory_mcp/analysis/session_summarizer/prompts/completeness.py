@@ -5,8 +5,8 @@
 
 from typing import Any, Dict, List, Tuple
 
-from ..utils.session_summarizer_chat_utils import detect_chat_mode
-from .session_summarizer_prompt_fallback import build_fallback_structure
+from ..utils.chat import detect_chat_mode
+from .fallback import build_fallback_structure
 
 
 def ensure_summary_completeness(

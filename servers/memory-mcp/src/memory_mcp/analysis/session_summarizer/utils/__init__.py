@@ -3,7 +3,7 @@
 Утилиты для session_summarizer
 """
 
-from .session_summarizer_action_utils import (
+from .action import (
     apply_small_session_policy,
     create_action_from_decision,
     create_risk_entry,
@@ -12,7 +12,7 @@ from .session_summarizer_action_utils import (
     is_small_session,
     parse_action_item,
 )
-from .session_summarizer_chat_utils import (
+from .chat import (
     collect_participants,
     detect_chat_mode,
     derive_time_span,
@@ -21,7 +21,7 @@ from .session_summarizer_chat_utils import (
     select_key_messages,
     select_messages_with_keywords,
 )
-from .session_summarizer_domain_utils import (
+from .domain import (
     build_attachments,
     detect_domain_addons,
     flatten_entities,
@@ -29,7 +29,7 @@ from .session_summarizer_domain_utils import (
     normalize_attachment,
     sanitize_url,
 )
-from .session_summarizer_message_utils import (
+from .message import (
     build_message_envelope,
     collect_segment_by_ids,
     expand_message_ids,
@@ -39,7 +39,7 @@ from .session_summarizer_message_utils import (
     message_identifier,
     message_key,
 )
-from .session_summarizer_text_utils import (
+from .text import (
     build_claim_summary,
     build_topic_title,
     clean_bullet,
@@ -49,7 +49,7 @@ from .session_summarizer_text_utils import (
     strip_markdown,
     truncate_text,
 )
-from .session_summarizer_topic_utils import (
+from .topic import (
     build_minimal_topic,
     guess_topic_title,
     split_messages_for_topics,

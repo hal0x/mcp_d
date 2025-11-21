@@ -96,7 +96,7 @@ def prepare_conversation_text(
     Returns:
         Форматированный текст разговора
     """
-    from .session_summarizer_message_utils import extract_message_text, format_author_name, message_key
+    from .message import extract_message_text, format_author_name, message_key
     
     # Берём первые и последние сообщения, если слишком много
     selected_messages = messages

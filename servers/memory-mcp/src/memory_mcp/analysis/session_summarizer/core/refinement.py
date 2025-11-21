@@ -5,12 +5,12 @@
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from .session_summarizer_generation import (
+from .generation import (
     apply_addon_metadata_to_claim,
     generate_claims,
 )
-from .session_summarizer_quality import refresh_quality
-from ..utils.session_summarizer_utils import (
+from .quality import refresh_quality
+from ..utils import (
     build_claim_summary,
     build_topic_title,
     collect_segment_by_ids,

@@ -127,8 +127,8 @@ def select_messages_with_keywords(
 
 
 def format_message_bullet(msg: Dict[str, Any], prefix: str = "- ") -> str:
-    from .session_summarizer_message_utils import format_message_time, format_author_name
-    from .session_summarizer_text_utils import truncate_text
+    from .message import format_message_time, format_author_name
+    from .text import truncate_text
     
     time_str = format_message_time(msg)
     author = format_author_name(msg)
@@ -137,7 +137,7 @@ def format_message_bullet(msg: Dict[str, Any], prefix: str = "- ") -> str:
 
 
 def derive_time_span(messages: List[Dict[str, Any]]) -> str:
-    from .session_summarizer_message_utils import build_message_envelope
+    from .message import build_message_envelope
     
     if not messages:
         return ""

@@ -3,9 +3,9 @@
 Основные модули для session_summarizer
 """
 
-from .session_summarizer_batch import summarize_batch_sessions
-from .session_summarizer_canonical import build_canonical_summary_internal
-from .session_summarizer_generation import (
+from .batch import summarize_batch_sessions
+from .canonical import build_canonical_summary_internal
+from .generation import (
     apply_addon_metadata_to_claim,
     generate_actions,
     generate_claims,
@@ -13,8 +13,8 @@ from .session_summarizer_generation import (
     generate_risks,
     generate_topics,
 )
-from .session_summarizer_quality import refresh_quality
-from .session_summarizer_refinement import run_structural_pass
+from .quality import refresh_quality
+from .refinement import run_structural_pass
 
 __all__ = [
     "summarize_batch_sessions",

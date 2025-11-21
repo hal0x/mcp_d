@@ -6,8 +6,8 @@
 from typing import Any, Dict, List, Optional
 
 from ...utils.datetime_utils import parse_datetime_utc
-from .session_summarizer_message_utils import message_identifier
-from .session_summarizer_text_utils import (
+from .message import message_identifier
+from .text import (
     build_topic_title,
     normalize_summary,
     strip_markdown,

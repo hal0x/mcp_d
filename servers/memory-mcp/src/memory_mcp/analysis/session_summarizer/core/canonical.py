@@ -7,15 +7,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ...utils.naming import slugify
 from ...session_summarizer_constants import SESSION_SUMMARY_VERSION
-from .session_summarizer_generation import (
+from .generation import (
     generate_actions,
     generate_claims,
     generate_discussion,
     generate_risks,
     generate_topics,
 )
-from .session_summarizer_quality import refresh_quality
-from ..utils.session_summarizer_utils import (
+from .quality import refresh_quality
+from ..utils import (
     apply_small_session_policy,
     build_attachments,
     build_message_envelope,

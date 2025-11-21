@@ -6,8 +6,8 @@
 import re
 from typing import Any, Dict, List, Optional
 
-from .session_summarizer_message_utils import find_message_id_for_text
-from .session_summarizer_topic_utils import guess_topic_title
+from .message import find_message_id_for_text
+from .topic import guess_topic_title
 
 
 def parse_action_item(decision_text: str) -> Optional[Dict[str, Any]]:
@@ -201,7 +201,7 @@ def apply_small_session_policy(
     str,
     Dict[str, Any],
 ]:
-    from .session_summarizer_topic_utils import build_minimal_topic, topic_time_span
+    from .topic import build_minimal_topic, topic_time_span
     
     policy_flags = ["small_session"]
 
