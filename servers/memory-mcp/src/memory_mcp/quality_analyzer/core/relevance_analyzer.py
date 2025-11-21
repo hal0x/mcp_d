@@ -214,45 +214,6 @@ class RelevanceAnalyzer:
             )
         return "\n\n".join(lines)
 
-    # --- существующие методы ниже остаются без изменений ---
-
-    def _parse_llm_response(
-        self,
-        response: str,
-        query_data: dict[str, Any],
-        search_results: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        """Парсит ответ LLM и возвращает анализ релевантности.
-        
-        При ошибках парсинга возвращает fallback анализ вместо исключения.
-        """
-        try:
-            import json
-            import re
-
-            json_match = re.search(r"\{.*\}", response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(0)
-                parsed = json.loads(json_str)
-
-                if self._validate_analysis_structure(parsed):
-                    return parsed
-
-            return self._create_text_based_analysis(
-                response, query_data, search_results
-            )
-
-        except Exception as exc:
-            logger.error("Ошибка парсинга ответа LLM: %s", exc)
-            response_preview = response[:500] if response else 'N/A'
-            logger.warning(
-                f"Ошибка парсинга ответа LLM для анализа релевантности: {exc}. "
-                f"Ответ: {response_preview}. "
-                f"Используется fallback анализ."
-            )
-            # Возвращаем fallback анализ вместо исключения
-            return self._create_fallback_analysis(query_data, search_results)
-
     def _validate_analysis_structure(self, analysis: dict[str, Any]) -> bool:
         required_fields = [
             "overall_score",
@@ -273,72 +234,6 @@ class RelevanceAnalyzer:
             return False
 
         return True
-
-    def _create_text_based_analysis(
-        self,
-        response: str,
-        query_data: dict[str, Any],
-        search_results: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        import re
-
-        score_match = re.search(r"(\d+(?:\.\d+)?)", response)
-        overall_score = float(score_match.group(1)) if score_match else 5.0
-        overall_score = max(1.0, min(10.0, overall_score))
-
-        individual_scores = []
-        for i in range(len(search_results)):
-            score = overall_score * (1.0 - i * 0.1)
-            individual_scores.append(max(1.0, score))
-
-        return {
-            "overall_score": overall_score,
-            "individual_scores": individual_scores,
-            "problems": {
-                "indexing": 0,
-                "search": 0,
-                "context": 0,
-            },
-            "explanation": response[:500],
-            "recommendations": [],
-        }
-
-    def _create_fallback_analysis(
-        self,
-        query_data: dict[str, Any],
-        search_results: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        """Создание fallback анализа на основе количества результатов.
-        
-        Использует словарь для маппинга количества результатов на конфигурацию,
-        что улучшает читаемость и упрощает добавление новых условий.
-        """
-        results_count = len(search_results)
-        
-        # Маппинг количества результатов на конфигурацию анализа
-        # Формат: (overall_score, problems_dict)
-        fallback_configs = {
-            0: (1.0, {"indexing": 1, "search": 0, "context": 0}),
-            1: (4.0, {"indexing": 0, "search": 1, "context": 0}),  # < 3
-            2: (4.0, {"indexing": 0, "search": 1, "context": 0}),  # < 3
-        }
-        default_config = (6.0, {"indexing": 0, "search": 0, "context": 0})  # >= 3
-        
-        # Определяем конфигурацию на основе количества результатов
-        if results_count in fallback_configs:
-            overall_score, problems = fallback_configs[results_count]
-        else:
-            overall_score, problems = default_config
-
-        individual_scores = [overall_score] * results_count
-
-        return {
-            "overall_score": overall_score,
-            "individual_scores": individual_scores,
-            "problems": problems,
-            "explanation": "Анализ выполнен с использованием резервной логики",
-            "recommendations": [],
-        }
 
     def _analyze_empty_results(self, query_data: dict[str, Any]) -> dict[str, Any]:
         return {

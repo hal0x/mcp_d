@@ -15,6 +15,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ...core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,6 +32,7 @@ class ReportGenerator:
         temperature: float = 0.2,
         max_tokens: int = 131072,  # Для gpt-oss-20b (максимальный лимит)
         thinking_level: Optional[str] = None,
+        lmql_adapter: Optional[LMQLAdapter] = None,
     ):
         """
         Инициализация генератора отчетов
@@ -42,6 +45,8 @@ class ReportGenerator:
             temperature: Температура для генерации
             max_tokens: Максимальное количество токенов
             thinking_level: Уровень мышления (thinking)
+            lmql_adapter: Опциональный LMQL адаптер для структурированной генерации.
+                         Если не указан, создается из настроек окружения.
         """
         self.reports_dir = reports_dir
         if quality_subdir:
@@ -71,6 +76,13 @@ class ReportGenerator:
                 model_name=llm_model,
                 base_url=llm_base_url,
             )
+
+        # Инициализация LMQL адаптера
+        try:
+            self.lmql_adapter = lmql_adapter or build_lmql_adapter_from_env()
+        except RuntimeError:
+            self.lmql_adapter = None
+            logger.debug("LMQL адаптер не настроен для ReportGenerator")
 
         logger.info(
             "Инициализирован ReportGenerator (директория: %s)",
@@ -187,10 +199,6 @@ class ReportGenerator:
     ) -> List[Dict[str, Any]]:
         """Получение рекомендаций через LLM."""
 
-        if not self.embedding_client:
-            logger.debug("Генератор рекомендаций LM Studio не настроен")
-            return []
-
         payload = self._build_recommendation_payload(
             chat_name,
             metrics,
@@ -200,6 +208,18 @@ class ReportGenerator:
 
         if not payload:
             logger.debug("Недостаточно данных для генерации LLM-рекомендаций")
+            return []
+
+        # Используем LMQL для структурированной генерации рекомендаций
+        if self.lmql_adapter:
+            logger.debug("Используется LMQL для генерации рекомендаций")
+            return await self._generate_recommendations_with_lmql(
+                chat_name, payload
+            )
+
+        # Fallback на старую реализацию, если LMQL недоступен
+        if not self.embedding_client:
+            logger.debug("Генератор рекомендаций LM Studio не настроен")
             return []
 
         try:
@@ -228,6 +248,92 @@ class ReportGenerator:
             return []
 
         return self._parse_llm_recommendations(response)
+
+    async def _generate_recommendations_with_lmql(
+        self, chat_name: str, payload: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Генерация рекомендаций с использованием LMQL.
+        
+        Args:
+            chat_name: Название чата
+            payload: Данные для анализа
+            
+        Returns:
+            Список рекомендаций
+            
+        Raises:
+            RuntimeError: Если произошла ошибка при выполнении запроса
+        """
+        try:
+            prompt = self.prompt_manager.format(
+                "quality_recommendations_base",
+                chat_name=chat_name,
+                metrics_json=json.dumps(payload, ensure_ascii=False, indent=2),
+            )
+
+            if not prompt.strip():
+                logger.warning("Промпт рекомендаций пуст — пропускаем генерацию")
+                return []
+
+            # Создаем JSON схему для рекомендаций
+            json_schema = """[{
+    "title": "[TITLE]",
+    "description": "[DESCRIPTION]",
+    "suggestions": [SUGGESTIONS],
+    "priority": "[PRIORITY]"
+}]"""
+
+            # Ограничения для переменных
+            constraints = """
+    len([RECOMMENDATIONS]) <= 10 and
+    all(isinstance(r, dict) for r in [RECOMMENDATIONS]) and
+    all("title" in r and "description" in r for r in [RECOMMENDATIONS]) and
+    all(r.get("priority") in ["high", "medium", "low", "ai"] for r in [RECOMMENDATIONS] if "priority" in r)
+"""
+
+            # Выполняем LMQL запрос
+            result = await self.lmql_adapter.execute_json_query(
+                prompt=prompt,
+                json_schema=json_schema,
+                constraints=constraints,
+                temperature=self.temperature,
+                max_tokens=min(self.max_tokens, 4096),  # Ограничиваем для рекомендаций
+            )
+
+            if not result:
+                return []
+
+            # Валидация и нормализация результата
+            if isinstance(result, list):
+                return self._normalize_llm_entries(result)
+            elif isinstance(result, dict) and "recommendations" in result:
+                recommendations = result["recommendations"]
+                if isinstance(recommendations, list):
+                    return self._normalize_llm_entries(recommendations)
+
+            logger.warning(f"Неожиданный формат ответа LMQL: {type(result)}")
+            return []
+
+        except Exception as e:
+            logger.error(f"Ошибка при использовании LMQL для генерации рекомендаций: {e}")
+            # Fallback на старую реализацию при ошибке
+            if self.embedding_client:
+                try:
+                    prompt = self.prompt_manager.format(
+                        "quality_recommendations_base",
+                        chat_name=chat_name,
+                        metrics_json=json.dumps(payload, ensure_ascii=False, indent=2),
+                    )
+                    async with self.embedding_client:
+                        response = await self.embedding_client.generate_summary(
+                            prompt,
+                            temperature=self.temperature,
+                            max_tokens=self.max_tokens,
+                        )
+                    return self._parse_llm_recommendations(response)
+                except Exception as fallback_exc:
+                    logger.warning(f"Fallback также не удался: {fallback_exc}")
+            return []
 
     def _get_type_display_name(self, query_type: str) -> str:
         """Получение отображаемого имени типа запроса"""

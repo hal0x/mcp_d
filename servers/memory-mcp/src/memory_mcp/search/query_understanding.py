@@ -9,7 +9,6 @@
 - Определение ключевых концепций и их связей
 """
 
-import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -200,80 +199,5 @@ class QueryUnderstandingEngine:
         except Exception as e:
             logger.error(f"Ошибка при использовании LMQL для понимания запроса: {e}")
             raise RuntimeError(f"Ошибка понимания запроса через LMQL: {e}") from e
-
-    def _create_understanding_prompt(self, query: str) -> str:
-        """Создание промпта для понимания запроса"""
-        return f"""Проанализируй поисковый запрос и выполни глубокий анализ.
-
-Запрос: "{query}"
-
-Выполни следующие задачи:
-1. Декомпозиция: разбей сложный запрос на простые подзапросы (если запрос простой, верни его как единственный подзапрос)
-2. Неявные требования: определи, что пользователь может иметь в виду, но не сказал явно
-3. Альтернативные формулировки: предложи 2-3 альтернативных способа сформулировать этот запрос
-4. Ключевые концепции: выдели основные концепции и термины из запроса
-5. Связи концепций: определи, как концепции связаны между собой
-
-Верни ответ в формате JSON:
-{{
-    "sub_queries": ["подзапрос 1", "подзапрос 2"],
-    "implicit_requirements": ["требование 1", "требование 2"],
-    "alternative_formulations": ["вариант 1", "вариант 2"],
-    "key_concepts": ["концепция 1", "концепция 2"],
-    "concept_relationships": {{
-        "концепция 1": ["связанная концепция 1", "связанная концепция 2"]
-    }},
-    "enhanced_query": "улучшенная формулировка запроса"
-}}
-
-Только JSON, без дополнительного текста."""
-
-    def _parse_llm_response(self, response: str, query: str) -> Optional[QueryUnderstanding]:
-        """Парсинг ответа LLM"""
-        try:
-            response = response.strip()
-            # Убираем markdown code blocks, если есть
-            if response.startswith("```"):
-                response = response.split("```")[1]
-                if response.startswith("json"):
-                    response = response[4:]
-            response = response.strip()
-
-            data = json.loads(response)
-            
-            sub_queries = data.get("sub_queries", [])
-            implicit_requirements = data.get("implicit_requirements", [])
-            alternative_formulations = data.get("alternative_formulations", [])
-            key_concepts = data.get("key_concepts", [])
-            concept_relationships = data.get("concept_relationships", {})
-            enhanced_query = data.get("enhanced_query", query)
-
-            # Валидация и нормализация
-            if not isinstance(sub_queries, list):
-                sub_queries = []
-            if not isinstance(implicit_requirements, list):
-                implicit_requirements = []
-            if not isinstance(alternative_formulations, list):
-                alternative_formulations = []
-            if not isinstance(key_concepts, list):
-                key_concepts = []
-            if not isinstance(concept_relationships, dict):
-                concept_relationships = {}
-            if not isinstance(enhanced_query, str):
-                enhanced_query = query
-
-            return QueryUnderstanding(
-                original_query=query,
-                sub_queries=sub_queries[:5],  # Максимум 5 подзапросов
-                implicit_requirements=implicit_requirements[:5],  # Максимум 5 требований
-                alternative_formulations=alternative_formulations[:3],  # Максимум 3 варианта
-                key_concepts=key_concepts[:10],  # Максимум 10 концепций
-                concept_relationships=concept_relationships,
-                enhanced_query=enhanced_query,
-            )
-
-        except Exception as e:
-            logger.debug(f"Ошибка парсинга ответа LLM для понимания запроса: {e}")
-            return None
 
 

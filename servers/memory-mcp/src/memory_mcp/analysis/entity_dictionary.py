@@ -790,10 +790,6 @@ class EntityDictionary:
         Returns:
             Тип сущности (существующий или новый) или None при ошибке
         """
-        llm_client = self._get_llm_client()
-        if not llm_client:
-            return None
-        
         # Получаем список всех существующих типов
         existing_types = self.get_all_entity_types()
         existing_types_descriptions = {
@@ -830,7 +826,32 @@ class EntityDictionary:
 1. Если сущность подходит под один из существующих типов - верни его название точно (без изменений).
 2. Если сущность не подходит ни под один существующий тип, но является значимой сущностью - создай новый тип.
 3. Новый тип должен быть на английском языке, в нижнем регистре, без пробелов (используй подчеркивания).
-4. Новый тип должен быть описательным (например: "games", "products", "events", "technologies").
+4. Новый тип должен быть описательным (например: "games", "products", "events", "technologies")."""
+        
+        # Используем LMQL для структурированной классификации
+        if self.lmql_adapter:
+            try:
+                logger.debug("Используется LMQL для классификации типа сущности")
+                return await self._classify_entity_type_with_lmql(
+                    prompt, value, normalized_value, existing_types
+                )
+            except Exception as e:
+                logger.warning(f"Ошибка при использовании LMQL для классификации типа сущности: {e}")
+                # Fallback на старую реализацию
+        
+        # Fallback на старую реализацию
+        llm_client = self._get_llm_client()
+        if not llm_client:
+            return None
+        
+        try:
+            async with llm_client:
+                if hasattr(llm_client, 'generate_summary'):
+                    from ..config import get_settings
+                    settings = get_settings()
+                    max_tokens = settings.large_context_max_tokens
+                    
+                    full_prompt = f"""{prompt}
 
 Верни ответ в формате JSON:
 {{
@@ -840,16 +861,9 @@ class EntityDictionary:
 }}
 
 Только JSON, без дополнительного текста."""
-        
-        try:
-            async with llm_client:
-                if hasattr(llm_client, 'generate_summary'):
-                    from ..config import get_settings
-                    settings = get_settings()
-                    max_tokens = settings.large_context_max_tokens
                     
                     response = await llm_client.generate_summary(
-                        prompt=prompt,
+                        prompt=full_prompt,
                         temperature=0.3,
                         max_tokens=max_tokens,
                         top_p=0.9,
@@ -857,7 +871,6 @@ class EntityDictionary:
                     )
                     
                     # Парсим JSON ответ
-                    import json
                     response = response.strip()
                     if response.startswith("```"):
                         response = response.split("```")[1]
@@ -879,6 +892,56 @@ class EntityDictionary:
                         return entity_type
         except Exception as e:
             logger.warning(f"Ошибка при классификации типа сущности для '{value}': {e}")
+        
+        return None
+
+    async def _classify_entity_type_with_lmql(
+        self, prompt: str, value: str, normalized_value: str, existing_types: List[str]
+    ) -> Optional[str]:
+        """Классификация типа сущности с использованием LMQL.
+        
+        Args:
+            prompt: Промпт для классификации
+            value: Оригинальное значение сущности
+            normalized_value: Нормализованное значение
+            existing_types: Список существующих типов
+            
+        Returns:
+            Тип сущности или None
+        """
+        # Создаем JSON схему
+        json_schema = '{"type": "[TYPE]", "is_new": [IS_NEW]}'
+        
+        # Ограничения: тип должен быть либо существующим, либо новым
+        existing_types_str = "[" + ", ".join([f'"{t}"' for t in existing_types]) + "]"
+        constraints = f"""
+            (TYPE in {existing_types_str} and IS_NEW == False) or
+            (IS_NEW == True and TYPE not in {existing_types_str})
+        """
+        
+        # Выполняем LMQL запрос
+        result = await self.lmql_adapter.execute_json_query(
+            prompt=prompt,
+            json_schema=json_schema,
+            constraints=constraints,
+            temperature=0.3,
+            max_tokens=512,
+        )
+        
+        if not result:
+            return None
+        
+        entity_type = result.get("type")
+        is_new = result.get("is_new", False)
+        
+        if entity_type:
+            # Если тип новый - добавляем его
+            if is_new and entity_type not in existing_types:
+                threshold = 3  # По умолчанию порог 3
+                self._add_dynamic_entity_type(entity_type, threshold)
+                logger.info(f"LMQL определил новый тип сущности: {entity_type} для '{value}'")
+            
+            return entity_type
         
         return None
     
@@ -1825,10 +1888,12 @@ class EntityDictionary:
         
         # Формируем промпт для батча
         entities_info = []
+        normalized_values = []
         for idx, candidate in enumerate(candidates):
             entity_type = candidate["entity_type"]
             value = candidate.get("original_value", candidate["normalized_value"])
             normalized_value = candidate["normalized_value"]
+            normalized_values.append(normalized_value)
             all_contexts = candidate.get("all_contexts", [])
             
             type_name = entity_type_names.get(entity_type, entity_type)
@@ -1861,7 +1926,28 @@ class EntityDictionary:
 Описание должно:
 - Быть информативным и помогать понять, что это за сущность
 - Отражать роль/назначение сущности в контексте обсуждений
-- Включать ключевые характеристики, если они упоминаются
+- Включать ключевые характеристики, если они упоминаются"""
+        
+        # Используем LMQL для структурированной генерации описаний
+        if self.lmql_adapter:
+            try:
+                logger.debug("Используется LMQL для батч-генерации описаний")
+                return await self._generate_descriptions_batch_with_lmql(
+                    prompt, candidates, normalized_values
+                )
+            except Exception as e:
+                logger.warning(f"Ошибка при использовании LMQL для батч-генерации описаний: {e}")
+                # Fallback на старую реализацию
+        
+        # Fallback на старую реализацию
+        try:
+            async with llm_client:
+                if hasattr(llm_client, 'generate_summary'):
+                    from ..config import get_settings
+                    settings = get_settings()
+                    max_tokens = settings.large_context_max_tokens  # 131072
+                    
+                    full_prompt = f"""{prompt}
 
 Верни ответ в формате JSON объекта, где ключ - нормализованное имя сущности, значение - описание:
 {{
@@ -1871,16 +1957,9 @@ class EntityDictionary:
 }}
 
 Только JSON, без дополнительного текста."""
-        
-        try:
-            async with llm_client:
-                if hasattr(llm_client, 'generate_summary'):
-                    from ..config import get_settings
-                    settings = get_settings()
-                    max_tokens = settings.large_context_max_tokens  # 131072
                     
                     response = await llm_client.generate_summary(
-                        prompt=prompt,
+                        prompt=full_prompt,
                         temperature=0.3,
                         max_tokens=max_tokens,
                         top_p=0.9,
@@ -1888,7 +1967,6 @@ class EntityDictionary:
                     )
                     
                     # Парсим JSON ответ
-                    import json
                     response = response.strip()
                     # Убираем markdown code blocks, если есть
                     if response.startswith("```"):
@@ -1931,6 +2009,68 @@ class EntityDictionary:
         except Exception as e:
             logger.warning(f"Ошибка при батч-генерации описаний: {e}")
             return {}
+
+    async def _generate_descriptions_batch_with_lmql(
+        self, prompt: str, candidates: List[Dict[str, Any]], normalized_values: List[str]
+    ) -> Dict[str, str]:
+        """Генерация описаний для батча сущностей с использованием LMQL.
+        
+        Args:
+            prompt: Промпт для генерации описаний
+            candidates: Список кандидатов сущностей
+            normalized_values: Список нормализованных значений
+            
+        Returns:
+            Словарь {normalized_value: description}
+        """
+        # Создаем JSON схему - объект с ключами-нормализованными значениями
+        # В LMQL мы не можем динамически задать ключи, поэтому используем общий формат
+        json_schema = "{DESCRIPTIONS}"  # Объект с произвольными ключами
+        
+        # Ограничения: все описания должны быть строками длиной <= 200 символов
+        constraints = """
+            all(isinstance(v, str) for v in DESCRIPTIONS.values()) and
+            all(len(v) <= 200 for v in DESCRIPTIONS.values())
+        """
+        
+        # Выполняем LMQL запрос
+        result = await self.lmql_adapter.execute_json_query(
+            prompt=prompt,
+            json_schema=json_schema,
+            constraints=constraints,
+            temperature=0.3,
+            max_tokens=4096,  # Ограничиваем для батча
+        )
+        
+        if not result or not isinstance(result, dict):
+            return {}
+        
+        # Сохраняем описания
+        results = {}
+        for candidate in candidates:
+            normalized_value = candidate["normalized_value"]
+            entity_type = candidate["entity_type"]
+            
+            description = result.get(normalized_value)
+            if description and isinstance(description, str):
+                # Очищаем описание
+                description = description.strip()
+                if description.startswith('"') and description.endswith('"'):
+                    description = description[1:-1]
+                if description.startswith("'") and description.endswith("'"):
+                    description = description[1:-1]
+                
+                # Ограничиваем длину
+                max_length = 200
+                if len(description) > max_length:
+                    description = description[:max_length].rsplit(' ', 1)[0] + "..."
+                
+                if description:
+                    self.update_entity_description(entity_type, normalized_value, description)
+                    logger.info(f"LMQL сгенерировал описание для {entity_type}={normalized_value}: {description[:50]}...")
+                    results[normalized_value] = description
+        
+        return results
 
     def collect_entity_contexts(
         self, entity_type: str, normalized_value: str
