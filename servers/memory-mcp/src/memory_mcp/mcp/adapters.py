@@ -2524,13 +2524,9 @@ class MemoryServiceAdapter:
         from ..analysis.insight_graph import SummaryInsightAnalyzer
 
         summaries_dir = Path(request.summaries_dir or "artifacts/reports")
-        # chroma_path больше не используется, заменено на Qdrant
-        # Используем дефолтное значение для SummaryInsightAnalyzer (он все еще использует ChromaDB для некоторых операций)
-        chroma_path = Path("./chroma_db")
 
         analyzer = SummaryInsightAnalyzer(
             summaries_dir=summaries_dir,
-            chroma_path=chroma_path,
             similarity_threshold=request.similarity_threshold,
             max_similar_results=request.max_similar_results,
         )

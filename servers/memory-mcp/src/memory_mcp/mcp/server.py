@@ -1269,8 +1269,7 @@ async def _run_indexing_job(
                 logger.info(
                     f"✅ Очистка завершена для чата '{request.chat}': "
                     f"узлов={cleanup_stats.get('nodes_deleted', 0)}, "
-                    f"векторов={cleanup_stats.get('vectors_deleted', 0)}, "
-                    f"ChromaDB={cleanup_stats.get('chromadb_deleted', 0)}"
+                    f"векторов={cleanup_stats.get('vectors_deleted', 0)}"
                 )
                 tracker.update_job(job_id=job_id, cleanup_stats=cleanup_stats)
             except Exception as e:
@@ -1867,7 +1866,7 @@ async def _start_background_indexing(adapter: MemoryServiceAdapter) -> "Backgrou
             _background_indexing_service = BackgroundIndexingService(
                 input_path=settings.input_path,
                 chats_path=settings.chats_path,
-                chroma_path=settings.chroma_path,
+                db_path="data/background_indexing.db",
                 check_interval=settings.background_indexing_interval,
             )
             
@@ -2019,7 +2018,6 @@ def _start_background_indexing_if_enabled():
                 _background_indexing_service = BackgroundIndexingService(
                     input_path=settings.input_path,
                     chats_path=settings.chats_path,
-                    chroma_path=settings.chroma_path,
                     check_interval=settings.background_indexing_interval,
                 )
                 

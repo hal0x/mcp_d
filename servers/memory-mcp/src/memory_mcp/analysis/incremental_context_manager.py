@@ -10,7 +10,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-import chromadb
+from ..config import get_settings
+
+try:
+    from qdrant_client import QdrantClient
+    from qdrant_client.http import models as qmodels
+except ImportError:
+    QdrantClient = None
+    qmodels = None
 
 logger = logging.getLogger(__name__)
 
@@ -25,29 +32,29 @@ class IncrementalContextManager:
     3. Предоставляет расширенный контекст для малых сессий
     """
 
-    def __init__(self, chroma_path: str = "./chroma_db"):
+    def __init__(self, qdrant_url: Optional[str] = None):
         """
         Инициализация менеджера контекста
 
         Args:
-            chroma_path: Путь к ChromaDB
+            qdrant_url: URL Qdrant сервера (если None, берется из настроек)
         """
-        self.chroma_client = chromadb.PersistentClient(path=chroma_path)
-
-        # Инициализируем коллекции только если они существуют
-        try:
-            self.messages_collection = self.chroma_client.get_collection(
-                "chat_messages"
-            )
-        except Exception:
-            self.messages_collection = None
-
-        try:
-            self.sessions_collection = self.chroma_client.get_collection(
-                "chat_sessions"
-            )
-        except Exception:
-            self.sessions_collection = None
+        if qdrant_url is None:
+            settings = get_settings()
+            qdrant_url = settings.get_qdrant_url()
+        
+        self.qdrant_url = qdrant_url
+        self.qdrant_client: Optional[QdrantClient] = None
+        
+        if qdrant_url and QdrantClient is not None:
+            try:
+                self.qdrant_client = QdrantClient(url=qdrant_url, check_compatibility=False)
+                logger.info("IncrementalContextManager подключен к Qdrant: %s", qdrant_url)
+            except Exception as e:
+                logger.warning("Не удалось подключиться к Qdrant: %s", e)
+                self.qdrant_client = None
+        elif qdrant_url:
+            logger.warning("qdrant-client не установлен; IncrementalContextManager отключен")
 
     def get_extended_context_for_session(
         self,
@@ -80,7 +87,7 @@ class IncrementalContextManager:
             f"с {context_start_time} до {session_start_time}"
         )
 
-        # Загружаем предыдущие сообщения из ChromaDB
+        # Загружаем предыдущие сообщения из Qdrant
         previous_messages = self._load_previous_messages(
             chat_name, context_start_time, session_start_time, max_previous_messages
         )
@@ -135,7 +142,7 @@ class IncrementalContextManager:
         max_messages: int,
     ) -> List[Dict[str, Any]]:
         """
-        Загружает предыдущие сообщения из ChromaDB
+        Загружает предыдущие сообщения из Qdrant
 
         Args:
             chat_name: Название чата
@@ -146,31 +153,62 @@ class IncrementalContextManager:
         Returns:
             Список предыдущих сообщений
         """
-        if not self.messages_collection:
-            logger.debug("Коллекция сообщений не доступна")
+        if not self.qdrant_client:
+            logger.debug("Qdrant клиент не доступен")
             return []
 
         try:
-            # Запрашиваем сообщения из ChromaDB
-            # ChromaDB не поддерживает сложные where условия, поэтому используем простой фильтр
-            results = self.messages_collection.get(
-                where={"chat": chat_name},
-                limit=max_messages * 2,  # Берем больше, чтобы отфильтровать по времени
-                include=["metadatas", "documents"],
+            # Запрашиваем сообщения из Qdrant
+            if qmodels is None:
+                logger.warning("Qdrant models не доступны")
+                return []
+            
+            # Используем фильтр по чату и времени
+            from qdrant_client.http import models as qmodels
+            
+            collection_name = "chat_messages"
+            start_time_str = start_time.isoformat()
+            end_time_str = end_time.isoformat()
+            
+            # Фильтр для Qdrant
+            filter_condition = qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="chat",
+                        match=qmodels.MatchValue(value=chat_name)
+                    ),
+                    qmodels.FieldCondition(
+                        key="date_utc",
+                        range=qmodels.Range(
+                            gte=start_time_str,
+                            lt=end_time_str
+                        )
+                    )
+                ]
+            )
+            
+            results = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=filter_condition,
+                limit=max_messages,
+                with_payload=True,
             )
 
-            # Преобразуем результаты в нужный формат и фильтруем по времени
+            # Преобразуем результаты Qdrant в нужный формат
             previous_messages = []
-            for i, metadata in enumerate(results["metadatas"]):
+            points, _ = results
+            
+            for point in points:
+                payload = point.payload or {}
                 message = {
-                    "text": results["documents"][i],
-                    "date_utc": metadata.get("date_utc", ""),
-                    "msg_id": metadata.get("msg_id", ""),
-                    "session_id": metadata.get("session_id", ""),
-                    "has_context": metadata.get("has_context", False),
+                    "text": payload.get("text", ""),
+                    "date_utc": payload.get("date_utc", ""),
+                    "msg_id": payload.get("msg_id", ""),
+                    "session_id": payload.get("session_id", ""),
+                    "has_context": payload.get("has_context", False),
                 }
 
-                # Фильтруем по времени
+                # Проверяем время (фильтр уже применен, но проверяем для надежности)
                 message_time = self._parse_message_time(message)
                 if start_time <= message_time < end_time:
                     previous_messages.append(message)
@@ -178,11 +216,7 @@ class IncrementalContextManager:
             # Сортируем по времени (от старых к новым)
             previous_messages.sort(key=lambda x: self._parse_message_time(x))
 
-            # Ограничиваем количество сообщений
-            if len(previous_messages) > max_messages:
-                previous_messages = previous_messages[:max_messages]
-
-            logger.debug(f"Загружено {len(previous_messages)} предыдущих сообщений")
+            logger.debug(f"Загружено {len(previous_messages)} предыдущих сообщений из Qdrant")
             return previous_messages
 
         except Exception as e:
@@ -274,7 +308,7 @@ class IncrementalContextManager:
         self, chat_name: str, session_start_time: datetime
     ) -> List[Dict[str, Any]]:
         """
-        Загружает предыдущие сессии из ChromaDB
+        Загружает предыдущие сессии из Qdrant
 
         Args:
             chat_name: Название чата
@@ -283,36 +317,58 @@ class IncrementalContextManager:
         Returns:
             Список предыдущих сессий
         """
-        if not self.sessions_collection:
-            logger.debug("Коллекция сессий не доступна")
+        if not self.qdrant_client:
+            logger.debug("Qdrant клиент не доступен")
             return []
 
         try:
-            # Запрашиваем сессии из ChromaDB
-            # ChromaDB не поддерживает сложные where условия, поэтому используем простой фильтр
-            results = self.sessions_collection.get(
-                where={"chat": chat_name},
-                limit=20,  # Берем больше, чтобы отфильтровать по времени
-                include=["metadatas", "documents"],
+            # Запрашиваем сессии из Qdrant
+            if qmodels is None:
+                logger.warning("Qdrant models не доступны")
+                return []
+            
+            collection_name = "chat_sessions"
+            session_start_time_str = session_start_time.isoformat()
+            
+            # Фильтр для Qdrant: сессии того же чата, которые закончились до начала текущей сессии
+            filter_condition = qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="chat",
+                        match=qmodels.MatchValue(value=chat_name)
+                    ),
+                    qmodels.FieldCondition(
+                        key="end_time_utc",
+                        range=qmodels.Range(lt=session_start_time_str)
+                    )
+                ]
+            )
+            
+            results = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=filter_condition,
+                limit=20,
+                with_payload=True,
             )
 
-            # Преобразуем результаты в нужный формат и фильтруем по времени
+            # Преобразуем результаты Qdrant в нужный формат
             previous_sessions = []
-            for i, metadata in enumerate(results["metadatas"]):
+            points, _ = results
+            
+            for point in points:
+                payload = point.payload or {}
                 session = {
-                    "session_id": metadata.get("session_id", ""),
-                    "summary": results["documents"][i],
-                    "message_count": metadata.get("message_count", 0),
-                    "quality_score": metadata.get("quality_score", 0),
-                    "end_time_utc": metadata.get("end_time_utc", ""),
-                    "topics_count": metadata.get("topics_count", 0),
-                    "claims_count": metadata.get("claims_count", 0),
+                    "session_id": payload.get("session_id", ""),
+                    "summary": payload.get("summary", ""),
+                    "message_count": payload.get("message_count", 0),
+                    "quality_score": payload.get("quality_score", 0),
+                    "end_time_utc": payload.get("end_time_utc", ""),
+                    "topics_count": payload.get("topics_count", 0),
+                    "claims_count": payload.get("claims_count", 0),
                 }
 
-                # Фильтруем по времени (только сессии, которые закончились до текущей)
+                # Проверяем время (фильтр уже применен, но проверяем для надежности)
                 session_end_time = None
-
-                # Пробуем получить время окончания из разных полей
                 if session["end_time_utc"]:
                     from ..utils.datetime_utils import parse_datetime_utc
 
@@ -321,9 +377,9 @@ class IncrementalContextManager:
                     )
 
                 # Если end_time_utc пустое, пробуем парсить из time_span
-                if not session_end_time and metadata.get("time_span"):
+                if not session_end_time and payload.get("time_span"):
                     try:
-                        time_span = metadata["time_span"]
+                        time_span = payload["time_span"]
                         # Парсим формат "2025-05-11 16:13 – 00:58 BKK"
                         if " – " in time_span:
                             end_part = time_span.split(" – ")[1].split(" BKK")[0]

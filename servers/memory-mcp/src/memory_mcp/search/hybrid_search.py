@@ -33,7 +33,7 @@ class HybridSearchEngine:
         Инициализация гибридного поиска
 
         Args:
-            chroma_collection: ChromaDB коллекция для векторного поиска
+            chroma_collection: Коллекция для векторного поиска
             alpha: Вес векторного поиска (0-1), остальное - BM25
             k: Параметр для Reciprocal Rank Fusion (по умолчанию 60)
         """
@@ -53,7 +53,7 @@ class HybridSearchEngine:
 
     def build_bm25_index(self, force_rebuild: bool = False):
         """
-        Построение BM25 индекса из ChromaDB коллекции
+        Построение BM25 индекса из коллекции
 
         Args:
             force_rebuild: Принудительная пересборка индекса
@@ -167,7 +167,7 @@ class HybridSearchEngine:
         where: Optional[Dict] = None,
     ) -> List[Tuple[str, float]]:
         """
-        Векторный поиск через ChromaDB
+        Векторный поиск
 
         Args:
             query_embedding: Эмбеддинг запроса
@@ -188,7 +188,7 @@ class HybridSearchEngine:
                 return []
 
             # Конвертируем distance в similarity (меньше distance = больше similarity)
-            # ChromaDB возвращает L2 distance, конвертируем в similarity score
+            # Конвертируем L2 distance в similarity score
             ranked = []
             for doc_id, distance in zip(results["ids"][0], results["distances"][0]):
                 # Конвертация: similarity = 1 / (1 + distance)
@@ -248,7 +248,7 @@ class HybridSearchEngine:
             query: Текстовый запрос (для BM25)
             query_embedding: Эмбеддинг запроса (для векторного поиска)
             top_k: Количество результатов
-            where: Фильтр метаданных ChromaDB
+            where: Фильтр метаданных
             use_hybrid: Использовать гибридный поиск (True) или только векторный (False)
 
         Returns:
@@ -347,7 +347,7 @@ class HybridSearchManager:
         Инициализация менеджера
 
         Args:
-            chroma_client: ChromaDB клиент
+            chroma_client: Клиент векторного хранилища
             alpha: Вес векторного поиска (для всех коллекций)
         """
         self.chroma_client = chroma_client

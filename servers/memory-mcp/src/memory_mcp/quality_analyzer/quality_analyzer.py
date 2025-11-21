@@ -4,7 +4,7 @@
 
 Координирует работу всех компонентов системы анализа качества:
 - Генерация тестовых запросов
-- Анализ релевантности через Ollama
+- Анализ релевантности через LLM
 - Расчет метрик и создание отчетов
 - Управление историей анализов
 """
@@ -41,17 +41,17 @@ class QualityAnalyzer:
 
     def __init__(
         self,
-        ollama_model: str = "gemma3n:e4b-it-q8_0",
-        ollama_base_url: str = "http://localhost:11434",
+        llm_model: str = "gpt-oss-20b:latest",
+        llm_base_url: str = "http://localhost:1234",
         max_context_tokens: int = 131072,  # Для gpt-oss-20b
-        ollama_temperature: float = 0.1,
-        ollama_max_tokens: int = 131072,  # Для gpt-oss-20b (максимальный лимит)
-        ollama_thinking_level: Optional[str] = None,
+        temperature: float = 0.1,
+        max_response_tokens: int = 131072,  # Для gpt-oss-20b (максимальный лимит)
+        thinking_level: Optional[str] = None,
         reports_dir: Path = Path("artifacts/reports"),
         history_dir: Path = Path("quality_analysis_history"),
         reports_subdir: Optional[str] = "quality_analysis",
         results_per_query: int = 10,
-        chroma_path: Path = Path("chroma_db"),
+        qdrant_url: Optional[str] = None,
         search_collection: str = "chat_messages",
         hybrid_alpha: float = 0.6,
         batch_max_size: int = 10,
@@ -62,42 +62,46 @@ class QualityAnalyzer:
         Инициализация анализатора качества
 
         Args:
-            ollama_model: Модель Ollama для анализа
-            ollama_base_url: URL Ollama сервера
+            llm_model: Модель LLM для анализа (используется через LMStudioEmbeddingClient)
+            llm_base_url: URL LM Studio сервера
             max_context_tokens: Максимальное количество токенов в контексте
+            temperature: Температура для генерации
+            max_response_tokens: Максимальное количество токенов ответа
+            thinking_level: Уровень мышления (thinking)
             reports_dir: Директория с отчетами
             history_dir: Директория для хранения истории анализов
+            qdrant_url: URL Qdrant сервера (если None, берется из настроек)
         """
-        self.ollama_model = ollama_model
-        self.ollama_base_url = ollama_base_url
+        self.llm_model = llm_model
+        self.llm_base_url = llm_base_url
         self.max_context_tokens = max_context_tokens
         self.reports_dir = reports_dir
         self.history_dir = history_dir
         self.results_per_query = results_per_query
-        self.chroma_path = Path(chroma_path)
+        self.qdrant_url = qdrant_url
         self.search_collection = search_collection
         self.hybrid_alpha = hybrid_alpha
-        self.ollama_thinking_level = ollama_thinking_level
+        self.thinking_level = thinking_level
 
         # Создаем компоненты
         self.query_generator = QueryGenerator()
         self.relevance_analyzer = RelevanceAnalyzer(
-            model_name=ollama_model,
-            base_url=ollama_base_url,
+            model_name=llm_model,
+            base_url=llm_base_url,
             max_context_tokens=max_context_tokens,
-            temperature=ollama_temperature,
-            max_response_tokens=ollama_max_tokens,
-            thinking_level=ollama_thinking_level,
+            temperature=temperature,
+            max_response_tokens=max_response_tokens,
+            thinking_level=thinking_level,
         )
         self.metrics_calculator = MetricsCalculator()
         self.report_generator = ReportGenerator(
             reports_dir,
             quality_subdir=reports_subdir,
-            ollama_model=ollama_model,
-            ollama_base_url=ollama_base_url,
-            ollama_temperature=ollama_temperature,
-            ollama_max_tokens=ollama_max_tokens,
-            ollama_thinking_level=ollama_thinking_level,
+            llm_model=llm_model,
+            llm_base_url=llm_base_url,
+            temperature=temperature,
+            max_tokens=max_response_tokens,
+            thinking_level=thinking_level,
         )
         self.history_manager = HistoryManager(history_dir)
         self.batch_manager = BatchManager(
@@ -110,16 +114,15 @@ class QualityAnalyzer:
         )
 
         # Компоненты поиска и эмбеддингов
-        # Используем LM Studio Server для эмбеддингов
-        # base_url должен быть в формате http://host:port
-        self._embedding_client = LMStudioEmbeddingClient(base_url=ollama_base_url or "http://127.0.0.1:1234")
-        self._chroma_client = None
+        # Используем LMStudioEmbeddingClient для эмбеддингов
+        self._embedding_client = LMStudioEmbeddingClient(base_url=llm_base_url or "http://127.0.0.1:1234")
+        self._qdrant_client = None
         self._search_manager: Optional[HybridSearchManager] = None
 
         # Создаем директории если не существуют
         self.history_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"Инициализирован QualityAnalyzer (модель: {ollama_model})")
+        logger.info(f"Инициализирован QualityAnalyzer (модель: {llm_model}, Qdrant: {qdrant_url})")
 
     async def analyze_chat_quality(
         self,
@@ -218,7 +221,7 @@ class QualityAnalyzer:
         logger.info("Расчет метрик качества...")
         metrics = self.metrics_calculator.calculate_metrics(all_results)
 
-        logger.info("Запрос рекомендаций у Ollama...")
+        logger.info("Запрос рекомендаций у LLM...")
         try:
             llm_recommendations = (
                 await self.report_generator.generate_llm_recommendations(
@@ -228,7 +231,7 @@ class QualityAnalyzer:
                 )
             )
         except Exception as exc:  # pragma: no cover - зависит от внешнего сервиса
-            logger.warning("Не удалось получить рекомендации через Ollama: %s", exc)
+            logger.warning("Не удалось получить рекомендации через LLM: %s", exc)
             llm_recommendations = []
 
         # Создаем отчет
@@ -519,25 +522,40 @@ class QualityAnalyzer:
             return None
 
     def _get_search_engine(self):
-        """Получение поискового движка для коллекции сообщений."""
+        """Получение поискового движка для коллекции сообщений через Qdrant."""
         if self._search_manager is None:
             try:
-                import chromadb
-
-                self._chroma_client = chromadb.PersistentClient(
-                    path=str(self.chroma_path)
-                )
-                self._search_manager = HybridSearchManager(
-                    self._chroma_client,
-                    alpha=self.hybrid_alpha,
-                )
+                from qdrant_client import QdrantClient
+                from ..memory.qdrant_collections import QdrantCollectionsManager
+                
+                # Получаем URL Qdrant из настроек, если не указан
+                qdrant_url = self.qdrant_url
+                if qdrant_url is None:
+                    from ..config import get_settings
+                    settings = get_settings()
+                    qdrant_url = settings.get_qdrant_url()
+                
+                if not qdrant_url:
+                    logger.warning("Qdrant URL не настроен, поисковый движок недоступен")
+                    return None
+                
+                qdrant_client = QdrantClient(url=qdrant_url, check_compatibility=False)
+                collections_manager = QdrantCollectionsManager(url=qdrant_url)
+                self._qdrant_client = qdrant_client
+                
+                # HybridSearchManager может работать с Qdrant через адаптер
+                # Пока используем прямой доступ к Qdrant
+                self._search_manager = collections_manager
             except Exception as exc:
-                log_error("Не удалось инициализировать ChromaDB клиент", exc)
+                log_error("Не удалось инициализировать Qdrant клиент", exc)
                 self._search_manager = None
                 return None
 
         try:
-            return self._search_manager.get_engine(self.search_collection)
+            # Возвращаем коллекцию из Qdrant
+            if hasattr(self._search_manager, 'get_collection'):
+                return self._search_manager.get_collection(self.search_collection)
+            return self._search_manager
         except Exception as exc:
             log_error("Не удалось получить поисковый движок", exc)
             return None

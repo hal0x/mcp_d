@@ -14,7 +14,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Настройки MCP сервера TG Dump, загружаемые из переменных окружения."""
 
-    chroma_path: str = Field("./chroma_db", description="Путь к базе ChromaDB")
     chats_path: str = Field("./chats", description="Путь к директории с чатами")
     artifacts_path: str = Field("./artifacts", description="Путь к артефактам")
     input_path: str = Field("input", description="Путь к директории input с новыми сообщениями")
@@ -36,7 +35,7 @@ class Settings(BaseSettings):
         "text-embedding-qwen3-embedding-0.6b", description="Модель для эмбеддингов в LM Studio"
     )
     lmstudio_llm_model: str | None = Field(
-        "gpt-oss-20b", description="Модель LLM для генерации текста в LM Studio (если None, используется Ollama)"
+        "gpt-oss-20b", description="Модель LLM для генерации текста в LM Studio"
     )
 
     # Дополнительные настройки
@@ -66,6 +65,15 @@ class Settings(BaseSettings):
     entity_description_enabled: bool = Field(True, description="Включить генерацию описаний сущностей")
     entity_description_max_length: int = Field(200, description="Максимальная длина описания сущности")
 
+    # LangChain настройки (feature flags)
+    use_langchain_embeddings: bool = Field(False, description="Использовать LangChain для эмбеддингов")
+    use_langchain_llm: bool = Field(False, description="Использовать LangChain для LLM")
+    use_langchain_retrievers: bool = Field(False, description="Использовать LangChain ретриверы")
+    use_langchain_summarization: bool = Field(False, description="Использовать LangChain для саммаризации")
+    langchain_summarization_mode: Literal["stuff", "map_reduce", "refine"] = Field(
+        "map_reduce", description="Режим саммаризации LangChain"
+    )
+
     model_config = SettingsConfigDict(
         env_prefix="MEMORY_MCP_",
         env_file=".env",
@@ -89,9 +97,9 @@ class Settings(BaseSettings):
 class QualityAnalysisSettings(BaseSettings):
     """Настройки модуля анализа качества, загружаемые из переменных окружения."""
 
-    # Ollama настройки
-    ollama_model: str = Field("gpt-oss-20b:latest", description="Модель Ollama")
-    ollama_base_url: str = Field("http://localhost:11434", description="URL Ollama сервера")
+    # LM Studio настройки
+    llm_model: str = Field("gpt-oss-20b:latest", description="Модель LLM для анализа")
+    llm_base_url: str = Field("http://localhost:1234", description="URL LM Studio сервера")
     max_context_tokens: int = Field(131072, description="Максимальное количество токенов контекста (для gpt-oss-20b)")
     temperature: float = Field(0.1, description="Температура для генерации")
     max_response_tokens: int = Field(131072, description="Максимальное количество токенов ответа (для gpt-oss-20b)")
@@ -113,14 +121,13 @@ class QualityAnalysisSettings(BaseSettings):
     reports_dir: Path = Field(Path("artifacts/reports"), description="Директория для отчетов")
     quality_reports_subdir: str = Field("quality_analysis", description="Поддиректория для отчетов качества")
     history_dir: Path = Field(Path("quality_analysis_history"), description="Директория для истории")
-    chroma_path: Path = Field(Path("chroma_db"), description="Путь к ChromaDB")
     chats_dir: Path = Field(Path("chats"), description="Директория с чатами")
     custom_queries_path: Path | None = Field(None, description="Путь к файлу с кастомными запросами")
 
     # Пороги (хранятся как JSON строка или dict)
     thresholds: dict[str, Any] = Field(default_factory=dict, description="Пороги для оценки качества")
 
-    @field_validator("reports_dir", "history_dir", "chroma_path", "chats_dir", "custom_queries_path", mode="before")
+    @field_validator("reports_dir", "history_dir", "chats_dir", "custom_queries_path", mode="before")
     @classmethod
     def validate_paths(cls, v: Any) -> Any:
         """Валидация путей - конвертация строк в Path."""
@@ -172,7 +179,7 @@ class QualityAnalysisSettings(BaseSettings):
             return cls()
 
         qa_section = config_data.get("quality_analysis", {})
-        ollama_section = qa_section.get("ollama", {})
+        llm_section = qa_section.get("llm", {})
         query_section = qa_section.get("query_generation", {})
         analysis_section = qa_section.get("analysis", {})
         reporting_section = qa_section.get("reporting", {})
@@ -196,18 +203,17 @@ class QualityAnalysisSettings(BaseSettings):
         quality_subdir = subdir_value if subdir_value is not None else "quality_analysis"
 
         history_path = _resolve_path(reporting_section.get("history_dir", "quality_analysis_history")) or Path("quality_analysis_history")
-        chroma_path = _resolve_path(analysis_section.get("chroma_path")) or Path("chroma_db")
         chats_dir = _resolve_path(analysis_section.get("chats_dir")) or Path("chats")
         custom_queries_path = _resolve_path(query_section.get("custom_queries_file"))
 
         # Создаем настройки из JSON
         return cls(
-            ollama_model=ollama_section.get("model", "gpt-oss-20b:latest"),
-            ollama_base_url=ollama_section.get("base_url", "http://localhost:11434"),
-            max_context_tokens=ollama_section.get("max_context_tokens", 131072),
-            temperature=ollama_section.get("temperature", 0.1),
-            max_response_tokens=ollama_section.get("max_tokens", 131072),
-            thinking_level=ollama_section.get("thinking_level"),
+            llm_model=llm_section.get("model", "gpt-oss-20b:latest"),
+            llm_base_url=llm_section.get("base_url", "http://localhost:1234"),
+            max_context_tokens=llm_section.get("max_context_tokens", 131072),
+            temperature=llm_section.get("temperature", 0.1),
+            max_response_tokens=llm_section.get("max_tokens", 131072),
+            thinking_level=llm_section.get("thinking_level"),
             max_queries_per_chat=query_section.get("max_queries_per_chat", 20),
             batch_size=analysis_section.get("batch_size") if analysis_section.get("batch_size") and analysis_section.get("batch_size") > 0 else None,
             search_collection=analysis_section.get("search_collection", "chat_messages"),
@@ -219,7 +225,6 @@ class QualityAnalysisSettings(BaseSettings):
             reports_dir=reports_path_resolved,
             quality_reports_subdir=quality_subdir,
             history_dir=history_path,
-            chroma_path=chroma_path,
             chats_dir=chats_dir,
             custom_queries_path=custom_queries_path,
             thresholds=qa_section.get("thresholds", {}),

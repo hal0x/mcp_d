@@ -4,6 +4,40 @@
 
 ## [Unreleased]
 
+### Добавлено ✨
+
+#### Интеграция LangChain фреймворка
+
+**Новые возможности:**
+- Поддержка LangChain для эмбеддингов через `LangChainEmbeddingAdapter`
+- Поддержка LangChain для LLM через `LangChainLLMAdapter`
+- LangChain PromptTemplate менеджер для работы с промптами
+- Гибридные ретриверы на базе LangChain `EnsembleRetriever`
+- LangChain summarization chains для саммаризации
+- LangChain text splitters для разбивки текста
+
+**Feature flags:**
+- `MEMORY_MCP_USE_LANGCHAIN_EMBEDDINGS` — использовать LangChain для эмбеддингов (по умолчанию: False)
+- `MEMORY_MCP_USE_LANGCHAIN_LLM` — использовать LangChain для LLM (по умолчанию: False)
+- `MEMORY_MCP_USE_LANGCHAIN_RETRIEVERS` — использовать LangChain ретриверы (по умолчанию: False)
+- `MEMORY_MCP_USE_LANGCHAIN_SUMMARIZATION` — использовать LangChain для саммаризации (по умолчанию: False)
+- `MEMORY_MCP_LANGCHAIN_SUMMARIZATION_MODE` — режим саммаризации ("stuff", "map_reduce", "refine", по умолчанию: "map_reduce")
+
+**Новые модули:**
+- `src/memory_mcp/core/langchain_adapters.py` — адаптеры для обратной совместимости
+- `src/memory_mcp/core/langchain_prompts.py` — менеджер промптов LangChain
+- `src/memory_mcp/core/langchain_text_splitters.py` — text splitters LangChain
+- `src/memory_mcp/search/langchain_retrievers.py` — гибридные ретриверы LangChain
+- `src/memory_mcp/analysis/langchain_summarization.py` — summarization chains LangChain
+
+**Зависимости:**
+- Добавлены `langchain>=0.3.0`, `langchain-community>=0.3.0`, `langchain-openai>=0.2.0`, `langchain-core>=0.3.0`
+
+**Обратная совместимость:**
+- Все существующие интерфейсы сохранены
+- По умолчанию используются старые реализации
+- LangChain компоненты доступны через feature flags
+
 ## [2.0.0] - 2025-01-XX
 
 ### Удалено 🗑️

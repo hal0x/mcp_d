@@ -13,7 +13,7 @@ def normalize_similarity_scores(distances: List[float]) -> List[float]:
     Нормализует расстояния в схожесть с хорошим различием между результатами.
 
     Args:
-        distances: Список расстояний от ChromaDB
+        distances: Список расстояний от векторного поиска
 
     Returns:
         Список нормализованных значений схожести [0, 1]

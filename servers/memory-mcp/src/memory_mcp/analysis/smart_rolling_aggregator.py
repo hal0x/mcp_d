@@ -1123,8 +1123,8 @@ class SmartRollingAggregator:
 Образ чата должен быть кратким (3-4 абзаца) и отражать текущее состояние чата с затуханием старой информации."""
 
         try:
-            async with self.ollama_client:
-                updated_context = await self.ollama_client.generate_summary(
+            async with self.embedding_client:
+                updated_context = await self.embedding_client.generate_summary(
                     prompt=prompt,
                     temperature=0.3,
                     max_tokens=30000,  # Уменьшено для предотвращения таймаутов

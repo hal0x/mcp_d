@@ -8,11 +8,11 @@
 
 import asyncio
 import logging
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-import chromadb
 from zoneinfo import ZoneInfo
 
 from ..config import get_settings
@@ -29,7 +29,7 @@ class BackgroundIndexingService:
         self,
         input_path: str = "input",
         chats_path: str = "chats",
-        chroma_path: str = "./chroma_db",
+        db_path: str = "data/background_indexing.db",
         check_interval: int = 60,
     ):
         """
@@ -38,18 +38,17 @@ class BackgroundIndexingService:
         Args:
             input_path: Путь к директории input с новыми сообщениями
             chats_path: Путь к директории chats для сохранения сообщений
-            chroma_path: Путь к ChromaDB для хранения состояния
+            db_path: Путь к SQLite БД для хранения состояния
             check_interval: Интервал проверки в секундах (по умолчанию 60)
         """
         self.input_path = Path(input_path)
         self.chats_path = Path(chats_path)
-        self.chroma_path = Path(chroma_path)
+        self.db_path = Path(db_path)
         self.check_interval = check_interval
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
-        self._chroma_client: Optional[chromadb.PersistentClient] = None
-        self._progress_collection: Optional[chromadb.Collection] = None
+        self._db_conn: Optional[sqlite3.Connection] = None
         self._message_extractor: Optional[MessageExtractor] = None
         self._index_chat_callback: Optional[callable] = None
 
@@ -57,47 +56,45 @@ class BackgroundIndexingService:
         """Установить callback для запуска индексации чата."""
         self._index_chat_callback = callback
 
-    def _initialize_chromadb(self):
-        """Инициализация ChromaDB для хранения состояния."""
+    def _initialize_db(self):
+        """Инициализация SQLite БД для хранения состояния."""
         try:
-            if not self.chroma_path.exists():
-                self.chroma_path.mkdir(parents=True, exist_ok=True)
+            # Создаем директорию для БД, если не существует
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-            self._chroma_client = chromadb.PersistentClient(path=str(self.chroma_path))
+            self._db_conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self._db_conn.row_factory = sqlite3.Row
 
-            try:
-                self._progress_collection = self._chroma_client.get_collection(
-                    "indexing_progress"
+            # Создаем таблицу для хранения состояния
+            self._db_conn.execute("""
+                CREATE TABLE IF NOT EXISTS background_indexing_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 )
-            except Exception:
-                self._progress_collection = self._chroma_client.create_collection(
-                    name="indexing_progress",
-                    metadata={
-                        "description": "Отслеживание прогресса индексации и состояния фонового процесса"
-                    },
-                )
+            """)
+            self._db_conn.commit()
 
-            logger.info("ChromaDB инициализирован для фоновой индексации")
+            logger.info("SQLite БД инициализирована для фоновой индексации")
         except Exception as e:
-            logger.error(f"Ошибка инициализации ChromaDB: {e}", exc_info=True)
+            logger.error(f"Ошибка инициализации SQLite БД: {e}", exc_info=True)
             raise
 
     def _get_last_check_time(self) -> Optional[datetime]:
-        """Получить время последней проверки input директории из ChromaDB."""
-        if not self._progress_collection:
+        """Получить время последней проверки input директории из SQLite БД."""
+        if not self._db_conn:
             return None
 
         try:
-            result = self._progress_collection.get(
-                ids=["background_indexing_state"], include=["metadatas"]
+            cursor = self._db_conn.execute(
+                "SELECT value FROM background_indexing_state WHERE key = ?",
+                ("last_input_check_time",)
             )
-
-            if result.get("ids") and len(result["ids"]) > 0:
-                metadata = result.get("metadatas", [{}])[0]
-                last_check_str = metadata.get("last_input_check_time")
+            row = cursor.fetchone()
+            if row:
+                last_check_str = row[0]
                 if last_check_str:
                     from ..utils.datetime_utils import parse_datetime_utc
-
                     return parse_datetime_utc(last_check_str, use_zoneinfo=True)
         except Exception as e:
             logger.debug(f"Не удалось получить время последней проверки: {e}")
@@ -105,24 +102,18 @@ class BackgroundIndexingService:
         return None
 
     def _save_last_check_time(self, check_time: datetime):
-        """Сохранить время последней проверки input директории в ChromaDB."""
-        if not self._progress_collection:
+        """Сохранить время последней проверки input директории в SQLite БД."""
+        if not self._db_conn:
             return
 
         try:
-            metadata = {
-                "last_input_check_time": check_time.isoformat(),
-                "updated_at": datetime.now(ZoneInfo("UTC")).isoformat(),
-            }
-
-            dummy_embedding = [0.0] * 1024
-
-            self._progress_collection.upsert(
-                ids=["background_indexing_state"],
-                documents=["Background indexing state"],
-                embeddings=[dummy_embedding],
-                metadatas=[metadata],
+            updated_at = datetime.now(ZoneInfo("UTC")).isoformat()
+            self._db_conn.execute(
+                """INSERT OR REPLACE INTO background_indexing_state (key, value, updated_at)
+                   VALUES (?, ?, ?)""",
+                ("last_input_check_time", check_time.isoformat(), updated_at)
             )
+            self._db_conn.commit()
 
             logger.debug(f"Сохранено время последней проверки: {check_time.isoformat()}")
         except Exception as e:
@@ -263,9 +254,9 @@ class BackgroundIndexingService:
         )
 
         try:
-            self._initialize_chromadb()
+            self._initialize_db()
         except Exception as e:
-            logger.error(f"Не удалось инициализировать ChromaDB: {e}")
+            logger.error(f"Не удалось инициализировать SQLite БД: {e}")
             return
 
         while self._running:
@@ -308,6 +299,11 @@ class BackgroundIndexingService:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        
+        # Закрываем соединение с БД
+        if self._db_conn:
+            self._db_conn.close()
+            self._db_conn = None
 
     def is_running(self) -> bool:
         """Проверить, запущен ли фоновый процесс."""

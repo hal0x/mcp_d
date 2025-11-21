@@ -25,17 +25,23 @@ class ReportGenerator:
         self,
         reports_dir: Path = Path("artifacts/reports"),
         quality_subdir: Optional[str] = "quality_analysis",
-        ollama_model: Optional[str] = None,
-        ollama_base_url: Optional[str] = None,
-        ollama_temperature: float = 0.2,
-        ollama_max_tokens: int = 131072,  # Для gpt-oss-20b (максимальный лимит)
-        ollama_thinking_level: Optional[str] = None,
+        llm_model: Optional[str] = None,
+        llm_base_url: Optional[str] = None,
+        temperature: float = 0.2,
+        max_tokens: int = 131072,  # Для gpt-oss-20b (максимальный лимит)
+        thinking_level: Optional[str] = None,
     ):
         """
         Инициализация генератора отчетов
 
         Args:
             reports_dir: Директория для сохранения отчетов
+            quality_subdir: Поддиректория для отчетов качества
+            llm_model: Модель LLM для генерации рекомендаций
+            llm_base_url: URL LM Studio сервера
+            temperature: Температура для генерации
+            max_tokens: Максимальное количество токенов
+            thinking_level: Уровень мышления (thinking)
         """
         self.reports_dir = reports_dir
         if quality_subdir:
@@ -54,16 +60,16 @@ class ReportGenerator:
 
         self.prompt_manager = PromptTemplateManager(DEFAULT_PROMPTS_DIR)
 
-        self.ollama_temperature = ollama_temperature
-        self.ollama_max_tokens = ollama_max_tokens
+        self.temperature = temperature
+        self.max_tokens = max_tokens
         self.embedding_client: Optional[LMStudioEmbeddingClient] = None
-        self.ollama_thinking_level = ollama_thinking_level
+        self.thinking_level = thinking_level
 
-        if ollama_model and ollama_base_url:
+        if llm_model and llm_base_url:
             # Используем LM Studio Server
             self.embedding_client = LMStudioEmbeddingClient(
-                model_name=ollama_model,
-                base_url=ollama_base_url,
+                model_name=llm_model,
+                base_url=llm_base_url,
             )
 
         logger.info(
@@ -179,7 +185,7 @@ class ReportGenerator:
         analysis_results: List[Dict[str, Any]],
         max_problem_examples: int = 5,
     ) -> List[Dict[str, Any]]:
-        """Получение рекомендаций через Ollama."""
+        """Получение рекомендаций через LLM."""
 
         if not self.embedding_client:
             logger.debug("Генератор рекомендаций LM Studio не настроен")
@@ -214,8 +220,8 @@ class ReportGenerator:
             async with self.embedding_client:
                 response = await self.embedding_client.generate_summary(
                     prompt,
-                    temperature=self.ollama_temperature,
-                    max_tokens=self.ollama_max_tokens,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
                 )
         except Exception as exc:  # pragma: no cover - внешнее API
             logger.warning("Не удалось получить рекомендации от LM Studio: %s", exc)
@@ -454,7 +460,7 @@ class ReportGenerator:
                 if isinstance(data, list):
                     parsed_entries = [item for item in data if isinstance(item, dict)]
             except json.JSONDecodeError:
-                logger.warning("Ответ Ollama с рекомендациями содержит невалидный JSON")
+                logger.warning("Ответ LLM с рекомендациями содержит невалидный JSON")
 
         if not parsed_entries:
             text = response.replace("```", "").strip()
@@ -467,7 +473,7 @@ class ReportGenerator:
 
             return [
                 {
-                    "title": "Рекомендации от Ollama",
+                    "title": "Рекомендации от LLM",
                     "description": suggestions[0] if suggestions else text[:200],
                     "suggestions": suggestions,
                     "priority": "ai",

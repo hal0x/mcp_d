@@ -182,12 +182,28 @@ def build_embedding_service_from_env() -> EmbeddingService | None:
     """Build embedding service from settings.
     
     Priority:
-    1. embeddings_url (if set, use it directly)
-    2. LM Studio variables (lmstudio_host, lmstudio_port, lmstudio_model)
+    1. LangChain embeddings (if USE_LANGCHAIN_EMBEDDINGS is enabled)
+    2. embeddings_url (if set, use it directly)
+    3. LM Studio variables (lmstudio_host, lmstudio_port, lmstudio_model)
     
     Returns None if no configuration is found.
     """
     settings = get_settings()
+    
+    # Check if LangChain embeddings should be used
+    if settings.use_langchain_embeddings:
+        try:
+            from ..core.langchain_adapters import build_langchain_embeddings_from_env
+            langchain_service = build_langchain_embeddings_from_env()
+            if langchain_service:
+                logger.info("Using LangChain embeddings adapter")
+                return langchain_service  # type: ignore
+            else:
+                logger.warning("LangChain embeddings requested but failed to initialize, falling back to default")
+        except ImportError as e:
+            logger.warning(f"LangChain not available, falling back to default embeddings: {e}")
+        except Exception as e:
+            logger.warning(f"Error initializing LangChain embeddings, falling back to default: {e}")
     
     # Priority 1: embeddings_url
     url = settings.get_embeddings_url()

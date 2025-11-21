@@ -80,18 +80,22 @@ def run_quality_analysis(
     )
 
     try:
+        from ..config import get_settings as get_main_settings
+        main_settings = get_main_settings()
+        qdrant_url = main_settings.get_qdrant_url()
+        
         analyzer = QualityAnalyzer(
-            ollama_model=settings.ollama_model,
-            ollama_base_url=settings.ollama_base_url,
+            llm_model=settings.llm_model,
+            llm_base_url=settings.llm_base_url,
             max_context_tokens=settings.max_context_tokens,
-            ollama_temperature=settings.temperature,
-            ollama_max_tokens=settings.max_response_tokens,
-            ollama_thinking_level=settings.thinking_level,
+            temperature=settings.temperature,
+            max_response_tokens=settings.max_response_tokens,
+            thinking_level=settings.thinking_level,
             reports_dir=settings.reports_dir,
             history_dir=settings.history_dir,
             reports_subdir=settings.quality_reports_subdir,
             results_per_query=settings.results_per_query,
-            chroma_path=settings.chroma_path,
+            qdrant_url=qdrant_url,
             search_collection=settings.search_collection,
             hybrid_alpha=settings.hybrid_alpha,
             batch_max_size=settings.batch_max_size,

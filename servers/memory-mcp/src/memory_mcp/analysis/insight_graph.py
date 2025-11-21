@@ -13,9 +13,11 @@ import yaml
 from ..core.lmstudio_client import LMStudioEmbeddingClient
 
 try:
-    import chromadb  # type: ignore
-except Exception:  # pragma: no cover - optional dependency at runtime
-    chromadb = None  # type: ignore
+    from qdrant_client import QdrantClient
+    from qdrant_client.http import models as qmodels
+except ImportError:  # pragma: no cover - optional dependency at runtime
+    QdrantClient = None  # type: ignore
+    qmodels = None  # type: ignore
 
 
 _FRONT_MATTER_PATTERN = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
@@ -82,30 +84,37 @@ class SummaryInsightAnalyzer:
     def __init__(
         self,
         summaries_dir: Path | str = Path("artifacts/reports"),
-        chroma_path: Path | str = Path("./chroma_db"),
+        qdrant_url: str | None = None,
         *,
         embedding_client: LMStudioEmbeddingClient | None = None,
-        chroma_client: Any | None = None,
+        qdrant_client: Any | None = None,
         similarity_threshold: float = 0.76,
         max_similar_results: int = 8,
     ) -> None:
         self.summaries_dir = Path(summaries_dir)
-        self.chroma_path = Path(chroma_path)
         self.similarity_threshold = similarity_threshold
         self.max_similar_results = max_similar_results
         self.embedding_client = embedding_client or LMStudioEmbeddingClient()
         self._own_embedding_client = embedding_client is None
-        self.chroma_client = chroma_client or (
-            chromadb.PersistentClient(path=str(self.chroma_path)) if chromadb else None
-        )
-        self.summary_collection = None
-        if self.chroma_client is not None:
-            try:
-                self.summary_collection = self.chroma_client.get_collection(
-                    "telegram_summaries"
-                )
-            except Exception:
-                self.summary_collection = None
+        
+        from ..config import get_settings
+        
+        if qdrant_url is None:
+            settings = get_settings()
+            qdrant_url = settings.get_qdrant_url()
+        
+        self.qdrant_url = qdrant_url
+        
+        try:
+            from qdrant_client import QdrantClient
+            self.qdrant_client = qdrant_client or (
+                QdrantClient(url=qdrant_url, check_compatibility=False) if qdrant_url else None
+            )
+        except ImportError:
+            self.qdrant_client = None
+            logger.warning("qdrant-client не установлен; InsightGraph будет работать без векторного поиска")
+        
+        self.summary_collection_name = "telegram_summaries"
 
     async def __aenter__(self) -> SummaryInsightAnalyzer:
         if self._own_embedding_client:
@@ -252,29 +261,34 @@ class SummaryInsightAnalyzer:
     async def _enrich_with_similarity(
         self, graph: nx.Graph, documents: Sequence[SummaryDocument]
     ) -> None:
-        if self.summary_collection is None:
+        if self.qdrant_client is None:
             return
         embeddings = await self.embedding_client.generate_embeddings(
             [doc.embedding_text for doc in documents]
         )
         for doc, embedding in zip(documents, embeddings):
             try:
-                results = self.summary_collection.query(
-                    query_embeddings=[embedding],
-                    n_results=self.max_similar_results,
-                    include=["metadatas", "distances"],
+                if qmodels is None:
+                    continue
+                # Поиск похожих саммаризаций в Qdrant
+                results = self.qdrant_client.search(
+                    collection_name=self.summary_collection_name,
+                    query_vector=embedding,
+                    limit=self.max_similar_results,
+                    with_payload=True,
                 )
             except Exception:
                 continue
-            metadatas = results.get("metadatas") or []
-            distances = results.get("distances") or []
-            if not metadatas or not metadatas[0]:
+            if not results:
                 continue
-            for metadata, distance in zip(metadatas[0], distances[0]):
-                other_chat = metadata.get("chat_name") or metadata.get("chat")
+            for result in results:
+                payload = result.payload or {}
+                other_chat = payload.get("chat_name") or payload.get("chat")
                 if not other_chat or other_chat == doc.chat_name:
                     continue
                 # Используем логарифмическую схожесть для лучшего различия
+                # Qdrant возвращает score (чем больше, тем лучше), преобразуем в distance
+                distance = 1.0 - result.score if result.score <= 1.0 else 0.0
                 similarity = 1.0 / (1.0 + float(distance) ** 0.5)
                 if similarity < self.similarity_threshold:
                     continue
@@ -450,14 +464,12 @@ class SummaryInsightAnalyzer:
 
 async def build_insight_graph(
     summaries_dir: Path | str = Path("artifacts/reports"),
-    chroma_path: Path | str = Path("./chroma_db"),
     *,
     similarity_threshold: float = 0.76,
 ) -> InsightGraphResult:
     """Convenience coroutine to run insight analysis in a single call."""
     async with SummaryInsightAnalyzer(
         summaries_dir=summaries_dir,
-        chroma_path=chroma_path,
         similarity_threshold=similarity_threshold,
     ) as analyzer:
         return await analyzer.analyze()

@@ -20,9 +20,7 @@ import click
 from ..utils.russian_tokenizer import tokenize_text as enhanced_tokenize
 from ..utils.paths import find_project_root
 
-# Отключаем телеметрию ChromaDB
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
-os.environ["CHROMA_TELEMETRY_IMPL"] = ""
 
 from ..analysis.insight_graph import SummaryInsightAnalyzer
 from ..analysis.instruction_manager import InstructionManager
@@ -179,28 +177,6 @@ class ProcessManager:
 
         return killed_count
 
-    @staticmethod
-    def stop_ollama():
-        """Остановка Ollama сервера."""
-        logger.info("🛑 Остановка Ollama сервера...")
-
-        try:
-            result = subprocess.run(
-                ["ollama", "stop"], capture_output=True, text=True, timeout=10
-            )
-            if result.returncode == 0:
-                logger.info("✅ Ollama сервер остановлен")
-            else:
-                logger.warning("⚠️ Ollama stop не сработал, пробуем kill")
-                ProcessManager.kill_processes_by_name("ollama")
-        except subprocess.TimeoutExpired:
-            logger.warning("⚠️ Timeout при остановке Ollama, пробуем kill")
-            ProcessManager.kill_processes_by_name("ollama")
-        except FileNotFoundError:
-            logger.warning("⚠️ Ollama не найден в PATH, пробуем kill")
-            ProcessManager.kill_processes_by_name("ollama")
-        except Exception as e:
-            logger.error(f"❌ Ошибка остановки Ollama: {e}")
 
     @staticmethod
     def stop_indexing_processes():
@@ -213,7 +189,6 @@ class ProcessManager:
             "summarize_chats.py",
             "index_summaries.py",
             "cross_analyze.py",
-            "ollama",
         ]
 
         total_killed = 0
@@ -237,7 +212,6 @@ class ProcessManager:
             "summarize_chats.py",
             "index_summaries.py",
             "cross_analyze.py",
-            "ollama",
         ]
 
         remaining = []
@@ -267,7 +241,6 @@ class ProcessManager:
         logger.info("=" * 50)
 
         ProcessManager.stop_indexing_processes()
-        ProcessManager.stop_ollama()
 
         import time
         time.sleep(2)
@@ -303,7 +276,7 @@ def cli(verbose, quiet):
       • stop-indexing      - Остановка всех процессов индексации
       
     Управление данными:
-      • backup-database    - Создание резервной копии (SQLite + ChromaDB)
+      • backup-database    - Создание резервной копии (SQLite)
       • restore-database   - Восстановление из резервной копии
       • optimize-database  - Оптимизация SQLite (VACUUM, ANALYZE, REINDEX)
       • validate-database  - Проверка целостности данных
@@ -393,8 +366,6 @@ def check(embedding_model):
     """🔧 Проверка системы и подключений"""
 
     async def _check():
-        import chromadb
-
         from ..core.lmstudio_client import LMStudioEmbeddingClient
         from ..config import get_settings
 
@@ -420,52 +391,37 @@ def check(embedding_model):
                     click.echo(f"Убедитесь, что модель {embedding_model or settings.lmstudio_model} загружена в LM Studio Server")
                     return False
 
-                click.echo("✅ Ollama доступен")
+                click.echo("✅ LM Studio доступен")
         except Exception as e:
-            click.echo(f"❌ Ошибка при проверке Ollama: {e}")
+            click.echo(f"❌ Ошибка при проверке LM Studio: {e}")
             return False
 
-        # Проверяем ChromaDB коллекции
+        # Проверяем Qdrant
         try:
-            chroma_client = chromadb.PersistentClient(path="./chroma_db")
-
-            # Проверяем новые коллекции
-            collections_status = []
-            try:
-                sessions_collection = chroma_client.get_collection("chat_sessions")
-                click.echo(
-                    f"✅ ChromaDB chat_sessions: {sessions_collection.count()} записей"
-                )
-                collections_status.append(True)
-            except:
-                click.echo("⚠️  ChromaDB коллекция chat_sessions не найдена")
-                collections_status.append(False)
-
-            try:
-                messages_collection = chroma_client.get_collection("chat_messages")
-                click.echo(
-                    f"✅ ChromaDB chat_messages: {messages_collection.count()} записей"
-                )
-                collections_status.append(True)
-            except:
-                click.echo("⚠️  ChromaDB коллекция chat_messages не найдена")
-                collections_status.append(False)
-
-            try:
-                tasks_collection = chroma_client.get_collection("chat_tasks")
-                click.echo(f"✅ ChromaDB chat_tasks: {tasks_collection.count()} записей")
-                collections_status.append(True)
-            except:
-                click.echo("⚠️  ChromaDB коллекция chat_tasks не найдена")
-                collections_status.append(False)
-
-            if not any(collections_status):
-                click.echo(
-                    "\n💡 Подсказка: Запустите 'memory_mcp index' для создания индексов"
-                )
+            from ..memory.vector_store import build_vector_store_from_env
+            from ..memory.embeddings import build_embedding_service_from_env
+            
+            vector_store = build_vector_store_from_env()
+            embedding_service = build_embedding_service_from_env()
+            
+            if vector_store and embedding_service and embedding_service.dimension:
+                try:
+                    # Проверяем доступность Qdrant
+                    collection_info = vector_store.get_collection_info()
+                    if collection_info:
+                        click.echo(f"✅ Qdrant доступен: {collection_info.get('points_count', 0)} векторов")
+                    else:
+                        click.echo("⚠️  Qdrant коллекция не найдена")
+                        click.echo("💡 Запустите 'memory_mcp index' для создания индексов")
+                except Exception as e:
+                    click.echo(f"⚠️  Qdrant недоступен: {e}")
+                    click.echo("💡 Убедитесь, что Qdrant запущен и доступен по адресу из MEMORY_MCP_QDRANT_URL")
+            else:
+                click.echo("⚠️  Qdrant не настроен (MEMORY_MCP_QDRANT_URL не установлен)")
+                click.echo("💡 Векторный поиск будет недоступен без Qdrant")
 
         except Exception as e:
-            click.echo(f"❌ Ошибка при проверке ChromaDB: {e}")
+            click.echo(f"❌ Ошибка при проверке Qdrant: {e}")
 
         # Проверяем файлы
         chats_path = Path("chats")
@@ -804,7 +760,7 @@ def index(
             click.echo(f"   - OLD окно: >{recent_window_days} дней (по месяцам)")
             click.echo(f"   - Порог перехода стратегий: {strategy_threshold} сообщений")
             click.echo("   - Контекстная саммаризация для NOW окна")
-            click.echo("   - Оптимизация запросов к Ollama")
+            click.echo("   - Оптимизация запросов к LM Studio")
         else:
             click.echo("📊 Классический алгоритм группировки:")
             click.echo("   - Оптимизированная группировка по дням")
@@ -846,8 +802,7 @@ def index(
 
             click.echo("📂 Результаты сохранены в:")
             click.echo("   - Markdown отчёты: ./artifacts/reports/")
-            click.echo("   - Векторная база: ./chroma_db/")
-            click.echo("   - Коллекции: chat_sessions, chat_messages, chat_tasks")
+            click.echo("   - Векторная база: Qdrant")
             click.echo()
 
         except Exception as e:
@@ -1080,26 +1035,9 @@ def search(query, limit, collection, chat, highlight, embedding_model):
     """
 
     async def _search():
-        import chromadb
-
-        from ..core.lmstudio_client import LMStudioEmbeddingClient
-        from ..config import get_settings
-
-        click.echo(f"🔍 Поиск в коллекции '{collection}': '{query}'")
-        if chat:
-            click.echo(f"📋 Фильтр по чату: '{chat}'")
-
-        try:
-            chroma_client = chromadb.PersistentClient(path="./chroma_db")
-            settings = get_settings()
-            embedding_client = LMStudioEmbeddingClient(
-                model_name=embedding_model or settings.lmstudio_model,
-                base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
-            )
-
-            collection_name = f"chat_{collection}"
-            try:
-                coll = chroma_client.get_collection(collection_name)
+        click.echo("⚠️  Команда search-collection удалена")
+        click.echo("💡 Используйте команду 'search' для гибридного поиска через MCP API")
+        return
             except:
                 click.echo(f"❌ Коллекция {collection_name} не найдена")
                 click.echo("💡 Запустите 'memory_mcp index' для создания индексов")
@@ -1422,32 +1360,32 @@ def stats():
     """📊 Статистика системы"""
 
     async def _stats():
-        import chromadb
-
         click.echo("📊 Статистика системы...")
         click.echo()
 
-        # Проверяем ChromaDB коллекции
+        # Проверяем Qdrant
         try:
-            chroma_client = chromadb.PersistentClient(path="./chroma_db")
-
-            # Статистика по коллекциям
-            total_records = 0
-            for coll_name in ["chat_sessions", "chat_messages", "chat_tasks"]:
+            from ..memory.vector_store import build_vector_store_from_env
+            from ..memory.embeddings import build_embedding_service_from_env
+            
+            vector_store = build_vector_store_from_env()
+            embedding_service = build_embedding_service_from_env()
+            
+            if vector_store and embedding_service and embedding_service.dimension:
                 try:
-                    coll = chroma_client.get_collection(coll_name)
-                    count = coll.count()
-                    total_records += count
-                    icon = "✅" if count > 0 else "⚠️ "
-                    click.echo(f"{icon} {coll_name}: {count} записей")
-                except:
-                    click.echo(f"❌ {coll_name}: не найдена")
-
-            click.echo()
-            click.echo(f"📦 Всего записей в индексах: {total_records}")
+                    collection_info = vector_store.get_collection_info()
+                    if collection_info:
+                        points_count = collection_info.get('points_count', 0)
+                        click.echo(f"✅ Qdrant: {points_count} векторов")
+                    else:
+                        click.echo("⚠️  Qdrant коллекция не найдена")
+                except Exception as e:
+                    click.echo(f"⚠️  Qdrant недоступен: {e}")
+            else:
+                click.echo("⚠️  Qdrant не настроен")
 
         except Exception as e:
-            click.echo(f"❌ Ошибка при проверке ChromaDB: {e}")
+            click.echo(f"❌ Ошибка при проверке Qdrant: {e}")
 
         click.echo()
 
@@ -1490,113 +1428,74 @@ def indexing_progress(chat, reset):
     или сбрасывает прогресс для повторной индексации.
     """
 
-    import chromadb
-
+    from ..core.indexing_tracker import IndexingJobTracker
+    
     try:
-        chroma_client = chromadb.PersistentClient(path="./chroma_db")
-
-        try:
-            progress_collection = chroma_client.get_collection("indexing_progress")
-        except:
-            click.echo("⚠️  Коллекция indexing_progress не найдена")
-            click.echo("💡 Индексация ещё не запускалась или используется старая версия")
-            return
-
+        tracker = IndexingJobTracker()
+        
         if reset:
+            click.echo("⚠️  Сброс прогресса индексации через IndexingJobTracker не поддерживается")
+            click.echo("💡 Используйте команду 'index --force-full' для полной переиндексации")
+            return
+        
+        # Показываем прогресс
+        click.echo("🔄 Прогресс индексации:")
+        click.echo()
+        
+        try:
+            jobs = tracker._load_jobs()
+            
+            if not jobs:
+                click.echo("⚠️  Нет записей о прогрессе индексации")
+                click.echo("💡 Запустите индексацию командой: memory_mcp index")
+                return
+            
+            # Фильтруем по чату, если указан
             if chat:
-                # Сбрасываем прогресс для конкретного чата
-                from ..utils.naming import slugify
-
-                progress_id = f"progress_{slugify(chat)}"
-                try:
-                    progress_collection.delete(ids=[progress_id])
-                    click.echo(f"✅ Прогресс индексации для чата '{chat}' сброшен")
-                    click.echo(
-                        "💡 При следующем запуске чат будет проиндексирован заново"
-                    )
-                except Exception as e:
-                    click.echo(f"❌ Ошибка при сбросе прогресса: {e}")
-            else:
-                # Сбрасываем весь прогресс
-                try:
-                    result = progress_collection.get()
-                    if result["ids"]:
-                        progress_collection.delete(ids=result["ids"])
-                        click.echo(
-                            f"✅ Прогресс индексации сброшен для {len(result['ids'])} чатов"
-                        )
-                        click.echo(
-                            "💡 При следующем запуске все чаты будут проиндексированы заново"
-                        )
-                    else:
-                        click.echo("⚠️  Нет записей о прогрессе индексации")
-                except Exception as e:
-                    click.echo(f"❌ Ошибка при сбросе прогресса: {e}")
-        else:
-            # Показываем прогресс
-            click.echo("🔄 Прогресс инкрементальной индексации:")
+                filtered_jobs = {
+                    job_id: job for job_id, job in jobs.items()
+                    if job.get("chat") == chat
+                }
+                if not filtered_jobs:
+                    click.echo(f"⚠️  Нет записей о прогрессе для чата '{chat}'")
+                    return
+                jobs = filtered_jobs
+            
+            click.echo(f"Найдено задач: {len(jobs)}")
             click.echo()
-
-            try:
-                if chat:
-                    # Показываем прогресс для конкретного чата
-                    from ..utils.naming import slugify
-
-                    progress_id = f"progress_{slugify(chat)}"
-                    result = progress_collection.get(
-                        ids=[progress_id], include=["metadatas"]
-                    )
-
-                    if result["ids"]:
-                        metadata = result["metadatas"][0]
-                        click.echo(f"📋 Чат: {metadata.get('chat_name', chat)}")
-                        click.echo(
-                            f"   Последнее сообщение: {metadata.get('last_indexed_date', 'N/A')}"
-                        )
-                        click.echo(
-                            f"   Последняя индексация: {metadata.get('last_indexing_time', 'N/A')}"
-                        )
-                        click.echo(
-                            f"   Всего сообщений: {metadata.get('total_messages', 0)}"
-                        )
-                        click.echo(
-                            f"   Всего сессий: {metadata.get('total_sessions', 0)}"
-                        )
-                    else:
-                        click.echo(f"⚠️  Нет записей о прогрессе для чата '{chat}'")
-                else:
-                    # Показываем прогресс для всех чатов
-                    result = progress_collection.get(include=["metadatas"])
-
-                    if result["ids"]:
-                        click.echo(f"Найдено записей: {len(result['ids'])}")
-                        click.echo()
-
-                        for i, metadata in enumerate(result["metadatas"], 1):
-                            chat_name = metadata.get("chat_name", "Unknown")
-                            last_date = metadata.get("last_indexed_date", "N/A")
-                            last_time = metadata.get("last_indexing_time", "N/A")
-                            total_msgs = metadata.get("total_messages", 0)
-                            total_sessions = metadata.get("total_sessions", 0)
-
-                            click.echo(f"{i}. {chat_name}")
-                            click.echo(f"   Последнее сообщение: {last_date}")
-                            click.echo(f"   Последняя индексация: {last_time}")
-                            click.echo(
-                                f"   Сообщений: {total_msgs}, Сессий: {total_sessions}"
-                            )
-                            click.echo()
-                    else:
-                        click.echo("⚠️  Нет записей о прогрессе индексации")
-                        click.echo("💡 Запустите индексацию командой: memory_mcp index")
-            except Exception as e:
-                click.echo(f"❌ Ошибка при получении прогресса: {e}")
-                import traceback
-
-                traceback.print_exc()
-
+            
+            for i, (job_id, job) in enumerate(jobs.items(), 1):
+                chat_name = job.get("chat", "Unknown")
+                status = job.get("status", "unknown")
+                current_stage = job.get("current_stage", "N/A")
+                current_chat = job.get("current_chat", "N/A")
+                progress = job.get("progress", {})
+                stats = job.get("stats", {})
+                
+                status_icon = {
+                    "running": "🔄",
+                    "completed": "✅",
+                    "failed": "❌",
+                    "pending": "⏳"
+                }.get(status, "❓")
+                
+                click.echo(f"{i}. {status_icon} {chat_name} ({status})")
+                click.echo(f"   Этап: {current_stage}")
+                if current_chat != "N/A":
+                    click.echo(f"   Текущий чат: {current_chat}")
+                if progress:
+                    click.echo(f"   Прогресс: {progress}")
+                if stats:
+                    click.echo(f"   Статистика: {stats}")
+                click.echo()
+                
+        except Exception as e:
+            click.echo(f"❌ Ошибка при получении прогресса: {e}")
+            import traceback
+            traceback.print_exc()
+            
     except Exception as e:
-        click.echo(f"❌ Ошибка при подключении к ChromaDB: {e}")
+        click.echo(f"❌ Ошибка при подключении к трекеру задач: {e}")
 
 
 @cli.command("update-summaries")
@@ -1737,299 +1636,7 @@ def update_summaries(chat, force):
     asyncio.run(_update_summaries())
 
 
-@cli.command("rebuild-vector-db")
-@click.option(
-    "--force",
-    is_flag=True,
-    help="Принудительно удалить существующую базу данных без подтверждения",
-)
-@click.option(
-    "--keep-reports",
-    is_flag=True,
-    help="Сохранить markdown отчеты и JSON саммаризации (только пересоздать ChromaDB)",
-)
-@click.option(
-    "--backup",
-    is_flag=True,
-    help="Создать резервную копию существующей базы данных перед удалением",
-)
-@click.option(
-    "--no-progress",
-    is_flag=True,
-    help="Отключить прогресс-бар (полезно для автоматизации)",
-)
-def rebuild_vector_db(force, keep_reports, backup, no_progress):
-    """🔄 Пересоздание векторной базы данных ChromaDB
-
-    Удаляет существующую векторную базу данных и пересоздает её заново,
-    используя существующие артефакты (JSON саммаризации, markdown отчеты).
-
-    Полезно когда:
-    - База данных повреждена
-    - Нужно обновить схему коллекций
-    - Произошла ошибка при индексации
-
-    ВНИМАНИЕ: Эта команда удалит все данные из ChromaDB!
-    """
-
-    async def _rebuild():
-        import json
-        import shutil
-        from pathlib import Path
-
-        click.echo("=" * 80)
-        click.echo("🔄 Пересоздание векторной базы данных ChromaDB")
-        click.echo("=" * 80)
-        click.echo()
-
-        # Проверяем наличие артефактов
-        reports_dir = Path("artifacts/reports")
-        chroma_dir = Path("chroma_db")
-
-        if not reports_dir.exists():
-            click.echo("❌ Директория artifacts/reports не найдена")
-            click.echo("💡 Сначала запустите индексацию: memory_mcp index")
-            return
-
-        # Проверяем наличие JSON саммаризаций
-        json_files = list(reports_dir.glob("**/*.json"))
-        if not json_files:
-            click.echo("❌ Не найдено JSON файлов саммаризаций")
-            click.echo("💡 Сначала запустите индексацию: memory_mcp index")
-            return
-
-        click.echo(f"📁 Найдено JSON файлов саммаризаций: {len(json_files)}")
-
-        # Проверяем существующую базу данных
-        if chroma_dir.exists():
-            try:
-                import chromadb
-
-                chroma_client = chromadb.PersistentClient(path=str(chroma_dir))
-
-                # Получаем информацию о коллекциях
-                collections_info = []
-                for collection_name in [
-                    "chat_sessions",
-                    "chat_messages",
-                    "chat_tasks",
-                    "session_clusters",
-                    "indexing_progress",
-                ]:
-                    try:
-                        collection = chroma_client.get_collection(collection_name)
-                        count = collection.count()
-                        collections_info.append(
-                            f"   - {collection_name}: {count} записей"
-                        )
-                    except:
-                        collections_info.append(f"   - {collection_name}: не найдена")
-
-                click.echo("📊 Текущее состояние ChromaDB:")
-                for info in collections_info:
-                    click.echo(info)
-                click.echo()
-
-            except Exception as e:
-                click.echo(f"⚠️  Не удалось подключиться к ChromaDB: {e}")
-                click.echo("   База данных может быть повреждена")
-                click.echo()
-
-        # Подтверждение удаления
-        if not force:
-            click.echo("⚠️  ВНИМАНИЕ: Эта операция удалит все данные из ChromaDB!")
-            click.echo("   Существующие коллекции будут полностью пересозданы.")
-            click.echo()
-
-            if not click.confirm("Продолжить?"):
-                click.echo("❌ Операция отменена")
-                return
-
-        # Создаем резервную копию если запрошено
-        if backup and chroma_dir.exists():
-            backup_dir = Path(
-                f"chroma_db_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            )
-            click.echo(f"📦 Создание резервной копии: {backup_dir}")
-            try:
-                shutil.copytree(chroma_dir, backup_dir)
-                click.echo(f"✅ Резервная копия создана: {backup_dir}")
-            except Exception as e:
-                click.echo(f"❌ Ошибка создания резервной копии: {e}")
-                if not click.confirm("Продолжить без резервной копии?"):
-                    return
-            click.echo()
-
-        # Удаляем существующую базу данных
-        if chroma_dir.exists():
-            click.echo("🗑️  Удаление существующей ChromaDB...")
-            try:
-                shutil.rmtree(chroma_dir)
-                click.echo("✅ Существующая база данных удалена")
-            except Exception as e:
-                click.echo(f"❌ Ошибка удаления базы данных: {e}")
-                return
-            click.echo()
-
-        # Пересоздаем базу данных из существующих артефактов
-        click.echo("🔄 Пересоздание векторной базы из существующих артефактов...")
-        click.echo()
-
-        try:
-            # Инициализируем индексатор
-            from ..core.indexer import TwoLevelIndexer
-
-            click.echo("📦 Инициализация индексатора...")
-            indexer = TwoLevelIndexer()
-            click.echo("✅ Индексатор готов")
-            click.echo()
-
-            # Загружаем существующие саммаризации
-            click.echo("📚 Загрузка существующих саммаризаций...")
-
-            sessions_data = []
-            for json_file in json_files:
-                try:
-                    with open(json_file, encoding="utf-8") as f:
-                        session_data = json.load(f)
-                        sessions_data.append(session_data)
-                except Exception as e:
-                    click.echo(f"⚠️  Ошибка чтения {json_file.name}: {e}")
-                    continue
-
-            click.echo(f"✅ Загружено саммаризаций: {len(sessions_data)}")
-            click.echo()
-
-            if not sessions_data:
-                click.echo("❌ Нет валидных саммаризаций для пересоздания базы")
-                return
-
-            # Пересоздаем коллекции
-            click.echo("🔄 Пересоздание коллекций ChromaDB...")
-
-            # Группируем по чатам
-            chats_data = {}
-            for session in sessions_data:
-                chat_name = session.get("meta", {}).get("chat_name", "Unknown")
-                if chat_name not in chats_data:
-                    chats_data[chat_name] = []
-                chats_data[chat_name].append(session)
-
-            click.echo(f"📋 Найдено чатов: {len(chats_data)}")
-
-            # Индексируем каждую сессию с прогресс-баром
-            total_sessions = len(sessions_data)
-            indexed_sessions = 0
-            indexed_messages = 0
-            indexed_tasks = 0
-
-            # Импортируем tqdm для прогресс-бара
-            from tqdm import tqdm
-
-            # Определяем, показывать ли прогресс-бар
-            show_progress = not no_progress
-
-            if show_progress:
-                # Создаем прогресс-бар для всех сессий
-                with tqdm(
-                    total=total_sessions,
-                    desc="Пересоздание векторной базы",
-                    unit="сессия",
-                ) as pbar:
-                    for chat_name, chat_sessions in chats_data.items():
-                        # Обновляем описание прогресс-бара
-                        pbar.set_description(f"Обработка чата: {chat_name}")
-
-                        for session in chat_sessions:
-                            try:
-                                # L1: Индексация саммари сессии
-                                await indexer._index_session_l1(session)
-                                indexed_sessions += 1
-
-                                # L2: Индексация сообщений
-                                messages_count = await indexer._index_messages_l2(
-                                    session
-                                )
-                                indexed_messages += messages_count
-
-                                # L3: Индексация задач
-                                tasks_count = await indexer._index_tasks(session)
-                                indexed_tasks += tasks_count
-
-                            except Exception as e:
-                                click.echo(
-                                    f"⚠️  Ошибка индексации сессии {session.get('session_id', 'Unknown')}: {e}"
-                                )
-                                continue
-
-                            # Обновляем прогресс-бар с дополнительной информацией
-                            pbar.set_postfix(
-                                {
-                                    "сессий": indexed_sessions,
-                                    "сообщений": indexed_messages,
-                                    "задач": indexed_tasks,
-                                }
-                            )
-                            pbar.update(1)
-            else:
-                # Обработка без прогресс-бара
-                for chat_name, chat_sessions in chats_data.items():
-                    click.echo(
-                        f"📁 Обработка чата: {chat_name} ({len(chat_sessions)} сессий)"
-                    )
-
-                    for session in chat_sessions:
-                        try:
-                            # L1: Индексация саммари сессии
-                            await indexer._index_session_l1(session)
-                            indexed_sessions += 1
-
-                            # L2: Индексация сообщений
-                            messages_count = await indexer._index_messages_l2(session)
-                            indexed_messages += messages_count
-
-                            # L3: Индексация задач
-                            tasks_count = await indexer._index_tasks(session)
-                            indexed_tasks += tasks_count
-
-                        except Exception as e:
-                            click.echo(
-                                f"⚠️  Ошибка индексации сессии {session.get('session_id', 'Unknown')}: {e}"
-                            )
-                            continue
-
-                    click.echo(f"   ✅ Обработано сессий: {len(chat_sessions)}")
-
-            click.echo()
-            click.echo("=" * 80)
-            click.echo("✅ Векторная база данных успешно пересоздана!")
-            click.echo("=" * 80)
-            click.echo()
-            click.echo("📊 Статистика:")
-            click.echo(f"   - Пересоздано сессий (L1): {indexed_sessions}")
-            click.echo(f"   - Пересоздано сообщений (L2): {indexed_messages}")
-            click.echo(f"   - Пересоздано задач (L3): {indexed_tasks}")
-            click.echo()
-            click.echo("📂 Результаты:")
-            click.echo("   - Векторная база: ./chroma_db/")
-            click.echo("   - Коллекции: chat_sessions, chat_messages, chat_tasks")
-            if keep_reports:
-                click.echo("   - Markdown отчеты: сохранены в ./artifacts/reports/")
-            click.echo()
-            click.echo("💡 Теперь можно использовать поиск: memory_mcp search")
-
-        except Exception as e:
-            click.echo()
-            click.echo("=" * 80)
-            click.echo("❌ Ошибка при пересоздании векторной базы!")
-            click.echo("=" * 80)
-            click.echo(f"Ошибка: {e}")
-            click.echo()
-            import traceback
-
-            traceback.print_exc()
-
-    asyncio.run(_rebuild())
+# Команда rebuild-vector-db удалена - используйте команду 'index' для переиндексации
 
 
 @cli.command("extract-messages")
@@ -2109,252 +1716,14 @@ def deduplicate(chats_dir):
     asyncio.run(_deduplicate())
 
 
-@cli.command("sync-chromadb")
-@click.option(
-    "--db-path",
-    default="data/memory_graph.db",
-    type=click.Path(dir_okay=False, path_type=Path),
-    help="Путь к SQLite базе типизированной памяти",
-)
-@click.option(
-    "--chroma-path",
-    default="chroma_db",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Путь к ChromaDB",
-)
-@click.option(
-    "--chat",
-    help="Синхронизировать только указанный чат",
-)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    help="Режим тестирования без изменений",
-)
-def sync_chromadb(db_path: Path, chroma_path: Path, chat: Optional[str], dry_run: bool):
-    """Синхронизация записей из ChromaDB в граф памяти.
-    
-    Эта команда мигрирует существующие записи из ChromaDB коллекций
-    (chat_messages, chat_sessions, chat_tasks) в граф памяти TypedGraphMemory.
-    Эмбеддинги также синхронизируются.
-    """
-    import chromadb
-    from ..memory.ingest import MemoryIngestor
-    from ..indexing import MemoryRecord
-    from ..utils.datetime_utils import parse_datetime_utc
-    from datetime import datetime, timezone
-    
-    logger.info("🔄 Начало синхронизации ChromaDB → Граф памяти")
-    
-    if dry_run:
-        logger.info("🔍 Режим тестирования (dry-run), изменения не будут сохранены")
-    
-    # Инициализация графа
-    graph = TypedGraphMemory(db_path=str(db_path))
-    ingestor = MemoryIngestor(graph)
-    
-    # Инициализация сервисов для эмбеддингов и Qdrant
-    from ..memory.embeddings import build_embedding_service_from_env
-    from ..memory.vector_store import build_vector_store_from_env
-    
-    embedding_service = build_embedding_service_from_env()
-    vector_store = build_vector_store_from_env()
-    
-    if vector_store and embedding_service and embedding_service.dimension:
-        vector_store.ensure_collection(embedding_service.dimension)
-        logger.info("✅ Векторное хранилище инициализировано")
-    else:
-        logger.warning("⚠️  Векторное хранилище недоступно, эмбеддинги не будут сохранены в Qdrant")
-    
-    # Инициализация ChromaDB
-    chroma_client = chromadb.PersistentClient(path=str(chroma_path))
-    
-    total_synced = 0
-    total_errors = 0
-    
-    collections_to_sync = ["chat_messages", "chat_sessions", "chat_tasks"]
-    
-    for collection_name in collections_to_sync:
-        try:
-            collection = chroma_client.get_collection(collection_name)
-            total_count = collection.count()
-            
-            if total_count == 0:
-                logger.info(f"  Коллекция {collection_name}: пуста, пропускаем")
-                continue
-            
-            logger.info(f"  Коллекция {collection_name}: {total_count} записей")
-            
-            # Получаем все записи батчами
-            offset = 0
-            batch_size = 100
-            synced_in_collection = 0
-            
-            while offset < total_count:
-                try:
-                    result = collection.get(
-                        limit=batch_size,
-                        offset=offset,
-                        include=["documents", "metadatas", "embeddings"]
-                    )
-                    
-                    ids = result.get("ids", [])
-                    if not ids:
-                        break
-                    
-                    documents = result.get("documents", [])
-                    metadatas = result.get("metadatas", [])
-                    embeddings = result.get("embeddings", [])
-                    
-                    records_to_ingest = []
-                    
-                    for idx, record_id in enumerate(ids):
-                        try:
-                            # Проверяем, существует ли уже запись в графе
-                            if record_id in graph.graph:
-                                continue
-                            
-                            # Фильтр по чату, если указан
-                            metadata = metadatas[idx] if idx < len(metadatas) else {}
-                            if chat and metadata.get("chat") != chat:
-                                continue
-                            
-                            doc = documents[idx] if idx < len(documents) else ""
-                            embedding = embeddings[idx] if idx < len(embeddings) else None
-                            
-                            # Парсим timestamp
-                            date_utc = metadata.get("date_utc") or metadata.get("start_time_utc") or metadata.get("end_time_utc")
-                            timestamp = None
-                            if date_utc:
-                                try:
-                                    timestamp = parse_datetime_utc(date_utc, use_zoneinfo=True)
-                                except Exception:
-                                    timestamp = datetime.now(timezone.utc)
-                            else:
-                                timestamp = datetime.now(timezone.utc)
-                            
-                            # Извлекаем автора
-                            author = metadata.get("sender") or metadata.get("author") or metadata.get("username")
-                            
-                            # Извлекаем теги и сущности
-                            tags = metadata.get("tags", [])
-                            if isinstance(tags, str):
-                                tags = [tags] if tags else []
-                            
-                            entities = metadata.get("entities", [])
-                            if isinstance(entities, str):
-                                entities = [entities] if entities else []
-                            
-                            # Создаём MemoryRecord
-                            record = MemoryRecord(
-                                record_id=record_id,
-                                source=metadata.get("chat", collection_name.replace("chat_", "")),
-                                content=doc,
-                                timestamp=timestamp,
-                                author=author,
-                                tags=tags if isinstance(tags, list) else [],
-                                entities=entities if isinstance(entities, list) else [],
-                                attachments=[],
-                                metadata={
-                                    "collection": collection_name,
-                                    "chat": metadata.get("chat", ""),
-                                    **metadata,
-                                },
-                            )
-                            
-                            records_to_ingest.append((record, embedding))
-                            
-                        except Exception as e:
-                            logger.warning(f"Ошибка при подготовке записи {record_id}: {e}")
-                            total_errors += 1
-                            continue
-                    
-                    # Сохраняем записи в граф
-                    if records_to_ingest and not dry_run:
-                        try:
-                            records_only = [r for r, _ in records_to_ingest]
-                            ingestor.ingest(records_only)
-                            
-                            # Сохраняем эмбеддинги в граф и Qdrant
-                            for record, embedding in records_to_ingest:
-                                # Проверяем, что эмбеддинг существует и не пустой
-                                if embedding is not None and len(embedding) > 0:
-                                    try:
-                                        # Преобразуем numpy массив в список, если нужно
-                                        if hasattr(embedding, 'tolist'):
-                                            embedding = embedding.tolist()
-                                        elif not isinstance(embedding, list):
-                                            embedding = list(embedding)
-                                        
-                                        # Сохраняем эмбеддинг в граф
-                                        graph.update_node(record.record_id, embedding=embedding)
-                                        
-                                        # Сохраняем эмбеддинг в Qdrant
-                                        if vector_store:
-                                            payload_data = {
-                                                "record_id": record.record_id,
-                                                "source": record.source,
-                                                "tags": record.tags,
-                                                "timestamp": record.timestamp.timestamp(),
-                                                "timestamp_iso": record.timestamp.isoformat(),
-                                                "content_preview": record.content[:200],
-                                            }
-                                            chat_name = record.metadata.get("chat")
-                                            if isinstance(chat_name, str):
-                                                payload_data["chat"] = chat_name
-                                            
-                                            try:
-                                                vector_store.upsert(record.record_id, embedding, payload_data)
-                                            except Exception as e:
-                                                logger.debug(f"Ошибка при сохранении эмбеддинга в Qdrant для {record.record_id}: {e}")
-                                    except Exception as e:
-                                        logger.debug(f"Ошибка при сохранении эмбеддинга для {record.record_id}: {e}")
-                            
-                            synced_in_collection += len(records_to_ingest)
-                            total_synced += len(records_to_ingest)
-                            
-                        except Exception as e:
-                            logger.error(f"Ошибка при сохранении записей в граф: {e}")
-                            total_errors += len(records_to_ingest)
-                    elif records_to_ingest and dry_run:
-                        synced_in_collection += len(records_to_ingest)
-                        total_synced += len(records_to_ingest)
-                    
-                    offset += len(ids)
-                    if len(ids) < batch_size:
-                        break
-                    
-                except Exception as e:
-                    logger.error(f"Ошибка при обработке батча (offset={offset}): {e}")
-                    total_errors += batch_size
-                    offset += batch_size
-            
-            if synced_in_collection > 0:
-                logger.info(f"  ✅ Синхронизировано {synced_in_collection} записей из {collection_name}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка при синхронизации коллекции {collection_name}: {e}")
-            total_errors += 1
-    
-    if dry_run:
-        logger.info(f"🔍 Режим тестирования: было бы синхронизировано {total_synced} записей")
-    else:
-        logger.info(f"✅ Синхронизация завершена: {total_synced} записей, {total_errors} ошибок")
-        if vector_store:
-            logger.info("✅ Эмбеддинги сохранены в Qdrant")
-    
-    graph.conn.close()
-    if vector_store:
-        vector_store.close()
-    if embedding_service:
-        embedding_service.close()
+# Команда sync-chromadb удалена
 
 
 @cli.command("stop-indexing")
 def stop_indexing():
     """🛑 Остановка всех процессов индексации
 
-    Останавливает все процессы индексации и Ollama сервер.
+    Останавливает все процессы индексации.
     """
 
     async def _stop_indexing():
@@ -2609,11 +1978,6 @@ def review_summaries(dry_run, chat, limit):
     help="Путь для сохранения backup (по умолчанию: backups/backup_YYYYMMDD_HHMMSS)",
 )
 @click.option(
-    "--include-chromadb/--no-chromadb",
-    default=True,
-    help="Включить ChromaDB в backup",
-)
-@click.option(
     "--include-reports/--no-reports",
     default=False,
     help="Включить markdown отчеты в backup",
@@ -2629,19 +1993,14 @@ def review_summaries(dry_run, chat, limit):
     type=click.Path(dir_okay=False, path_type=Path),
     help="Путь к SQLite базе данных",
 )
-@click.option(
-    "--chroma-path",
-    default="chroma_db",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Путь к ChromaDB",
-)
-def backup_database(backup_path, include_chromadb, include_reports, compress, db_path, chroma_path):
-    """📦 Создание резервной копии базы данных (SQLite + ChromaDB)
+def backup_database(backup_path, include_reports, compress, db_path):
+    """📦 Создание резервной копии базы данных
     
     Создаёт полную резервную копию всех данных системы:
     - SQLite база данных (memory_graph.db)
-    - ChromaDB векторное хранилище (опционально)
     - Markdown отчеты (опционально)
+    
+    Примечание: Qdrant данные не включаются в backup (используйте отдельные инструменты для Qdrant)
     """
     import shutil
     import tarfile
@@ -2683,18 +2042,6 @@ def backup_database(backup_path, include_chromadb, include_reports, compress, db
             click.echo(f"   ✅ Размер: {db_backup_path.stat().st_size / 1024 / 1024:.2f} MB")
         else:
             click.echo(f"⚠️  SQLite БД не найдена: {db_path}")
-        
-        # Копируем ChromaDB
-        if include_chromadb and chroma_path.exists():
-            click.echo(f"🔍 Копирование ChromaDB: {chroma_path}")
-            chroma_backup_path = actual_backup_path / "chroma_db"
-            shutil.copytree(chroma_path, chroma_backup_path, dirs_exist_ok=True)
-            includes.append("chromadb")
-            # Подсчитываем размер
-            total_size = sum(f.stat().st_size for f in chroma_backup_path.rglob('*') if f.is_file())
-            click.echo(f"   ✅ Размер: {total_size / 1024 / 1024:.2f} MB")
-        elif include_chromadb:
-            click.echo(f"⚠️  ChromaDB не найдена: {chroma_path}")
         
         # Копируем отчеты
         if include_reports:
@@ -2755,11 +2102,6 @@ def backup_database(backup_path, include_chromadb, include_reports, compress, db
     help="Подтвердить восстановление (удалит текущие данные)",
 )
 @click.option(
-    "--restore-chromadb/--no-chromadb",
-    default=True,
-    help="Восстановить ChromaDB",
-)
-@click.option(
     "--restore-reports/--no-reports",
     default=False,
     help="Восстановить markdown отчеты",
@@ -2770,16 +2112,12 @@ def backup_database(backup_path, include_chromadb, include_reports, compress, db
     type=click.Path(dir_okay=False, path_type=Path),
     help="Путь к SQLite базе данных",
 )
-@click.option(
-    "--chroma-path",
-    default="chroma_db",
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Путь к ChromaDB",
-)
-def restore_database(backup_path, confirm, restore_chromadb, restore_reports, db_path, chroma_path):
+def restore_database(backup_path, confirm, restore_reports, db_path):
     """🔄 Восстановление базы данных из резервной копии
     
     ВНИМАНИЕ: Эта операция удалит текущие данные и заменит их данными из backup!
+    
+    Примечание: Qdrant данные не восстанавливаются (используйте отдельные инструменты для Qdrant)
     """
     import shutil
     import tarfile
@@ -2828,19 +2166,6 @@ def restore_database(backup_path, confirm, restore_chromadb, restore_reports, db
             click.echo("   ✅ SQLite БД восстановлена")
         else:
             click.echo(f"⚠️  SQLite БД не найдена в backup: {db_backup}")
-        
-        # Восстанавливаем ChromaDB
-        if restore_chromadb:
-            chroma_backup = source_dir / "chroma_db"
-            if chroma_backup.exists() and chroma_backup.is_dir():
-                click.echo(f"🔍 Восстановление ChromaDB: {chroma_path}")
-                if chroma_path.exists():
-                    shutil.rmtree(chroma_path)
-                chroma_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(chroma_backup, chroma_path)
-                click.echo("   ✅ ChromaDB восстановлена")
-            else:
-                click.echo(f"⚠️  ChromaDB не найдена в backup: {chroma_backup}")
         
         # Восстанавливаем отчеты
         if restore_reports:

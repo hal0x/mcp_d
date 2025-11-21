@@ -10,10 +10,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..core.lmstudio_client import LMStudioEmbeddingClient
-    from ..core.ollama_client import OllamaEmbeddingClient
 else:
     from ..core.lmstudio_client import LMStudioEmbeddingClient
-    from ..core.ollama_client import OllamaEmbeddingClient
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +26,7 @@ class SemanticRegrouper:
 
     def __init__(
         self,
-        embedding_client: Optional[LMStudioEmbeddingClient | OllamaEmbeddingClient] = None,
+        embedding_client: Optional[LMStudioEmbeddingClient] = None,
     ):
         """
         Инициализация семантического перегруппировщика.

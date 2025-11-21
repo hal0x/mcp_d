@@ -156,12 +156,26 @@ class SessionSummarizer:
             strict_mode: Если True, выбрасывает исключения вместо использования fallback при ошибках LLM
         """
         if embedding_client is None:
+            # Используем фабричную функцию для получения LLM клиента (LangChain или старый)
+            from ..core.langchain_adapters import get_llm_client_factory
             settings = get_settings()
-            embedding_client = LMStudioEmbeddingClient(
-                model_name=settings.lmstudio_model,
-                llm_model_name=settings.lmstudio_llm_model,
-                base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
-            )
+            
+            # Пытаемся использовать LangChain, если включен
+            if settings.use_langchain_llm:
+                embedding_client = get_llm_client_factory()
+                if embedding_client is None:
+                    # Fallback на старую реализацию
+                    embedding_client = LMStudioEmbeddingClient(
+                        model_name=settings.lmstudio_model,
+                        llm_model_name=settings.lmstudio_llm_model,
+                        base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
+                    )
+            else:
+                embedding_client = LMStudioEmbeddingClient(
+                    model_name=settings.lmstudio_model,
+                    llm_model_name=settings.lmstudio_llm_model,
+                    base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
+                )
         self.embedding_client = embedding_client
         settings = get_settings()
         self.entity_extractor = EntityExtractor()
@@ -289,19 +303,19 @@ class SessionSummarizer:
             )
 
             # Генерируем саммаризацию через LLM
-            # Если llm_model_name не указан в LM Studio, используем Ollama
+            # Если llm_model_name не указан, используем фабрику для получения клиента
             if hasattr(self.embedding_client, 'llm_model_name') and not self.embedding_client.llm_model_name:
-                # Используем Ollama для генерации текста
-                from ..core.ollama_client import OllamaEmbeddingClient
-                from ..config import get_quality_analysis_settings
+                # Используем фабрику для получения LLM клиента (LM Studio)
+                from ..core.langchain_adapters import get_llm_client_factory
+                llm_client = get_llm_client_factory()
+                if llm_client is None:
+                    raise ValueError(
+                        "LLM клиент не настроен. Установите MEMORY_MCP_LMSTUDIO_LLM_MODEL "
+                        "или включите LangChain через MEMORY_MCP_USE_LANGCHAIN_LLM=true"
+                    )
                 
-                qa_settings = get_quality_analysis_settings()
-                ollama_client = OllamaEmbeddingClient(
-                    llm_model_name=qa_settings.ollama_model,
-                    base_url=qa_settings.ollama_base_url
-                )
-                async with ollama_client:
-                    summary_text = await ollama_client.generate_summary(
+                async with llm_client:
+                    summary_text = await llm_client.generate_summary(
                         prompt=prompt,
                         temperature=0.3,
                         max_tokens=30000,  # Уменьшено для предотвращения таймаутов
@@ -309,7 +323,7 @@ class SessionSummarizer:
                         presence_penalty=0.05,
                     )
             else:
-                # Используем LM Studio для генерации текста
+                # Используем переданный клиент для генерации текста
                 async with self.embedding_client:
                     summary_text = await self.embedding_client.generate_summary(
                         prompt=prompt,
@@ -1007,7 +1021,7 @@ class SessionSummarizer:
             logger.warning(
                 f"⚠️  Промпт для саммаризации сессии {session.get('session_id', 'unknown')} "
                 f"очень длинный: ~{estimated_tokens} токенов. "
-                f"OllamaClient автоматически разобьет его на части при необходимости."
+                f"LLM клиент автоматически разобьет его на части при необходимости."
             )
 
         return prompt

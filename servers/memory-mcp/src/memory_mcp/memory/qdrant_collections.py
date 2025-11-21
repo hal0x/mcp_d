@@ -1,4 +1,4 @@
-"""Менеджер коллекций Qdrant для замены ChromaDB."""
+"""Менеджер коллекций Qdrant."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class QdrantCollectionsManager:
-    """Менеджер для работы с несколькими коллекциями Qdrant (замена ChromaDB)."""
+    """Менеджер для работы с несколькими коллекциями Qdrant."""
 
     def __init__(self, url: Optional[str] = None, vector_size: int = 1024):
         """Инициализирует менеджер коллекций Qdrant.
@@ -115,7 +115,7 @@ class QdrantCollectionsManager:
         metadatas: List[Dict[str, Any]],
         documents: Optional[List[str]] = None,
     ) -> bool:
-        """Добавляет или обновляет записи в коллекции (аналог ChromaDB upsert).
+        """Добавляет или обновляет записи в коллекции.
 
         Args:
             collection_name: Имя коллекции
@@ -168,12 +168,12 @@ class QdrantCollectionsManager:
         where: Optional[Dict[str, Any]] = None,
         limit: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Получает записи из коллекции (аналог ChromaDB get).
+        """Получает записи из коллекции.
 
         Args:
             collection_name: Имя коллекции
             ids: Список ID для получения (если указан, where игнорируется)
-            where: Фильтр по метаданным (ChromaDB-стиль)
+            where: Фильтр по метаданным
             limit: Максимальное количество результатов
 
         Returns:
@@ -346,10 +346,10 @@ class QdrantCollectionsManager:
             return 0
 
     def _build_filter(self, where: Dict[str, Any]) -> Optional[qmodels.Filter]:
-        """Строит фильтр Qdrant из ChromaDB-стиля where.
+        """Строит фильтр Qdrant из where-условий.
 
         Args:
-            where: Фильтр в стиле ChromaDB
+            where: Фильтр по метаданным
 
         Returns:
             Фильтр Qdrant или None

@@ -757,7 +757,7 @@ class LMStudioEmbeddingClient:
             error_msg = (
                 f"ОШИБКА: Для генерации текста нужна LLM модель, а не модель эмбеддингов. "
                 f"Текущая модель эмбеддингов: '{self.model_name}'. "
-                f"Установите llm_model_name при создании LMStudioEmbeddingClient или используйте Ollama для генерации текста."
+                f"Установите llm_model_name при создании LMStudioEmbeddingClient."
             )
             logger.error(error_msg)
             return f"Ошибка: {error_msg}"

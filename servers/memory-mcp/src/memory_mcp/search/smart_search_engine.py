@@ -37,7 +37,7 @@ class SmartSearchEngine:
         self.artifacts_reader = artifacts_reader
         self.session_store = session_store
         self.min_confidence = min_confidence
-        self._llm_client: Optional[LMStudioEmbeddingClient | OllamaEmbeddingClient] = None
+        self._llm_client: Optional[LMStudioEmbeddingClient] = None
         
         from .entity_context_enricher import EntityContextEnricher
         from ..analysis.entity_dictionary import get_entity_dictionary
@@ -66,24 +66,20 @@ class SmartSearchEngine:
         from .query_understanding import QueryUnderstandingEngine
         self.query_understanding = QueryUnderstandingEngine()
 
-    def _get_llm_client(self) -> Optional[LMStudioEmbeddingClient | OllamaEmbeddingClient]:
-        """Получение или создание LLM клиента."""
+    def _get_llm_client(self) -> Optional[LMStudioEmbeddingClient | Any]:
+        """Получение или создание LLM клиента (LangChain или старый)."""
         if self._llm_client is not None:
             return self._llm_client
 
         try:
-            settings = get_settings()
-
-            if settings.lmstudio_llm_model:
-                self._llm_client = LMStudioEmbeddingClient(
-                    model_name=settings.lmstudio_model,
-                    llm_model_name=settings.lmstudio_llm_model,
-                    base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}",
-                )
-                logger.debug("Используется LM Studio для интерактивного поиска")
-            else:
-                logger.error("LM Studio не настроен, интерактивный поиск невозможен")
-                raise ValueError("Для интерактивного поиска требуется настроенный LM Studio (MEMORY_MCP_LMSTUDIO_LLM_MODEL)")
+            from ..core.langchain_adapters import get_llm_client_factory
+            
+            self._llm_client = get_llm_client_factory()
+            if self._llm_client is None:
+                logger.error("Не удалось инициализировать LLM клиент")
+                raise ValueError("Для интерактивного поиска требуется настроенный LLM (LM Studio)")
+            
+            logger.debug("LLM клиент инициализирован")
         except Exception as e:
             logger.error(f"Не удалось инициализировать LLM клиент: {e}")
             raise

@@ -263,7 +263,7 @@ class TestIntegration:
             context_file.write_text(context_content, encoding="utf-8")
 
             # Создаем менеджер контекста
-            manager = IncrementalContextManager(chroma_path=temp_dir)
+            manager = IncrementalContextManager(qdrant_url=None)  # Тест без Qdrant
 
             # Тестовые сообщения
             test_messages = [

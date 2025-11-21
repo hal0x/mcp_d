@@ -21,7 +21,7 @@ memory-mcp/
 │   ├── indexing/            # Индексаторы источников (Telegram и др.)
 │   ├── memory/              # Граф памяти, FTS, векторное хранилище
 │   ├── mcp/                 # MCP schema, adapters и сервер
-│   ├── core/                # Основные компоненты (lmstudio_client, ollama_client, indexer)
+│   ├── core/                # Основные компоненты (lmstudio_client, indexer)
 │   ├── analysis/            # Анализ данных и саммаризация
 │   ├── quality_analyzer/    # Анализ качества поиска
 │   ├── search/              # Smart Search и гибридный поиск
@@ -341,6 +341,89 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
 **Примечание**: `list_tools()` вызывается только при запросе списка инструментов клиентом, не при запуске сервера.
 
+### LangChain интеграция
+
+Memory MCP поддерживает интеграцию с LangChain фреймворком для улучшения работы с эмбеддингами, LLM, промптами и RAG компонентами. Интеграция реализована через адаптеры, обеспечивающие обратную совместимость с существующими интерфейсами.
+
+#### Компоненты LangChain
+
+**Адаптеры (`src/memory_mcp/core/langchain_adapters.py`):**
+- `LangChainEmbeddingAdapter` — обертка над LangChain Embeddings, совместимая с `EmbeddingService`
+- `LangChainLLMAdapter` — обертка над LangChain LLM, совместимая с `LMStudioEmbeddingClient` для LLM вызовов
+- Функции-фабрики: `build_langchain_embeddings_from_env()`, `build_langchain_llm_from_env()`, `get_llm_client_factory()`
+
+**Prompt Manager (`src/memory_mcp/core/langchain_prompts.py`):**
+- `LangChainPromptManager` — менеджер промптов на базе LangChain `PromptTemplate` и `ChatPromptTemplate`
+- Поддержка загрузки промптов из файлов с валидацией переменных
+- Совместимость с существующим `PromptTemplateManager`
+
+**Text Splitters (`src/memory_mcp/core/langchain_text_splitters.py`):**
+- `LangChainTextSplitter` — обертка над `RecursiveCharacterTextSplitter`
+- Поддержка семантической разбивки через `SemanticChunker` (опционально)
+- Автоматическое использование в `LMStudioEmbeddingClient._split_text_into_chunks()`
+
+**Retrievers (`src/memory_mcp/search/langchain_retrievers.py`):**
+- `HybridMemoryRetriever` — гибридный ретривер на базе LangChain `EnsembleRetriever`
+- Объединение BM25 и векторного поиска с настраиваемыми весами
+- Поддержка `ContextualCompressionRetriever` для улучшения релевантности
+
+**Summarization Chains (`src/memory_mcp/analysis/langchain_summarization.py`):**
+- `LangChainSummarizationChain` — обертка над `load_summarize_chain()`
+- Поддержка режимов: `stuff`, `map_reduce`, `refine`
+- Автоматическая разбивка больших текстов на чанки
+
+#### Использование LangChain компонентов
+
+**Включение через feature flags:**
+```bash
+# Включить LangChain для эмбеддингов
+export MEMORY_MCP_USE_LANGCHAIN_EMBEDDINGS=true
+
+# Включить LangChain для LLM
+export MEMORY_MCP_USE_LANGCHAIN_LLM=true
+
+# Включить LangChain ретриверы
+export MEMORY_MCP_USE_LANGCHAIN_RETRIEVERS=true
+
+# Включить LangChain для саммаризации
+export MEMORY_MCP_USE_LANGCHAIN_SUMMARIZATION=true
+export MEMORY_MCP_LANGCHAIN_SUMMARIZATION_MODE=map_reduce
+```
+
+**Программное использование:**
+```python
+# Использование LangChain адаптеров
+from memory_mcp.core.langchain_adapters import (
+    build_langchain_embeddings_from_env,
+    build_langchain_llm_from_env,
+)
+
+# Создание embeddings адаптера
+embeddings = build_langchain_embeddings_from_env()
+if embeddings:
+    vector = embeddings.embed("текст")
+    vectors = embeddings.embed_batch(["текст1", "текст2"])
+
+# Создание LLM адаптера
+llm = build_langchain_llm_from_env()
+if llm:
+    async with llm:
+        summary = await llm.generate_summary("промпт", temperature=0.3)
+```
+
+**Преимущества:**
+- Унифицированный интерфейс для разных провайдеров
+- Готовые компоненты для RAG (гибридные ретриверы, contextual compression)
+- Улучшенная работа с промптами (валидация, типизация)
+- Готовые цепочки для саммаризации
+- Умные text splitters с сохранением контекста
+
+**Обратная совместимость:**
+- По умолчанию все флаги выключены (используются старые реализации)
+- LangChain компоненты доступны через feature flags
+- Все существующие интерфейсы сохранены
+- Fallback на старую реализацию при ошибках
+
 ## Конфигурация и запуск
 
 ### Переменные окружения
@@ -352,7 +435,6 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 | Переменная | По умолчанию | Описание |
 |------------|--------------|----------|
 | `MEMORY_MCP_DB_PATH` | `data/memory_graph.db` | Путь к SQLite БД. Относительный путь резолвится от `pyproject.toml`. |
-| `MEMORY_MCP_CHROMA_PATH` | `./chroma_db` | Путь к базе ChromaDB. |
 | `MEMORY_MCP_CHATS_PATH` | `./chats` | Путь к директории с чатами. |
 | `MEMORY_MCP_ARTIFACTS_PATH` | `./artifacts` | Путь к артефактам (отчёты, саммаризации). |
 | `MEMORY_MCP_INPUT_PATH` | `input` | Путь к директории input с новыми сообщениями. |
@@ -375,7 +457,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 | `MEMORY_MCP_LMSTUDIO_HOST` | `127.0.0.1` | LM Studio (эмбеддинги/LLM) хост. |
 | `MEMORY_MCP_LMSTUDIO_PORT` | `1234` | LM Studio порт. |
 | `MEMORY_MCP_LMSTUDIO_MODEL` | `text-embedding-qwen3-embedding-0.6b` | Модель для `/v1/embeddings`. |
-| `MEMORY_MCP_LMSTUDIO_LLM_MODEL` | `gpt-oss-20b` | LLM для `/v1/chat/completions`; если не задан, используется Ollama. |
+| `MEMORY_MCP_LMSTUDIO_LLM_MODEL` | `gpt-oss-20b` | LLM для `/v1/chat/completions` (опционально). |
 
 #### Настройки векторного хранилища
 
@@ -412,8 +494,8 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
 | Переменная | По умолчанию | Описание |
 |------------|--------------|----------|
-| `QUALITY_ANALYSIS_OLLAMA_MODEL` | `gpt-oss-20b:latest` | Модель Ollama для анализа качества (fallback, если нет LM Studio LLM). |
-| `QUALITY_ANALYSIS_OLLAMA_BASE_URL` | `http://localhost:11434` | URL Ollama сервера. |
+| `QUALITY_ANALYSIS_LLM_MODEL` | `gpt-oss-20b:latest` | Модель LLM для анализа качества (используется LM Studio или совместимый API). |
+| `QUALITY_ANALYSIS_LLM_BASE_URL` | `http://localhost:1234` | URL LLM сервера (LM Studio или совместимый API). |
 | `QUALITY_ANALYSIS_SYSTEM_PROMPT_RESERVE` | `0.2` | Резерв для системного промпта (доля от max_context_tokens). |
 
 #### Настройки генерации описаний сущностей
@@ -423,6 +505,16 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 | `MEMORY_MCP_ENTITY_DESCRIPTION_ENABLED` | `True` | Включить генерацию описаний сущностей. |
 | `MEMORY_MCP_ENTITY_DESCRIPTION_MAX_LENGTH` | `200` | Максимальная длина описания сущности (символов). |
 
+#### Настройки LangChain интеграции
+
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
+| `MEMORY_MCP_USE_LANGCHAIN_EMBEDDINGS` | `False` | Использовать LangChain для эмбеддингов. |
+| `MEMORY_MCP_USE_LANGCHAIN_LLM` | `False` | Использовать LangChain для LLM. |
+| `MEMORY_MCP_USE_LANGCHAIN_RETRIEVERS` | `False` | Использовать LangChain ретриверы для поиска. |
+| `MEMORY_MCP_USE_LANGCHAIN_SUMMARIZATION` | `False` | Использовать LangChain для саммаризации. |
+| `MEMORY_MCP_LANGCHAIN_SUMMARIZATION_MODE` | `map_reduce` | Режим саммаризации LangChain: `stuff`, `map_reduce`, `refine`. |
+
 **Приоритет конфигурации эмбеддингов:**
 1. `MEMORY_MCP_EMBEDDINGS_URL` — прямой HTTP endpoint.
 2. `MEMORY_MCP_LMSTUDIO_HOST` + `MEMORY_MCP_LMSTUDIO_PORT` + `MEMORY_MCP_LMSTUDIO_MODEL` — формируется локальный URL.
@@ -431,7 +523,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 - **Эмбеддинги**: `MEMORY_MCP_LMSTUDIO_MODEL` используется ТОЛЬКО для генерации эмбеддингов через endpoint `/v1/embeddings`.
 - **Генерация текста (LLM)**: 
   - Если установлен `MEMORY_MCP_LMSTUDIO_LLM_MODEL`, используется для генерации текста через endpoint `/v1/chat/completions`.
-  - Если `MEMORY_MCP_LMSTUDIO_LLM_MODEL` не установлен, используется Ollama с моделью `gpt-oss-20b:latest` (см. `QUALITY_ANALYSIS_OLLAMA_MODEL`).
+  - Если `MEMORY_MCP_LMSTUDIO_LLM_MODEL` не установлен, используется `QUALITY_ANALYSIS_LLM_MODEL` с `QUALITY_ANALYSIS_LLM_BASE_URL`.
 - **НЕ используйте модель эмбеддингов для генерации текста** - это вызовет ошибку "Model is not llm"
 
 **Примеры:**

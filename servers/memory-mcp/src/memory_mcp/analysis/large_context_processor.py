@@ -6,7 +6,6 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ..core.lmstudio_client import LMStudioEmbeddingClient
-from ..core.ollama_client import OllamaEmbeddingClient
 from .adaptive_message_grouper import AdaptiveMessageGrouper
 
 logger = logging.getLogger(__name__)
@@ -28,7 +27,7 @@ class LargeContextProcessor:
         max_tokens: int = 30000,  # Максимальный контекст модели (уменьшено для предотвращения таймаутов)
         prompt_reserve_tokens: int = 5000,
         hierarchical_threshold: int = 25000,  # Порог для иерархической обработки (уменьшено)
-        embedding_client: Optional[LMStudioEmbeddingClient | OllamaEmbeddingClient] = None,
+        embedding_client: Optional[LMStudioEmbeddingClient] = None,
         enable_hierarchical: bool = True,
         enable_caching: bool = True,
     ):

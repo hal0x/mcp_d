@@ -22,7 +22,7 @@ class RelevanceAnalyzer:
     def __init__(
         self,
         model_name: str = "gemma3n:e4b-it-q8_0",
-        base_url: str = "http://localhost:11434",
+        base_url: str = "http://localhost:1234",  # URL LM Studio сервера
         max_context_tokens: int = 131072,  # Для gpt-oss-20b
         temperature: float = 0.1,
         max_response_tokens: int = 131072,  # Для gpt-oss-20b (максимальный лимит)
@@ -36,6 +36,7 @@ class RelevanceAnalyzer:
         self.max_response_tokens = max_response_tokens
         self.thinking_level = thinking_level
 
+        # Используем LMStudioEmbeddingClient для работы с LLM
         self.embedding_client = LMStudioEmbeddingClient(
             model_name=model_name,
             base_url=base_url,
@@ -67,7 +68,7 @@ class RelevanceAnalyzer:
                     max_tokens=self.max_response_tokens,
                 )
 
-            return self._parse_ollama_response(response, query_data, search_results)
+            return self._parse_llm_response(response, query_data, search_results)
         except Exception as exc:  # pragma: no cover - логируем и возвращаем fallback
             logger.error("Ошибка анализа релевантности: %s", exc)
             return self._create_error_analysis(str(exc))
@@ -114,7 +115,7 @@ class RelevanceAnalyzer:
 
     # --- существующие методы ниже остаются без изменений ---
 
-    def _parse_ollama_response(
+    def _parse_llm_response(
         self,
         response: str,
         query_data: dict[str, Any],
@@ -137,7 +138,7 @@ class RelevanceAnalyzer:
             )
 
         except Exception as exc:
-            logger.error("Ошибка парсинга ответа Ollama: %s", exc)
+            logger.error("Ошибка парсинга ответа LLM: %s", exc)
             response_preview = response[:500] if 'response' in locals() and response else 'N/A'
             raise RuntimeError(
                 f"Ошибка парсинга ответа LLM для анализа релевантности: {exc}. "
@@ -248,7 +249,7 @@ class RelevanceAnalyzer:
             },
             "explanation": f"Ошибка анализа: {error_message}",
             "recommendations": [
-                "Проверить подключение к Ollama",
+                "Проверить подключение к LLM серверу",
                 "Проверить корректность модели",
                 "Повторить анализ",
             ],

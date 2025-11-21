@@ -1,9 +1,8 @@
 {
   "quality_analysis": {
-    "ollama": {
+    "llm": {
       "model": "gpt-oss-20b:latest",
-      "base_url": "http://localhost:11434",
-      "max_context_tokens": 12000,
+      "base_url": "http://localhost:1234",
       "temperature": 0.1,
       "max_tokens": 1000,
       "thinking_level": "high"
@@ -21,7 +20,7 @@
       "relevance_threshold": 5.0,
       "success_rate_threshold": 0.7,
       "results_per_query": 10,
-      "chroma_path": "artifacts/chroma_db",
+      "qdrant_url": "http://localhost:6333",
       "search_collection": "chat_messages",
       "hybrid_alpha": 0.6,
       "chats_dir": "chats",
