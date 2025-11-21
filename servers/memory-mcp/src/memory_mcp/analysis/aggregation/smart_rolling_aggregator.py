@@ -18,16 +18,16 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..utils.datetime_utils import format_datetime_display
+from ...utils.datetime_utils import format_datetime_display
 
-from ..config import get_settings
-from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
-from .adaptive_message_grouper import AdaptiveMessageGrouper
+from ...config import get_settings
+from ...core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
+from ..segmentation.adaptive_message_grouper import AdaptiveMessageGrouper
 from .batch_session_processor import BatchSessionProcessor
-from .context_manager import ContextManager
-from .semantic_regrouper import SemanticRegrouper
-from .session_segmentation import SessionSegmenter
-from .session_summarizer.summarizer import SessionSummarizer
+from ..context.context_manager import ContextManager
+from ..segmentation.semantic_regrouper import SemanticRegrouper
+from ..segmentation.session_segmentation import SessionSegmenter
+from ..session_summarizer.summarizer import SessionSummarizer
 
 logger = logging.getLogger(__name__)
 
@@ -1033,7 +1033,7 @@ class SmartRollingAggregator:
                 else:  # now
                     group_strategy = "session"
 
-                from ..analysis.day_grouping import DayGroupingSegmenter
+                from ..segmentation import DayGroupingSegmenter
 
                 segmenter = DayGroupingSegmenter()
 

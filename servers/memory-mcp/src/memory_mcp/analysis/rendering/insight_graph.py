@@ -10,7 +10,7 @@ from typing import Any, Iterable, Sequence
 import networkx as nx
 import yaml
 
-from ..core.langchain_adapters import LangChainEmbeddingAdapter, build_langchain_embeddings_from_env
+from ...core.langchain_adapters import LangChainEmbeddingAdapter, build_langchain_embeddings_from_env
 
 try:
     from qdrant_client import QdrantClient

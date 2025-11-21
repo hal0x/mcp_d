@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
+from ...core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
 
 logger = logging.getLogger(__name__)
 

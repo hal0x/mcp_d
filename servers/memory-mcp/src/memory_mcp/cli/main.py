@@ -22,8 +22,8 @@ from ..utils.paths import find_project_root
 
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
-from ..analysis.insight_graph import SummaryInsightAnalyzer
-from ..analysis.instruction_manager import InstructionManager
+from ..analysis.rendering import SummaryInsightAnalyzer
+from ..analysis.utils import InstructionManager
 from ..core.indexer import TwoLevelIndexer
 from ..core.indexing_tracker import IndexingJobTracker
 from ..indexing import TelegramIndexer
@@ -1239,7 +1239,7 @@ def update_summaries(chat, force):
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
 
-    from ..analysis.markdown_renderer import MarkdownRenderer
+    from ..analysis.rendering import MarkdownRenderer
 
     async def _update_summaries():
         click.echo("📝 Обновление markdown-отчетов...")

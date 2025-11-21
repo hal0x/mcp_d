@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from ..utils.naming import slugify
-from ..utils.context_optimizer import optimize_context_dict
+from ...utils.naming import slugify
+from ...utils.context_optimizer import optimize_context_dict
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from typing import TYPE_CHECKING
 
-from .large_context_processor import LargeContextProcessor
+from ..aggregation.large_context_processor import LargeContextProcessor
 
 if TYPE_CHECKING:
     from ..search import SmartSearchEngine

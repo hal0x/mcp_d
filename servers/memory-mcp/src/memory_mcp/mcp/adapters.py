@@ -240,7 +240,7 @@ class MemoryServiceAdapter:
         
         # Инициализируем обогатитель контекста сущностей
         from ..search.entity_context_enricher import EntityContextEnricher
-        from ..analysis.entity_dictionary import get_entity_dictionary
+        from ..analysis.entities import get_entity_dictionary
         
         entity_dict = get_entity_dictionary(graph=self.graph)
         self.entity_enricher = EntityContextEnricher(
@@ -1107,7 +1107,7 @@ class MemoryServiceAdapter:
         self, request: GetEntityProfileRequest
     ) -> GetEntityProfileResponse:
         """Получение полного профиля сущности."""
-        from ..analysis.entity_dictionary import get_entity_dictionary
+        from ..analysis.entities import get_entity_dictionary
         
         entity_dict = get_entity_dictionary(graph=self.graph)
         if not entity_dict:
@@ -1892,7 +1892,7 @@ class MemoryServiceAdapter:
     ) -> AnalyzeEntitiesResponse:
         """Analyze entities in text."""
         try:
-            from ..analysis.entity_extraction import EntityExtractor
+            from ..analysis.entities import EntityExtractor
 
             if not request.text or not request.text.strip():
                 return AnalyzeEntitiesResponse(entities=[], total_entities=0)
@@ -2379,7 +2379,7 @@ class MemoryServiceAdapter:
         from pathlib import Path
         from zoneinfo import ZoneInfo
 
-        from ..analysis.markdown_renderer import MarkdownRenderer
+        from ..analysis.rendering import MarkdownRenderer
 
         reports_dir = Path("artifacts/reports")
 
@@ -2521,7 +2521,7 @@ class MemoryServiceAdapter:
         """Build insight graph from markdown summaries."""
         from pathlib import Path
 
-        from ..analysis.insight_graph import SummaryInsightAnalyzer
+        from ..analysis.rendering import SummaryInsightAnalyzer
 
         summaries_dir = Path(request.summaries_dir or "artifacts/reports")
 

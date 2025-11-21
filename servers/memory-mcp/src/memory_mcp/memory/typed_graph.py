@@ -780,7 +780,7 @@ class TypedGraphMemory:
         entity_descriptions_parts = []
         if entities:
             try:
-                from ..analysis.entity_dictionary import get_entity_dictionary
+                from ..analysis.entities import get_entity_dictionary
                 entity_dict = get_entity_dictionary()
                 
                 # Пытаемся определить тип сущности из свойств узла или из контекста

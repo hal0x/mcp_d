@@ -9,7 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
+from ...core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
 
 logger = logging.getLogger(__name__)
 

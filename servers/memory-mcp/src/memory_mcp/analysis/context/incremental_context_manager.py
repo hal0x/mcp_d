@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from ..config import get_settings
+from ...config import get_settings
 
 try:
     from qdrant_client import QdrantClient

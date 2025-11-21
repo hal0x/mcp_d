@@ -9,8 +9,7 @@
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..analysis.entity_extraction import EntityExtractor
-from ..analysis.entity_dictionary import EntityDictionary
+from ..analysis.entities import EntityExtractor, EntityDictionary
 from ..memory.embeddings import build_embedding_service_from_env
 from ..memory.vector_store import build_entity_vector_store_from_env, EntityVectorStore
 

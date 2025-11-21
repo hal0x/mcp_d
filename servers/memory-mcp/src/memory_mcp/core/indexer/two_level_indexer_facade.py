@@ -9,18 +9,18 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from ...analysis.adaptive_message_grouper import AdaptiveMessageGrouper
-from ...analysis.cluster_summarizer import ClusterSummarizer
-from ...analysis.day_grouping import DayGroupingSegmenter
-from ...analysis.entity_dictionary import get_entity_dictionary
-from ...analysis.entity_extraction import EntityExtractor
-from ...analysis.instruction_manager import InstructionManager
-from ...analysis.markdown_renderer import MarkdownRenderer
-from ...analysis.semantic_regrouper import SemanticRegrouper
-from ...analysis.session_clustering import SessionClusterer
-from ...analysis.session_segmentation import SessionSegmenter
+from ...analysis.segmentation import (
+    AdaptiveMessageGrouper,
+    DayGroupingSegmenter,
+    SemanticRegrouper,
+    SessionClusterer,
+    SessionSegmenter,
+)
+from ...analysis.entities import EntityExtractor, get_entity_dictionary
+from ...analysis.utils import InstructionManager, TimeProcessor
+from ...analysis.rendering import MarkdownRenderer
+from ...analysis.summarization import ClusterSummarizer
 from ...analysis.session_summarizer.summarizer import SessionSummarizer
-from ...analysis.time_processor import TimeProcessor
 from ...memory.qdrant_collections import QdrantCollectionsManager
 from ...utils.naming import slugify
 from ..langchain_adapters import LangChainLLMAdapter, get_llm_client_factory

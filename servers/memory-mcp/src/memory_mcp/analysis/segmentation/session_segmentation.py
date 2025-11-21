@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List
 from zoneinfo import ZoneInfo
 
-from .time_processor import TimeProcessor
+from ..utils.time_processor import TimeProcessor
 
 logger = logging.getLogger(__name__)
 

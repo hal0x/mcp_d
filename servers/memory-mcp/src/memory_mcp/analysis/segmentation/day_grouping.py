@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List
 from zoneinfo import ZoneInfo
 
-from .message_filter import MessageFilter
+from ..utils.message_filter import MessageFilter
 
 logger = logging.getLogger(__name__)
 

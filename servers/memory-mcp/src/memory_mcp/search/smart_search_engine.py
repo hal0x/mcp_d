@@ -46,7 +46,7 @@ class SmartSearchEngine:
             self.lmql_adapter = None
         
         from .entity_context_enricher import EntityContextEnricher
-        from ..analysis.entity_dictionary import get_entity_dictionary
+        from ..analysis.entities import get_entity_dictionary
         from ..memory.embeddings import build_embedding_service_from_env
         from ..memory.vector_store import build_entity_vector_store_from_env
         

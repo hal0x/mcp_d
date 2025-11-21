@@ -5,9 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ...analysis.day_grouping import DayGroupingSegmenter
-from ...analysis.session_segmentation import SessionSegmenter
-from ...analysis.time_processor import TimeProcessor
+from ...analysis.segmentation import DayGroupingSegmenter, SessionSegmenter
+from ...analysis.utils import TimeProcessor
 from ...utils.naming import slugify
 
 logger = logging.getLogger(__name__)
