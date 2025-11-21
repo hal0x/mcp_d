@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from ..utils.naming import slugify
+from ..utils.context_optimizer import optimize_context_dict
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,6 @@ class ContextManager:
         self,
         summaries_dir: Path = Path("artifacts/reports"),
         max_context_size: int = 100000,  # Максимальный размер контекста в символах
-        enable_cache: bool = True,
-        cache_size: int = 100,  # Размер кэша для больших контекстов
     ):
         """
         Инициализация менеджера контекста
@@ -32,15 +31,10 @@ class ContextManager:
         Args:
             summaries_dir: Директория с саммаризациями
             max_context_size: Максимальный размер контекста в символах (для больших контекстов)
-            enable_cache: Включить кэширование больших контекстов
-            cache_size: Размер кэша для больших контекстов
         """
         self.artifacts_dir = summaries_dir
         self.artifacts_dir.mkdir(exist_ok=True)
         self.max_context_size = max_context_size
-        self.enable_cache = enable_cache
-        self._context_cache: Dict[str, Any] = {}  # Кэш для больших контекстов
-        self._cache_size = cache_size
         
         # Промежуточный контекст в памяти во время индексации
         self._accumulative_contexts: Dict[str, str] = {}  # chat_name -> накопительный контекст
@@ -98,21 +92,11 @@ class ContextManager:
             if len(previous_sessions) > max_sessions:
                 previous_sessions = previous_sessions[-max_sessions:]
 
-            # Проверяем кэш для больших контекстов
-            cache_key = self._get_cache_key(chat_name, current_session_id, previous_sessions)
-            if self.enable_cache and cache_key in self._context_cache:
-                logger.debug(f"Использован кэш для контекста {cache_key}")
-                return self._context_cache[cache_key]
-
             # Загружаем контекст из предыдущих сессий
             context = self._build_context_from_sessions(previous_sessions)
             
             # Оптимизируем размер контекста для больших контекстов
             context = self._optimize_context_size(context)
-            
-            # Сохраняем в кэш
-            if self.enable_cache:
-                self._add_to_cache(cache_key, context)
 
             # Добавляем накопительный контекст чата
             if chat_context:
@@ -433,53 +417,17 @@ class ContextManager:
             logger.warning(f"Не удалось загрузить контекст чата {chat_name}: {e}")
             return None
 
-    def _get_cache_key(
-        self, chat_name: str, session_id: str, sessions: List[Dict[str, Any]]
-    ) -> str:
-        """Генерация ключа кэша для контекста."""
-        import hashlib
-
-        session_ids = [s.get("session_id", "") for s in sessions]
-        key_data = f"{chat_name}:{session_id}:{','.join(session_ids)}"
-        return hashlib.md5(key_data.encode()).hexdigest()
-
     def _optimize_context_size(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Оптимизация размера контекста для больших контекстов.
 
         Обрезает большие текстовые поля до max_context_size.
         """
-        optimized = context.copy()
-
-        # Оптимизируем recent_context
-        if "recent_context" in optimized and optimized["recent_context"]:
-            if len(optimized["recent_context"]) > self.max_context_size:
-                optimized["recent_context"] = (
-                    optimized["recent_context"][: self.max_context_size] + "..."
-                )
-
-        # Оптимизируем chat_context
-        if "chat_context" in optimized and optimized["chat_context"]:
-            if len(optimized["chat_context"]) > self.max_context_size:
-                optimized["chat_context"] = (
-                    optimized["chat_context"][: self.max_context_size] + "..."
-                )
-
-        return optimized
-
-    def _add_to_cache(self, key: str, context: Dict[str, Any]) -> None:
-        """Добавление контекста в кэш с ограничением размера."""
-        # Очищаем кэш, если он превышает размер
-        if len(self._context_cache) >= self._cache_size:
-            # Удаляем самый старый элемент (FIFO)
-            oldest_key = next(iter(self._context_cache))
-            del self._context_cache[oldest_key]
-
-        self._context_cache[key] = context
-
-    def clear_cache(self) -> None:
-        """Очистка кэша контекста."""
-        self._context_cache.clear()
+        return optimize_context_dict(
+            context,
+            max_size=self.max_context_size,
+            text_fields=["recent_context", "chat_context"],
+        )
 
     def get_accumulative_context(self, chat_name: str) -> str:
         """
@@ -608,7 +556,8 @@ class ContextManager:
         new_context = "\n".join(context_parts)
         if len(new_context) > self.max_context_size:
             # Обрезаем до максимального размера, оставляя последние части
-            new_context = new_context[-self.max_context_size:]
+            from ..utils.context_optimizer import truncate_text_from_end
+            new_context = truncate_text_from_end(new_context, self.max_context_size)
 
         self._accumulative_contexts[chat_name] = new_context
 

@@ -26,6 +26,7 @@ from ..analysis.session_summarizer import SessionSummarizer
 from ..analysis.time_processor import TimeProcessor
 from ..utils.naming import slugify
 from ..utils.url_validator import validate_embedding_text
+from ..utils.context_optimizer import truncate_embedding_text
 from .langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 
 logger = logging.getLogger(__name__)
@@ -2114,35 +2115,31 @@ class TwoLevelIndexer:
                     max_chars=(500 if chat_mode == "channel" else 1500),
                 )
 
+                # Проверяем и обрезаем текст, если он превышает лимит токенов
+                max_tokens = 131072  # Для gpt-oss-20b (максимальный лимит)
+                avg_tokens_per_char = 0.25  # ~4 символа на токен
+                
+                # Сохраняем оригинальные значения для логирования
+                original_context_text = context_text
+                original_msg_text = msg_text
+                original_embedding_text = f"{original_context_text}\n[CURRENT]: {original_msg_text}"
+                original_tokens = int(len(original_embedding_text) * avg_tokens_per_char)
+                
+                # Используем унифицированную утилиту для обрезки
+                context_text, msg_text = truncate_embedding_text(
+                    context_text=context_text,
+                    message_text=msg_text,
+                    max_tokens=max_tokens,
+                    avg_tokens_per_char=avg_tokens_per_char,
+                    message_prefix="[CURRENT]: ",
+                )
+                
                 # Комбинируем текст + контекст
                 embedding_text = f"{context_text}\n[CURRENT]: {msg_text}"
-
-                # Проверяем и обрезаем текст, если он превышает лимит токенов
-                # Оценка токенов: примерно 4 символа = 1 токен
-                estimated_tokens = len(embedding_text) // 4
-                max_tokens = 131072  # Для gpt-oss-20b (максимальный лимит)
-
-                if estimated_tokens > max_tokens:
-                    # Сначала обрезаем контекст, если он слишком длинный
-                    max_context_chars = (
-                        2000  # Уменьшаем до 2000 символов (~500 токенов) для соответствия лимиту 8192
-                    )
-                    if len(context_text) > max_context_chars:
-                        context_text = context_text[:max_context_chars] + "..."
-
-                    # Затем обрезаем основное сообщение
-                    # Учитываем длину контекста + "[CURRENT]: " (~3 токена)
-                    remaining_chars = (max_tokens - len(context_text) // 4 - 3) * 4
-                    if remaining_chars > 0:
-                        msg_text = msg_text[:remaining_chars] + "..."
-                        embedding_text = f"{context_text}\n[CURRENT]: {msg_text}"
-                    else:
-                        # Если контекст уже занимает почти весь лимит, используем только сообщение
-                        msg_text = msg_text[: max_tokens * 4 - 10] + "..."
-                        embedding_text = f"[CURRENT]: {msg_text}"
-
-                    final_tokens = len(embedding_text) // 4
-                    original_tokens = estimated_tokens
+                
+                # Логируем, если текст был обрезан
+                final_tokens = int(len(embedding_text) * avg_tokens_per_char)
+                if final_tokens < original_tokens:
                     logger.warning(
                         f"Текст эмбеддинга обрезан до ~{final_tokens} токенов "
                         f"(исходная оценка: ~{original_tokens} токенов)"
