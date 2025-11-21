@@ -133,6 +133,17 @@ class SessionSummarizer:
         strict_mode: Если True, выбрасывает исключения вместо использования fallback при ошибках LLM.
                      По умолчанию False для обратной совместимости."""
 
+    # Маппинг итераций на методы рефайнинга: (method_name, requires_profile)
+    _REFINE_METHODS = {
+        1: ("_refine_pass_expand_evidence", True),
+        2: ("_refine_pass_claims", True),
+        3: ("_refine_pass_topics", False),
+        4: ("_refine_pass_profile_rules", True),
+        5: ("_refine_pass_threads", True),
+        6: ("_refine_pass_discussion_structure", True),
+        7: ("_refine_pass_context_quality", True),
+    }
+
     def __init__(
         self,
         embedding_client: Optional[LangChainLLMAdapter] = None,
@@ -1858,22 +1869,15 @@ class SessionSummarizer:
         profile = summary.get("meta", {}).get("profile") or aux_data.get("profile")
         changed = False
 
-        if iteration == 1:
-            changed = self._refine_pass_expand_evidence(summary, aux_data, profile)
-        elif iteration == 2:
-            changed = self._refine_pass_claims(summary, aux_data, profile)
-        elif iteration == 3:
-            changed = self._refine_pass_topics(summary, aux_data)
-        elif iteration == 4:
-            changed = self._refine_pass_profile_rules(summary, aux_data, profile)
-        elif iteration == 5:
-            changed = self._refine_pass_threads(summary, aux_data, profile)
-        elif iteration == 6:
-            # Дополнительная итерация: улучшение структуры дискуссии
-            changed = self._refine_pass_discussion_structure(summary, aux_data, profile)
-        elif iteration == 7:
-            # Дополнительная итерация: улучшение качества контекста
-            changed = self._refine_pass_context_quality(summary, aux_data, profile)
+        # Используем словарь для выбора метода рефайнинга
+        method_info = self._REFINE_METHODS.get(iteration)
+        if method_info:
+            method_name, requires_profile = method_info
+            method = getattr(self, method_name)
+            if requires_profile:
+                changed = method(summary, aux_data, profile)
+            else:
+                changed = method(summary, aux_data)
 
         previous_score = summary.get("quality", {}).get("score", 0.0)
         quality_context = self._refresh_quality(summary, aux_data)

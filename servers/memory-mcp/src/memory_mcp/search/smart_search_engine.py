@@ -86,18 +86,43 @@ class SmartSearchEngine:
 
         return self._llm_client
 
-    async def search(self, request: SmartSearchRequest) -> SmartSearchResponse:
-        """Выполнение интерактивного поиска с пониманием запроса."""
-        understanding = await self.query_understanding.understand_query(request.query)
+    def _select_query(
+        self, understanding: Any, original_query: str
+    ) -> str:
+        """
+        Выбирает оптимальный запрос из понимания запроса.
         
-        query_to_use = understanding.enhanced_query if understanding.enhanced_query != request.query else request.query
+        Приоритет:
+        1. sub_queries[0] если есть несколько подзапросов
+        2. enhanced_query если он отличается от оригинального
+        3. original_query в остальных случаях
         
+        Args:
+            understanding: Результат понимания запроса
+            original_query: Оригинальный запрос пользователя
+            
+        Returns:
+            Выбранный запрос для поиска
+        """
         if understanding.sub_queries and len(understanding.sub_queries) > 1:
             query_to_use = understanding.sub_queries[0]
             logger.debug(
                 f"Запрос декомпозирован на {len(understanding.sub_queries)} подзапросов, "
                 f"используется: {query_to_use}"
             )
+            return query_to_use
+        
+        if understanding.enhanced_query and understanding.enhanced_query != original_query:
+            return understanding.enhanced_query
+        
+        return original_query
+
+    async def search(self, request: SmartSearchRequest) -> SmartSearchResponse:
+        """Выполнение интерактивного поиска с пониманием запроса."""
+        understanding = await self.query_understanding.understand_query(request.query)
+        
+        # Выбор оптимального запроса для поиска
+        query_to_use = self._select_query(understanding, request.query)
         
         intent = await self.intent_analyzer.analyze_intent(query_to_use)
         personalization = self._get_personalization_context()

@@ -252,6 +252,48 @@ class IterativeRefiner:
         self.last_iterations = 0
         self.iteration_history: List[Dict[str, Any]] = []
 
+    def _should_stop_iteration(
+        self,
+        new_score: float,
+        target_score: float,
+        changed: bool,
+        delta: float,
+        iteration: int,
+        pass_count: int,
+        consecutive_no_change: int,
+        max_consecutive_no_change: int,
+    ) -> tuple[bool, str]:
+        """
+        Определяет, следует ли остановить итерации улучшения.
+        
+        Returns:
+            Кортеж (should_stop, reason) - нужно ли остановиться и причина
+        """
+        # Целевой балл достигнут
+        if new_score >= target_score:
+            return True, "target_score_reached"
+        
+        # Слишком много итераций подряд без изменений
+        if consecutive_no_change >= max_consecutive_no_change:
+            return True, "consecutive_no_change"
+        
+        # Если были изменения, продолжаем
+        if changed:
+            return False, "changed"
+        
+        # Если еще не все итерации пройдены и прирост мал, продолжаем
+        if iteration < pass_count:
+            if delta < 2.0:
+                return False, "small_delta_continue"
+            return False, "continue"
+        
+        # Все итерации пройдены или прирост мал - останавливаемся
+        if delta < 2.0:
+            return True, "small_delta_stop"
+        
+        # Изменений не обнаружено
+        return True, "no_changes"
+
     async def refine(
         self,
         summary: Dict[str, Any],
@@ -330,59 +372,61 @@ class IterativeRefiner:
                 best_score = new_score
                 best_iteration = iteration
 
-            if new_score >= self.target_score:
-                logger.info(
-                    "✅ Целевой балл %.1f достигнут после %d итераций",
-                    self.target_score,
-                    iteration,
-                )
-                previous_score = new_score
-                break
-
             # Отслеживаем отсутствие изменений
             if not changed and abs(delta) < 0.1:
                 consecutive_no_change += 1
                 logger.warning(
                     f"⚠️ Итерация {iteration} не внесла изменений (подряд: {consecutive_no_change})"
                 )
-
-                if consecutive_no_change >= max_consecutive_no_change:
-                    logger.warning(
-                        f"🛑 Остановка: {consecutive_no_change} итераций подряд без изменений"
-                    )
-                    break
             else:
                 consecutive_no_change = 0
 
-            if changed:
-                previous_score = new_score
-                continue
+            # Проверяем условия остановки
+            should_stop, reason = self._should_stop_iteration(
+                new_score=new_score,
+                target_score=self.target_score,
+                changed=changed,
+                delta=delta,
+                iteration=iteration,
+                pass_count=pass_count,
+                consecutive_no_change=consecutive_no_change,
+                max_consecutive_no_change=max_consecutive_no_change,
+            )
 
-            if iteration < pass_count:
-                if delta < 2.0:
+            # Логируем причину остановки или продолжения
+            if should_stop:
+                if reason == "target_score_reached":
+                    logger.info(
+                        "✅ Целевой балл %.1f достигнут после %d итераций",
+                        self.target_score,
+                        iteration,
+                    )
+                elif reason == "consecutive_no_change":
+                    logger.warning(
+                        f"🛑 Остановка: {consecutive_no_change} итераций подряд без изменений"
+                    )
+                elif reason == "small_delta_stop":
+                    logger.info(
+                        "⚠️ Прирост < 2 баллов (%.1f). Дальнейшие итерации остановлены.",
+                        delta,
+                    )
+                elif reason == "no_changes":
+                    logger.info("⚠️ Изменений не обнаружено, завершаем улучшение.")
+                previous_score = new_score
+                break
+            else:
+                if reason == "small_delta_continue":
                     logger.info(
                         "⚠️ Прирост < 2 баллов (%.1f). Продолжаем со следующей фазой.",
                         delta,
                     )
-                else:
+                elif reason == "continue" and not changed:
                     logger.debug(
                         "Фаза %d не изменила структуру, переходим к следующей",
                         iteration,
                     )
                 previous_score = new_score
                 continue
-
-            if delta < 2.0:
-                logger.info(
-                    "⚠️ Прирост < 2 баллов (%.1f). Дальнейшие итерации остановлены.",
-                    delta,
-                )
-                previous_score = new_score
-                break
-
-            logger.info("⚠️ Изменений не обнаружено, завершаем улучшение.")
-            previous_score = new_score
-            break
 
         else:
             previous_score = improved.get("quality", {}).get("score", baseline_score)

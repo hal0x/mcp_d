@@ -121,6 +121,10 @@ class RelevanceAnalyzer:
         query_data: dict[str, Any],
         search_results: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        """Парсит ответ LLM и возвращает анализ релевантности.
+        
+        При ошибках парсинга возвращает fallback анализ вместо исключения.
+        """
         try:
             import json
             import re
@@ -139,12 +143,14 @@ class RelevanceAnalyzer:
 
         except Exception as exc:
             logger.error("Ошибка парсинга ответа LLM: %s", exc)
-            response_preview = response[:500] if 'response' in locals() and response else 'N/A'
-            raise RuntimeError(
+            response_preview = response[:500] if response else 'N/A'
+            logger.warning(
                 f"Ошибка парсинга ответа LLM для анализа релевантности: {exc}. "
                 f"Ответ: {response_preview}. "
-                f"Проверьте конфигурацию LLM клиента."
-            ) from exc
+                f"Используется fallback анализ."
+            )
+            # Возвращаем fallback анализ вместо исключения
+            return self._create_fallback_analysis(query_data, search_results)
 
     def _validate_analysis_structure(self, analysis: dict[str, Any]) -> bool:
         required_fields = [
@@ -201,17 +207,29 @@ class RelevanceAnalyzer:
         query_data: dict[str, Any],
         search_results: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        if len(search_results) == 0:
-            overall_score = 1.0
-            problems = {"indexing": 1, "search": 0, "context": 0}
-        elif len(search_results) < 3:
-            overall_score = 4.0
-            problems = {"indexing": 0, "search": 1, "context": 0}
+        """Создание fallback анализа на основе количества результатов.
+        
+        Использует словарь для маппинга количества результатов на конфигурацию,
+        что улучшает читаемость и упрощает добавление новых условий.
+        """
+        results_count = len(search_results)
+        
+        # Маппинг количества результатов на конфигурацию анализа
+        # Формат: (overall_score, problems_dict)
+        fallback_configs = {
+            0: (1.0, {"indexing": 1, "search": 0, "context": 0}),
+            1: (4.0, {"indexing": 0, "search": 1, "context": 0}),  # < 3
+            2: (4.0, {"indexing": 0, "search": 1, "context": 0}),  # < 3
+        }
+        default_config = (6.0, {"indexing": 0, "search": 0, "context": 0})  # >= 3
+        
+        # Определяем конфигурацию на основе количества результатов
+        if results_count in fallback_configs:
+            overall_score, problems = fallback_configs[results_count]
         else:
-            overall_score = 6.0
-            problems = {"indexing": 0, "search": 0, "context": 0}
+            overall_score, problems = default_config
 
-        individual_scores = [overall_score] * len(search_results)
+        individual_scores = [overall_score] * results_count
 
         return {
             "overall_score": overall_score,
