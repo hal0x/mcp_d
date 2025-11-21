@@ -745,21 +745,14 @@ class MemoryServiceAdapter:
             
             cursor = self.graph.conn.cursor()
             
-            # Пробуем разные варианты поиска
-            search_patterns = [
-                request.record_id,  # Точное совпадение
-            ]
+            search_patterns = [request.record_id]
             
-            # Если record_id в формате "telegram:Семья:257859", пробуем найти по последней части
             if ":" in request.record_id:
                 parts = request.record_id.split(":")
                 if len(parts) >= 3:
-                    # Пробуем найти по точному совпадению с последней частью (если это число)
                     try:
                         msg_id = int(parts[-1])
-                        # Ищем по формату telegram:Семья:257859
                         search_patterns.append(f"telegram:{parts[1]}:{msg_id}")
-                        # Ищем по формату с любым источником
                         search_patterns.append(f"%:{parts[1]}:{msg_id}")
                     except ValueError:
                         pass
@@ -824,7 +817,6 @@ class MemoryServiceAdapter:
                         payload = _node_to_payload(self.graph, found_id, data)
                         return FetchResponse(record=payload)
             
-            # Если не найдено в графе, ищем в Qdrant коллекциях
             if self.vector_store and self.vector_store.available():
                 try:
                     from ..memory.storage.vector.qdrant_collections import QdrantCollectionsManager
@@ -833,11 +825,9 @@ class MemoryServiceAdapter:
                     settings = get_settings()
                     qdrant_url = settings.get_qdrant_url()
                     if qdrant_url:
-                        # Получаем размерность эмбеддингов
                         embedding_dimension = self.embedding_service.dimension if self.embedding_service else 1024
                         qdrant_manager = QdrantCollectionsManager(url=qdrant_url, vector_size=embedding_dimension)
                         
-                        # Ищем в коллекциях chat_messages, chat_sessions, chat_tasks
                         for collection_name in ["chat_messages", "chat_sessions", "chat_tasks"]:
                             try:
                                 result = qdrant_manager.get(
@@ -849,10 +839,8 @@ class MemoryServiceAdapter:
                                     doc = result["documents"][0] if result.get("documents") else ""
                                     metadata = result["metadatas"][0] if result.get("metadatas") else {}
                                     
-                                    # Преобразуем Qdrant запись в MemoryRecordPayload
                                     chat_name = metadata.get("chat", collection_name.replace("chat_", ""))
                                     
-                                    # Парсим timestamp из разных полей
                                     date_utc = metadata.get("date_utc") or metadata.get("start_time_utc") or metadata.get("end_time_utc")
                                     timestamp = None
                                     if date_utc:
@@ -863,10 +851,8 @@ class MemoryServiceAdapter:
                                     else:
                                         timestamp = datetime.now(timezone.utc)
                                     
-                                    # Извлекаем автора из разных полей
                                     author = metadata.get("sender") or metadata.get("author") or metadata.get("username")
                                     
-                                    # Извлекаем теги и сущности
                                     tags = metadata.get("tags", [])
                                     if isinstance(tags, str):
                                         tags = [tags] if tags else []
@@ -875,7 +861,6 @@ class MemoryServiceAdapter:
                                     if isinstance(entities, str):
                                         entities = [entities] if entities else []
                                     
-                                    # Получаем эмбеддинг, если доступен
                                     embedding = None
                                     if result.get("embeddings") and len(result["embeddings"]) > 0:
                                         embedding = result["embeddings"][0]
@@ -897,10 +882,8 @@ class MemoryServiceAdapter:
                                         embedding=embedding,
                                     )
                                     
-                                    # Если эмбеддинг есть, но записи нет в графе, синхронизируем
                                     if embedding and request.record_id not in self.graph.graph:
                                         try:
-                                            # Создаём узел в графе для синхронизации
                                             from ..models.memory import MemoryRecord
                                             record = MemoryRecord(
                                                 record_id=request.record_id,
@@ -914,7 +897,6 @@ class MemoryServiceAdapter:
                                                 metadata=payload.metadata,
                                             )
                                             self.ingestor.ingest([record])
-                                            # Сохраняем эмбеддинг
                                             self.graph.update_node(request.record_id, embedding=embedding)
                                             logger.debug(f"Синхронизирована запись {request.record_id} из Qdrant в граф")
                                         except Exception as e:
@@ -1019,7 +1001,6 @@ class MemoryServiceAdapter:
         if not entity_vector_store or not entity_vector_store.available():
             return SearchEntitiesResponse(results=[], total_found=0)
         
-        # Генерируем вектор запроса, если передан текст
         query_vector = request.query_vector
         if not query_vector and request.query:
             if not self.embedding_service:
@@ -1029,14 +1010,12 @@ class MemoryServiceAdapter:
         if not query_vector:
             return SearchEntitiesResponse(results=[], total_found=0)
         
-        # Поиск в EntityVectorStore
         search_results = entity_vector_store.search_entities(
             query_vector=query_vector,
             entity_type=request.entity_type,
             limit=request.limit,
         )
         
-        # Преобразуем результаты в EntitySearchResult
         results = []
         for result in search_results:
             payload = result.payload or {}
@@ -1064,13 +1043,11 @@ class MemoryServiceAdapter:
         if not entity_dict:
             return GetEntityProfileResponse(profile=None)
         
-        # Строим профиль сущности
         profile_data = entity_dict.build_entity_profile(request.entity_type, request.value)
         
         if not profile_data:
             return GetEntityProfileResponse(profile=None)
         
-        # Преобразуем контексты
         contexts = [
             EntityContextItem(
                 node_id=ctx.get("node_id", ""),
@@ -1083,7 +1060,6 @@ class MemoryServiceAdapter:
             for ctx in profile_data.get("contexts", [])
         ]
         
-        # Преобразуем связанные сущности
         related = [
             RelatedEntityItem(
                 entity_id=r.get("entity_id", ""),
@@ -1329,7 +1305,6 @@ class MemoryServiceAdapter:
         sources_count = {}
         tags_count = {}
         
-        # Проверяем наличие столбца properties в таблице nodes
         cursor = self.graph.conn.cursor()
         try:
             cursor.execute("PRAGMA table_info(nodes)")
@@ -1342,8 +1317,6 @@ class MemoryServiceAdapter:
         except Exception as e:
             logger.warning(f"Не удалось проверить схему таблицы 'nodes': {e}")
 
-        # Подсчитываем источники из графа
-        # ВАЖНО: Используем ту же логику, что и в get_timeline для консистентности
         try:
             cursor.execute(
                 """
@@ -1355,7 +1328,6 @@ class MemoryServiceAdapter:
                 if row["properties"]:
                     try:
                         props = json.loads(row["properties"]) if isinstance(row["properties"], str) else row["properties"]
-                        # Используем ту же логику, что и в get_timeline: source или chat
                         source = props.get("source") or props.get("chat", "unknown")
                         sources_count[source] = sources_count.get(source, 0) + 1
                     except (json.JSONDecodeError, TypeError):
@@ -1364,7 +1336,6 @@ class MemoryServiceAdapter:
         except Exception as e:
             logger.warning(f"Ошибка при подсчёте источников из графа: {e}")
 
-        # Подсчитываем теги из графа
         try:
             cursor.execute(
                 """
@@ -1381,12 +1352,6 @@ class MemoryServiceAdapter:
         except Exception as e:
             logger.warning(f"Ошибка при подсчёте тегов из графа: {e}")
 
-        # ВАЖНО: НЕ добавляем статистику из Qdrant коллекций в sources_count
-        # Это приводит к дублированию, так как записи уже учтены в графе
-        # Qdrant используется только для векторного поиска, а граф - основной источник истины
-        # Если нужно добавить статистику из Qdrant, это должно быть отдельным полем
-
-        # Получаем размер БД
         db_size = None
         try:
             db_path = self.graph.conn.execute("PRAGMA database_list").fetchone()
@@ -1434,10 +1399,6 @@ class MemoryServiceAdapter:
         # Получаем активные задачи из трекера
         active_jobs = tracker.get_all_jobs(status="running", chat=request.chat) if request.chat else tracker.get_all_jobs(status="running")
         
-        # Прогресс индексации теперь хранится только в IndexingJobTracker (JSON файл)
-        # Прогресс индексации хранится только в IndexingJobTracker (JSON файл)
-        
-        # Формируем ответ из активных задач трекера
         progress_items = []
         for job in active_jobs:
             progress_items.append(
@@ -1770,7 +1731,6 @@ class MemoryServiceAdapter:
                 logger.debug(f"Не удалось распарсить properties для узла {row['id']}")
                 continue
             
-            # Используем source из properties, или chat, или "unknown"
             source = props.get("source") or props.get("chat", "unknown")
             
             # Дополнительная фильтрация по source, если указан
@@ -1781,7 +1741,6 @@ class MemoryServiceAdapter:
             if not timestamp_str:
                 continue
             
-            # Используем parse_datetime_utc для более гибкой обработки дат
             try:
                 timestamp = parse_datetime_utc(timestamp_str, default=None)
                 if timestamp is None:
@@ -1795,8 +1754,6 @@ class MemoryServiceAdapter:
                 )
                 continue
             
-            # Фильтруем по датам
-            # Убеждаемся, что оба datetime имеют timezone для корректного сравнения
             if request.date_from:
                 date_from = request.date_from
                 if timestamp.tzinfo is None and date_from.tzinfo is not None:
@@ -1954,7 +1911,6 @@ class MemoryServiceAdapter:
 
         for record_id in request.record_ids:
             try:
-                # Проверяем существование записи
                 node = self.graph.get_node(record_id)
                 if not node:
                     results.append(
@@ -2150,12 +2106,10 @@ class MemoryServiceAdapter:
                 if not props:
                     continue
                 
-                # Фильтрация по source в Python (более надежно)
                 source = props.get("source") or props.get("chat", "unknown")
                 if request.source and source != request.source:
                     continue
                 
-                # Фильтрация по тегам
                 if request.tags:
                     node_tags = props.get("tags", [])
                     if not isinstance(node_tags, list):
@@ -2163,7 +2117,6 @@ class MemoryServiceAdapter:
                     if not all(tag in node_tags for tag in request.tags):
                         continue
                 
-                # Фильтрация по датам
                 timestamp_str = props.get("timestamp") or props.get("created_at")
                 if timestamp_str:
                     try:
@@ -2177,7 +2130,6 @@ class MemoryServiceAdapter:
                                     continue
                     except Exception as e:
                         logger.debug(f"Ошибка при парсинге timestamp для экспорта: {e}")
-                        # Пропускаем записи с некорректными датами
                         if request.date_from or request.date_to:
                             continue
                 

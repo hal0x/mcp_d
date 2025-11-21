@@ -4,8 +4,8 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from memory_mcp.search.entity_context_enricher import EntityContextEnricher
-from memory_mcp.analysis.entity_dictionary import EntityDictionary
-from memory_mcp.analysis.entity_extraction import EntityExtractor
+from memory_mcp.analysis.entities.entity_dictionary import EntityDictionary
+from memory_mcp.analysis.entities.entity_extraction import EntityExtractor
 
 
 @pytest.fixture

@@ -38,12 +38,11 @@ class HybridSearchEngine:
             k: Параметр для Reciprocal Rank Fusion (по умолчанию 60)
         """
         self.collection = chroma_collection
-        self.alpha = alpha  # Вес векторного поиска
-        self.k = k  # RRF параметр
+        self.alpha = alpha
+        self.k = k
 
-        # BM25 индекс
         self.bm25_index: Optional[BM25Okapi] = None
-        self.documents_map: Dict[str, Any] = {}  # id -> полный документ
+        self.documents_map: Dict[str, Any] = {}
         self.tokenized_corpus: List[List[str]] = []
 
         logger.info(
@@ -65,32 +64,27 @@ class HybridSearchEngine:
         logger.info("Построение BM25 индекса...")
 
         try:
-            # Получаем все документы из коллекции
             result = self.collection.get(include=["documents", "metadatas"])
 
             if not result["documents"]:
                 logger.warning("Нет документов для индексации")
                 return
 
-            # Токенизируем документы для BM25
             self.tokenized_corpus = []
             self.documents_map = {}
 
             for doc_id, doc_text, metadata in zip(
                 result["ids"], result["documents"], result["metadatas"]
             ):
-                # Простая токенизация (можно улучшить для русского языка)
                 tokens = self._tokenize(doc_text)
                 self.tokenized_corpus.append(tokens)
 
-                # Сохраняем документ с метаданными
                 self.documents_map[doc_id] = {
                     "id": doc_id,
                     "text": doc_text,
                     "metadata": metadata,
                 }
 
-            # Создаём BM25 индекс
             self.bm25_index = BM25Okapi(self.tokenized_corpus)
 
             logger.info(
@@ -118,12 +112,10 @@ class HybridSearchEngine:
             return []
         
         try:
-            # Используем russian_tokenizer для улучшенной токенизации
             tokenizer = get_tokenizer()
             tokens = tokenizer.tokenize(text)
             return tokens
         except Exception as e:
-            # Fallback на простую токенизацию
             logger.debug(f"Ошибка при токенизации через russian_tokenizer, используем fallback: {e}")
             import re
             text = text.lower()

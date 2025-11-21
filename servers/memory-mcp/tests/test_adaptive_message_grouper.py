@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime, timedelta
 
-from memory_mcp.analysis.adaptive_message_grouper import AdaptiveMessageGrouper
+from memory_mcp.analysis.segmentation.adaptive_message_grouper import AdaptiveMessageGrouper
 
 
 def create_test_message(text: str, days_ago: int = 0) -> dict:

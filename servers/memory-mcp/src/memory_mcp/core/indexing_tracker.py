@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..utils.paths import find_project_root
+from ..utils.system.paths import find_project_root
 
 logger = logging.getLogger(__name__)
 

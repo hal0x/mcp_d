@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from src.memory_mcp.analysis.incremental_context_manager import IncrementalContextManager
+from memory_mcp.analysis.context.incremental_context_manager import IncrementalContextManager
 from memory_mcp.analysis.summarization.session.summarizer import SessionSummarizer
 
 

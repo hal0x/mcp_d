@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from memory_mcp.analysis.insight_graph import InsightGraphResult, SummaryInsightAnalyzer
+from memory_mcp.analysis.rendering.insight_graph import InsightGraphResult, SummaryInsightAnalyzer
 
 
 class StubEmbeddingClient:

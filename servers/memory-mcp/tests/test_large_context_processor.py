@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime, timedelta
 
-from memory_mcp.analysis.large_context_processor import LargeContextProcessor
+from memory_mcp.analysis.aggregation.large_context_processor import LargeContextProcessor
 
 
 def create_test_message(text: str, days_ago: int = 0) -> dict:

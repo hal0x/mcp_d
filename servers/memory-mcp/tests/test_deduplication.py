@@ -2,7 +2,7 @@
 
 import pytest
 
-from memory_mcp.utils.deduplication import (
+from memory_mcp.utils.data.deduplication import (
     deduplicate_by_hash,
     deduplicate_by_id,
     deduplicate_consecutive,

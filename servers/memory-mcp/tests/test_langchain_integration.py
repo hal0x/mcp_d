@@ -12,7 +12,7 @@ from memory_mcp.core.adapters.langchain_adapters import (
 from memory_mcp.core.adapters.langchain_prompts import LangChainPromptManager
 from memory_mcp.core.adapters.langchain_text_splitters import LangChainTextSplitter, create_text_splitter
 from memory_mcp.search.langchain_retrievers import HybridMemoryRetriever
-from memory_mcp.analysis.langchain_summarization import LangChainSummarizationChain
+from memory_mcp.analysis.summarization.langchain_summarization import LangChainSummarizationChain
 
 
 @pytest.mark.skipif(

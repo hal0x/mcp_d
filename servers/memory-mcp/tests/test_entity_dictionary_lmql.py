@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
 
-from memory_mcp.analysis.entity_dictionary import EntityDictionary
+from memory_mcp.analysis.entities.entity_dictionary import EntityDictionary
 from memory_mcp.core.adapters.lmql_adapter import LMQLAdapter
 
 

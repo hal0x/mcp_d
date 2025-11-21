@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime, timezone
 
-from memory_mcp.utils.datetime_utils import format_datetime_display
+from memory_mcp.utils.processing.datetime_utils import format_datetime_display
 
 
 class TestFormatDatetimeDisplay:

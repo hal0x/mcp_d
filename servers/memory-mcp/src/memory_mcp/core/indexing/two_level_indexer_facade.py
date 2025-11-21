@@ -75,7 +75,6 @@ class TwoLevelIndexer:
         """Инициализирует индексатор с указанными параметрами."""
         self.progress_callback = progress_callback
         
-        # Инициализируем embedding_client
         self.artifacts_path = Path(artifacts_path).expanduser()
         self.artifacts_path.mkdir(parents=True, exist_ok=True)
         self.reports_path = self.artifacts_path / "reports"
@@ -90,7 +89,6 @@ class TwoLevelIndexer:
                 )
         self.embedding_client = embedding_client
         
-        # Инициализируем Qdrant
         from ...config import get_settings
         settings = get_settings()
         qdrant_url = settings.get_qdrant_url()
@@ -104,7 +102,6 @@ class TwoLevelIndexer:
             logger.warning("QDRANT_URL не установлен, коллекции не будут созданы")
             self.qdrant_manager = None
         
-        # Сохраняем параметры
         self.enable_clustering = enable_clustering
         self.clustering_threshold = clustering_threshold
         self.min_cluster_size = min_cluster_size
@@ -126,7 +123,6 @@ class TwoLevelIndexer:
         self.max_group_size = max_group_size
         self.max_group_tokens = max_group_tokens
         
-        # Инициализируем компоненты
         self.session_segmenter = SessionSegmenter(
             gap_minutes=gap_minutes,
             max_session_hours=max_session_hours,

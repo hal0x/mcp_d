@@ -25,7 +25,6 @@ def _mask_url_in_log(url: str) -> str:
     try:
         parsed = urlparse(url)
         if parsed.username or parsed.password:
-            # Маскируем username и password
             masked_netloc = f"{parsed.hostname or ''}"
             if parsed.port:
                 masked_netloc += f":{parsed.port}"
@@ -40,7 +39,6 @@ def _mask_url_in_log(url: str) -> str:
             return masked
         return url
     except Exception:
-        # Если не удалось распарсить, возвращаем как есть (но это не должно происходить)
         return url
 
 

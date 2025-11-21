@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from memory_mcp.analysis.cluster_summarizer import ClusterSummarizer
+from memory_mcp.analysis.summarization.cluster_summarizer import ClusterSummarizer
 from memory_mcp.core.adapters.lmql_adapter import LMQLAdapter
 
 

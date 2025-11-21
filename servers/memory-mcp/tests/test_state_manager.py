@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from zoneinfo import ZoneInfo
 
-from memory_mcp.utils.state_manager import (
+from memory_mcp.utils.system.state_manager import (
     StateBase,
     StateManager,
     deserialize_datetime,
