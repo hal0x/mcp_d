@@ -1729,19 +1729,8 @@ class EntityDictionary:
                 batch_results = await self._generate_descriptions_batch_single(batch, llm_client)
                 results.update(batch_results)
             except Exception as e:
-                logger.warning(f"Ошибка при батч-генерации описаний для батча {i//batch_size + 1}: {e}")
-                # Fallback на индивидуальную генерацию для этого батча
-                for candidate in batch:
-                    try:
-                        description = await self.generate_entity_description(
-                            candidate["entity_type"],
-                            candidate.get("original_value", candidate["normalized_value"]),
-                            all_contexts=candidate.get("all_contexts")
-                        )
-                        if description:
-                            results[candidate["normalized_value"]] = description
-                    except Exception as e2:
-                        logger.debug(f"Не удалось сгенерировать описание для {candidate['normalized_value']}: {e2}")
+                logger.warning(f"Ошибка при батч-генерации описаний для батча {i//batch_size + 1}: {e}, пропускаем батч")
+                # Пропускаем проблемный батч - индивидуальная генерация уже имеет свои фоллбеки
         
         return results
     
@@ -1814,10 +1803,9 @@ class EntityDictionary:
                     prompt, candidates, normalized_values
                 )
             except Exception as e:
-                logger.warning(f"Ошибка при использовании LMQL для батч-генерации описаний: {e}")
-                # Fallback на старую реализацию
+                logger.warning(f"Ошибка при использовании LMQL для батч-генерации описаний: {e}, используем LLM")
         
-        # Fallback на старую реализацию
+        # Используем обычный LLM для генерации описаний
         try:
             async with llm_client:
                 if hasattr(llm_client, 'generate_summary'):

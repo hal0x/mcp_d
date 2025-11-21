@@ -203,6 +203,7 @@ class SessionSummarizer:
             summary_structure = None
             summary_text = ""
             
+            # Пробуем LMQL, если доступен
             if self.lmql_adapter:
                 try:
                     logger.debug("Используется LMQL для генерации структурированной саммаризации")
@@ -210,9 +211,9 @@ class SessionSummarizer:
                         self.lmql_adapter, prompt, chat_mode, dominant_language
                     )
                 except Exception as e:
-                    logger.warning(f"Ошибка при использовании LMQL для саммаризации: {e}, используем fallback")
-                    summary_structure = None
+                    logger.warning(f"Ошибка при использовании LMQL для саммаризации: {e}, используем LLM")
             
+            # Если LMQL не сработал или недоступен, используем обычный LLM
             if not summary_structure:
                 async with self.embedding_client:
                     summary_text = await self.embedding_client.generate_summary(

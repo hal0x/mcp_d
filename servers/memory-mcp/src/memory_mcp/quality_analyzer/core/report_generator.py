@@ -213,11 +213,12 @@ class ReportGenerator:
         # Используем LMQL для структурированной генерации рекомендаций
         if self.lmql_adapter:
             logger.debug("Используется LMQL для генерации рекомендаций")
-            return await self._generate_recommendations_with_lmql(
-                chat_name, payload
-            )
+            result = await self._generate_recommendations_with_lmql(chat_name, payload)
+            if result is not None:
+                return result
+            # Если LMQL вернул None, продолжаем с обычным LLM
 
-        # Fallback на старую реализацию, если LMQL недоступен
+        # Используем обычный LLM, если LMQL недоступен или не сработал
         if not self.embedding_client:
             logger.debug("Генератор рекомендаций LM Studio не настроен")
             return []
@@ -312,28 +313,12 @@ class ReportGenerator:
                     return self._normalize_llm_entries(recommendations)
 
             logger.warning(f"Неожиданный формат ответа LMQL: {type(result)}")
-            return []
+            return None
 
         except Exception as e:
             logger.error(f"Ошибка при использовании LMQL для генерации рекомендаций: {e}")
-            # Fallback на старую реализацию при ошибке
-            if self.embedding_client:
-                try:
-                    prompt = self.prompt_manager.format(
-                        "quality_recommendations_base",
-                        chat_name=chat_name,
-                        metrics_json=json.dumps(payload, ensure_ascii=False, indent=2),
-                    )
-                    async with self.embedding_client:
-                        response = await self.embedding_client.generate_summary(
-                            prompt,
-                            temperature=self.temperature,
-                            max_tokens=self.max_tokens,
-                        )
-                    return self._parse_llm_recommendations(response)
-                except Exception as fallback_exc:
-                    logger.warning(f"Fallback также не удался: {fallback_exc}")
-            return []
+            # Возвращаем None, чтобы основной метод мог использовать fallback на LLM
+            return None
 
     def _get_type_display_name(self, query_type: str) -> str:
         """Получение отображаемого имени типа запроса"""

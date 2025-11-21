@@ -162,6 +162,30 @@ class L2Indexer:
         strategy = self.message_grouping_strategy
         groups = []
 
+    def _add_session_fallback_group(
+        self, groups: List[Dict[str, Any]], messages: List[Dict[str, Any]], session_id: str
+    ) -> None:
+        """Добавляет группу с fallback на стратегию session.
+        
+        Args:
+            groups: Список групп для добавления
+            messages: Сообщения для группировки
+            session_id: ID сессии
+        """
+        if len(messages) >= self.min_group_size:
+            message_ids = [
+                msg.get("id") or msg.get("message_id") or f"msg_{i}"
+                for i, msg in enumerate(messages)
+            ]
+            groups.append(
+                {
+                    "group_id": f"{session_id}-G001",
+                    "messages": messages,
+                    "message_ids": message_ids,
+                    "strategy": "session",
+                }
+            )
+
         if strategy == "session":
             # Стратегия "session": используем всю сессию как одну группу (если размер подходит)
             if (
@@ -242,19 +266,7 @@ class L2Indexer:
                     f"Ошибка семантической перегруппировки, используем стратегию session: {e}"
                 )
                 # Fallback на стратегию session
-                if len(messages) >= self.min_group_size:
-                    message_ids = [
-                        msg.get("id") or msg.get("message_id") or f"msg_{i}"
-                        for i, msg in enumerate(messages)
-                    ]
-                    groups.append(
-                        {
-                            "group_id": f"{session_id}-G001",
-                            "messages": messages,
-                            "message_ids": message_ids,
-                            "strategy": "session",
-                        }
-                    )
+                self._add_session_fallback_group(groups, messages, session_id)
 
         elif strategy == "adaptive" and self.adaptive_grouper:
             # Стратегия "adaptive": адаптивная группировка с учетом размера контекста
@@ -282,19 +294,7 @@ class L2Indexer:
                     f"Ошибка адаптивной группировки, используем стратегию session: {e}"
                 )
                 # Fallback на стратегию session
-                if len(messages) >= self.min_group_size:
-                    message_ids = [
-                        msg.get("id") or msg.get("message_id") or f"msg_{i}"
-                        for i, msg in enumerate(messages)
-                    ]
-                    groups.append(
-                        {
-                            "group_id": f"{session_id}-G001",
-                            "messages": messages,
-                            "message_ids": message_ids,
-                            "strategy": "session",
-                        }
-                    )
+                self._add_session_fallback_group(groups, messages, session_id)
 
         else:
             # Неизвестная стратегия или компонент недоступен - используем session
