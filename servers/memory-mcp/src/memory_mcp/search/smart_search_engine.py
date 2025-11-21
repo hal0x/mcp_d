@@ -437,13 +437,13 @@ class SmartSearchEngine:
                     2 <= len(QUESTIONS) <= 3 and
                     all(isinstance(q, str) for q in QUESTIONS)
                 """,
-                    temperature=0.5,
+                temperature=0.5,
                 max_tokens=512,
-                )
+            )
 
             if isinstance(response_data, list) and all(
                 isinstance(q, str) for q in response_data
-                ):
+            ):
                 return response_data[:3]
             else:
                 raise RuntimeError(f"Неожиданный формат ответа LMQL: {response_data}")
@@ -492,13 +492,13 @@ class SmartSearchEngine:
                     2 <= len(REFINEMENTS) <= 3 and
                     all(isinstance(r, str) for r in REFINEMENTS)
                 """,
-                    temperature=0.5,
+                temperature=0.5,
                 max_tokens=512,
-                )
+            )
 
             if isinstance(response_data, list) and all(
                 isinstance(r, str) for r in response_data
-                ):
+            ):
                 return response_data[:3]
             else:
                 raise RuntimeError(f"Неожиданный формат ответа LMQL: {response_data}")

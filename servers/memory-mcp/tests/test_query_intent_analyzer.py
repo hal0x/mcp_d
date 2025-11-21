@@ -31,12 +31,12 @@ async def test_analyze_intent_informational(intent_analyzer, mock_lmql_adapter):
         "reasoning": "Пользователь ищет информацию",
     }
     
-        intent = await intent_analyzer.analyze_intent("что такое блокчейн")
-        
+    intent = await intent_analyzer.analyze_intent("что такое блокчейн")
+    
     assert intent.intent_type == "informational"
-        assert intent.confidence > 0.0
-        assert intent.recommended_db_weight > 0.0
-        assert intent.recommended_artifact_weight > 0.0
+    assert intent.confidence > 0.0
+    assert intent.recommended_db_weight > 0.0
+    assert intent.recommended_artifact_weight > 0.0
 
 
 @pytest.mark.asyncio
@@ -48,10 +48,10 @@ async def test_analyze_intent_transactional(intent_analyzer, mock_lmql_adapter):
         "reasoning": "Пользователь хочет выполнить действие",
     }
     
-        intent = await intent_analyzer.analyze_intent("как создать кошелек")
-        
-        assert intent.intent_type == "transactional"
-        assert intent.recommended_db_weight > intent.recommended_artifact_weight
+    intent = await intent_analyzer.analyze_intent("как создать кошелек")
+    
+    assert intent.intent_type == "transactional"
+    assert intent.recommended_db_weight > intent.recommended_artifact_weight
 
 
 @pytest.mark.asyncio
@@ -63,10 +63,10 @@ async def test_analyze_intent_navigational(intent_analyzer, mock_lmql_adapter):
         "reasoning": "Пользователь ищет место",
     }
     
-        intent = await intent_analyzer.analyze_intent("где найти информацию о биткоине")
-        
-        assert intent.intent_type == "navigational"
-        assert intent.recommended_db_weight > intent.recommended_artifact_weight
+    intent = await intent_analyzer.analyze_intent("где найти информацию о биткоине")
+    
+    assert intent.intent_type == "navigational"
+    assert intent.recommended_db_weight > intent.recommended_artifact_weight
 
 
 @pytest.mark.asyncio
@@ -77,11 +77,11 @@ async def test_analyze_intent_with_lmql(intent_analyzer, mock_lmql_adapter):
         "confidence": 0.9,
         "reasoning": "test",
     }
-        
-        intent = await intent_analyzer.analyze_intent("test query")
-        
-        assert intent.intent_type == "informational"
-        assert intent.confidence == 0.9
+    
+    intent = await intent_analyzer.analyze_intent("test query")
+    
+    assert intent.intent_type == "informational"
+    assert intent.confidence == 0.9
 
 
 @pytest.mark.asyncio

@@ -103,7 +103,7 @@ class QueryIntentAnalyzer:
         if self.lmql_adapter:
             logger.debug("Используется LMQL для анализа намерения запроса")
             return await self._analyze_intent_with_lmql(query)
-        
+
         # Если LMQL недоступен, выбрасываем ошибку
         raise RuntimeError(
             "LMQL не настроен. Установите MEMORY_MCP_USE_LMQL=true и настройте модель"

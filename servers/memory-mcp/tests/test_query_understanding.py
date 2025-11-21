@@ -34,11 +34,11 @@ async def test_understand_query_simple(understanding_engine, mock_lmql_adapter):
         "enhanced_query": "блокчейн",
     }
     
-        understanding = await understanding_engine.understand_query("блокчейн")
-        
-        assert understanding.original_query == "блокчейн"
-        assert len(understanding.sub_queries) > 0
-        assert "блокчейн" in understanding.sub_queries[0]
+    understanding = await understanding_engine.understand_query("блокчейн")
+    
+    assert understanding.original_query == "блокчейн"
+    assert len(understanding.sub_queries) > 0
+    assert "блокчейн" in understanding.sub_queries[0]
 
 
 @pytest.mark.asyncio
@@ -55,11 +55,11 @@ async def test_understand_query_complex(understanding_engine, mock_lmql_adapter)
         "enhanced_query": "блокчейн и криптовалюты технология применение",
     }
     
-        understanding = await understanding_engine.understand_query("блокчейн и криптовалюты")
-        
-        assert understanding.original_query == "блокчейн и криптовалюты"
-        # Должна быть декомпозиция
-        assert len(understanding.sub_queries) >= 1
+    understanding = await understanding_engine.understand_query("блокчейн и криптовалюты")
+    
+    assert understanding.original_query == "блокчейн и криптовалюты"
+    # Должна быть декомпозиция
+    assert len(understanding.sub_queries) >= 1
     assert len(understanding.key_concepts) > 0
 
 
@@ -76,12 +76,12 @@ async def test_understand_query_with_lmql(understanding_engine, mock_lmql_adapte
         },
         "enhanced_query": "блокчейн и криптовалюты технология применение",
     }
-        
-        understanding = await understanding_engine.understand_query("блокчейн и криптовалюты")
-        
-        assert len(understanding.sub_queries) == 2
-        assert len(understanding.key_concepts) > 0
-        assert understanding.enhanced_query != understanding.original_query
+    
+    understanding = await understanding_engine.understand_query("блокчейн и криптовалюты")
+    
+    assert len(understanding.sub_queries) == 2
+    assert len(understanding.key_concepts) > 0
+    assert understanding.enhanced_query != understanding.original_query
 
 
 @pytest.mark.asyncio
