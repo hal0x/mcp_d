@@ -9,7 +9,7 @@
 | Слой | Назначение | Ключевые директории/файлы |
 |------|------------|---------------------------|
 | Внешние интерфейсы | CLI, MCP‑сервер (stdio/HTTP), REST API | `src/memory_mcp/cli/`, `scripts/`, `src/memory_mcp/mcp/server.py`, `run_server.py` |
-| Оркестрация и ядро | Управление индексированием, доступ к LM Studio/Ollama и хранилищам | `src/memory_mcp/core/indexer.py`, `src/memory_mcp/core/ollama_client.py`, `src/memory_mcp/core/lmstudio_client.py`, `src/memory_mcp/core/indexing_tracker.py` |
+| Оркестрация и ядро | Управление индексированием, доступ к LM Studio/Ollama и хранилищам | `src/memory_mcp/core/indexing/`, `src/memory_mcp/core/ollama_client.py`, `src/memory_mcp/core/lmstudio_client.py`, `src/memory_mcp/core/services/background_indexing.py` |
 | Аналитика и агрегация | Сегментация, саммаризация, контроль качества, кластеры, отчёты | `src/memory_mcp/analysis/` |
 | Поиск и память | Гибридный/векторный поиск, Smart Search, граф знаний, долговременная память | `src/memory_mcp/search/`, `src/memory_mcp/memory/` |
 | Индексация источников | Индексаторы для различных источников данных | `src/memory_mcp/indexing/` |
@@ -33,7 +33,7 @@
    - Сообщения, сессии, задачи и кластеры пишутся в ChromaDB (коллекции `telegram_messages`, `chat_sessions`, `chat_tasks`, `session_clusters`)
    - Типизированный граф знаний сохраняется в SQLite через `TypedGraphMemory` (5 типов узлов, 8 типов рёбер)
    - Векторные эмбеддинги сохраняются в Qdrant (опционально) или ChromaDB
-6. **Отчёты и память**: Markdown‑отчёты сохраняются в `artifacts/reports/`, граф знаний строится через `memory/typed_graph.py`, результаты доступны через MCP инструменты, CLI команды и REST API.
+6. **Отчёты и память**: Markdown‑отчёты сохраняются в `artifacts/reports/`, граф знаний строится через `memory/storage/graph/typed_graph.py`, результаты доступны через MCP инструменты, CLI команды и REST API.
 
 ## Основные компоненты
 
@@ -78,10 +78,10 @@
 - `search/smart_search.py` — интерактивный LLM-assisted поиск с сессиями, обратной связью и автоматическим уточнением запросов.
 - `search/search_explainer.py` — объяснение результатов поиска с декомпозицией scores (BM25, Vector, RRF) и трассировкой связей через граф.
 - Модуль `memory/`:
-  - `typed_graph.py` — типизированный граф знаний (SQLite + NetworkX) с 5 типами узлов (Entity, Event, DocChunk, Topic, ToolCall) и 8 типами рёбер
-  - `vector_store.py` — обёртка над Qdrant для векторного поиска (gracefully выключается, если Qdrant недоступен)
-  - `importance_scoring.py` — оценка важности сообщений (0.0-1.0) и интеллектуальная очистка памяти (Memory Pruning)
-  - `embeddings.py` — сервис эмбеддингов с поддержкой батчинга и различных провайдеров
+  - `storage/graph/typed_graph.py` — типизированный граф знаний (SQLite + NetworkX) с 5 типами узлов (Entity, Event, DocChunk, Topic, ToolCall) и 8 типами рёбер
+  - `storage/vector/vector_store.py` — обёртка над Qdrant для векторного поиска (gracefully выключается, если Qdrant недоступен)
+  - `storage/graph/importance_scoring.py` — оценка важности сообщений (0.0-1.0) и интеллектуальная очистка памяти (Memory Pruning)
+  - `embeddings/service.py` — сервис эмбеддингов с поддержкой батчинга и различных провайдеров
 
 ## Хранилища и артефакты
 

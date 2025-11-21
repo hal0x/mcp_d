@@ -58,12 +58,25 @@ memory-mcp/
 ├── src/memory_mcp/
 │   ├── cli/                 # CLI утилиты
 │   ├── indexing/            # Индексаторы источников (Telegram и др.)
-│   ├── memory/              # Граф памяти, FTS, векторное хранилище
+│   ├── memory/              # Хранилище памяти
+│   │   ├── storage/         # Хранилище данных
+│   │   │   ├── graph/       # Граф знаний (SQLite+NetworkX)
+│   │   │   └── vector/      # Векторное хранилище (Qdrant)
+│   │   └── embeddings/      # Сервис эмбеддингов
 │   ├── mcp/                 # MCP schema, adapters и сервер
-│   ├── core/                # Основные компоненты (lmstudio_client, ollama_client)
+│   ├── core/                # Основные компоненты
+│   │   ├── indexing/        # Двухуровневая индексация
+│   │   ├── adapters/        # Адаптеры (LangChain, LMQL)
+│   │   └── services/        # Сервисы (фоновая индексация)
 │   ├── analysis/            # Анализ данных и саммаризация
-│   ├── quality_analyzer/    # Анализ качества поиска
+│   │   └── quality/         # Анализ качества поиска
+│   ├── models/              # Модели данных (MemoryRecord, MemoryRecordPayload)
+│   ├── search/              # Smart Search и гибридный поиск
 │   └── utils/               # Утилиты
+│       ├── text/            # Текстовые утилиты
+│       ├── data/            # Утилиты для данных
+│       ├── system/          # Системные утилиты
+│       └── processing/      # Утилиты обработки
 ├── tests/                   # Тесты
 ├── scripts/                 # Скрипты и утилиты
 ├── docs/                    # Документация
@@ -350,8 +363,18 @@ memory_mcp stats
 ```
 src/memory_mcp/
 ├── core/                      # Основная функциональность
-│   ├── indexer.py             # Двухуровневый индексатор
-│   ├── indexing_tracker.py    # Отслеживание прогресса индексации
+│   ├── indexing/              # Двухуровневая индексация
+│   │   ├── two_level_indexer_facade.py  # Фасад двухуровневой индексации
+│   │   ├── l1_indexer.py      # L1 индексатор (сессии)
+│   │   ├── l2_indexer.py      # L2 индексатор (сообщения)
+│   │   └── ...                # Другие компоненты индексации
+│   ├── adapters/              # Адаптеры
+│   │   ├── langchain_adapters.py    # LangChain адаптеры
+│   │   ├── langchain_prompts.py     # LangChain промпты
+│   │   ├── langchain_text_splitters.py  # LangChain text splitters
+│   │   └── lmql_adapter.py    # LMQL адаптер
+│   ├── services/              # Сервисы
+│   │   └── background_indexing.py  # Фоновая индексация
 │   ├── manager.py             # Главный менеджер
 │   ├── lmstudio_client.py     # Клиент LM Studio Server
 │   └── ollama_client.py       # Клиент Ollama
@@ -360,33 +383,44 @@ src/memory_mcp/
 │   ├── adapters.py            # Адаптеры для работы с памятью
 │   └── schema.py              # Схемы данных (Pydantic модели)
 ├── memory/                    # Хранилище памяти
-│   ├── typed_graph.py         # Типизированный граф знаний (SQLite+NetworkX)
-│   ├── vector_store.py        # Векторное хранилище (Qdrant)
-│   ├── embeddings.py          # Сервис эмбеддингов
-│   └── importance_scoring.py  # Оценка важности и очистка памяти
+│   ├── storage/               # Хранилище данных
+│   │   ├── graph/             # Граф знаний
+│   │   │   ├── typed_graph.py         # Типизированный граф (SQLite+NetworkX)
+│   │   │   ├── graph_types.py         # Типы узлов и рёбер
+│   │   │   ├── graph_builder.py       # Построитель графа
+│   │   │   └── importance_scoring.py  # Оценка важности
+│   │   └── vector/            # Векторное хранилище
+│   │       ├── vector_store.py        # Векторное хранилище (Qdrant)
+│   │       └── qdrant_collections.py  # Менеджер коллекций Qdrant
+│   └── embeddings/            # Сервис эмбеддингов
+│       └── service.py         # Сервис эмбеддингов
+├── models/                    # Модели данных
+│   └── memory.py              # MemoryRecord, MemoryRecordPayload
 ├── analysis/                  # Анализ данных
-│   ├── session_segmentation.py    # Сегментация сессий
-│   ├── day_grouping.py            # Группировка по дням
-│   ├── session_summarizer.py      # Саммаризация сессий
-│   ├── entity_extraction.py       # Извлечение сущностей
-│   ├── markdown_renderer.py       # Рендеринг Markdown
-│   ├── cross_analysis.py          # Кросс-анализ
-│   ├── insight_graph.py           # Граф инсайтов
-│   ├── session_clustering.py      # Кластеризация сессий (HDBSCAN)
-│   └── incremental_context_manager.py  # Расширенный контекст
+│   ├── quality/               # Анализ качества
+│   │   ├── quality_analyzer.py        # Основной анализатор качества
+│   │   └── core/                      # Ядро анализа качества
+│   ├── summarization/         # Саммаризация
+│   │   └── session/           # Саммаризация сессий
+│   ├── segmentation/          # Сегментация
+│   ├── aggregation/           # Агрегация
+│   ├── entities/              # Извлечение сущностей
+│   ├── rendering/             # Рендеринг
+│   └── ...                    # Другие компоненты анализа
 ├── search/                    # Поиск
 │   ├── hybrid_search.py       # Гибридный поиск (BM25 + Vector)
-│   ├── smart_search.py        # Smart Search движок
+│   ├── smart_search_engine.py # Smart Search движок
 │   ├── search_explainer.py    # Объяснение результатов поиска
-│   └── search_summaries.py    # Поиск по саммаризациям
+│   └── ...                    # Другие компоненты поиска
 ├── indexing/                  # Индексаторы источников
-│   └── telegram_indexer.py    # Индексатор Telegram чатов
-├── quality_analyzer/          # Анализ качества
-│   └── utils/                 # Утилиты анализа качества
+│   └── telegram.py            # Индексатор Telegram чатов
 ├── cli/                       # CLI интерфейс
 │   └── main.py                # Главный CLI
 └── utils/                     # Утилиты
-    └── url_validator.py       # Валидация URL
+    ├── text/                  # Текстовые утилиты
+    ├── data/                  # Утилиты для данных
+    ├── system/                # Системные утилиты
+    └── processing/            # Утилиты обработки
 ```
 
 ### Ключевые компоненты

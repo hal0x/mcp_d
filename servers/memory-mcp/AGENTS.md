@@ -21,11 +21,24 @@ memory-mcp/
 │   ├── indexing/            # Индексаторы источников (Telegram и др.)
 │   ├── memory/              # Граф памяти, FTS, векторное хранилище
 │   ├── mcp/                 # MCP schema, adapters и сервер
-│   ├── core/                # Основные компоненты (lmstudio_client, indexer)
+│   ├── core/                # Основные компоненты
+│   │   ├── indexing/        # Двухуровневая индексация
+│   │   ├── adapters/        # Адаптеры (LangChain, LMQL)
+│   │   └── services/        # Сервисы (фоновая индексация)
 │   ├── analysis/            # Анализ данных и саммаризация
-│   ├── quality_analyzer/    # Анализ качества поиска
+│   │   └── quality/         # Анализ качества поиска
+│   ├── memory/              # Хранилище памяти
+│   │   ├── storage/         # Хранилище данных
+│   │   │   ├── graph/       # Граф знаний (SQLite+NetworkX)
+│   │   │   └── vector/      # Векторное хранилище (Qdrant)
+│   │   └── embeddings/      # Сервис эмбеддингов
+│   ├── models/              # Модели данных (MemoryRecord, MemoryRecordPayload)
 │   ├── search/              # Smart Search и гибридный поиск
 │   └── utils/               # Утилиты
+│       ├── text/            # Текстовые утилиты
+│       ├── data/            # Утилиты для данных
+│       ├── system/          # Системные утилиты
+│       └── processing/      # Утилиты обработки
 ├── tests/                   # Тесты
 ├── scripts/                 # Скрипты и утилиты
 ├── docs/                    # Документация
@@ -63,7 +76,7 @@ Memory MCP использует низкоуровневый `mcp.server.Server`
    - Единый формат JSON с текстовым и структурированным содержимым
    - Обработка различных типов данных (dict, list, модели)
 
-3. **Кастомная обработка ошибок**: Функция `format_error_message()` из модуля `quality_analyzer.utils.error_handler` обеспечивает единообразные сообщения об ошибках с префиксом "Ошибка:" для всех инструментов, что улучшает отладку и логирование.
+3. **Кастомная обработка ошибок**: Функция `format_error_message()` из модуля `analysis.quality.utils.error_handler` обеспечивает единообразные сообщения об ошибках с префиксом "Ошибка:" для всех инструментов, что улучшает отладку и логирование.
 
 **Пример использования:**
 ```python
@@ -95,20 +108,20 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 - Предоставляет `fetch` для чтения оригинальной записи с вложениями.
 - Поддерживает торговые сигналы и специализированные запросы.
 
-### Граф памяти (`src/memory_mcp/memory/typed_graph.py`)
+### Граф памяти (`src/memory_mcp/memory/storage/graph/typed_graph.py`)
 
 - SQLite + NetworkX; FTS5 таблица `node_search`.
 - Добавляет/обновляет узлы (`DocChunkNode`, `EventNode` и др.).
 - Предоставляет метод `search_text` (BM25/snippet).
 - Поддерживает типизированные связи между узлами.
 
-### Векторное хранилище (`src/memory_mcp/memory/vector_store.py`)
+### Векторное хранилище (`src/memory_mcp/memory/storage/vector/vector_store.py`)
 
 - Обёртка над Qdrant (создание коллекции, upsert, поиск).
 - Конфигурируется через `MEMORY_MCP_QDRANT_URL`; gracefully выключается, если Qdrant недоступен.
 - Поддерживает фильтрацию по метаданным.
 
-### Embed-сервис (`src/memory_mcp/memory/embeddings.py`)
+### Embed-сервис (`src/memory_mcp/memory/embeddings/service.py`)
 
 - HTTP клиент для `text-embeddings-inference` (или совместимых сервисов).
 - Функция `build_embedding_service_from_env()` читает `MEMORY_MCP_EMBEDDINGS_URL` или параметры LM Studio.
@@ -120,7 +133,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 - `TelegramIndexer` → нормализованные `MemoryRecord`.
 - CLI команда `ingest-telegram` вызывает индексатор + `MemoryIngestor`.
 
-### Двухуровневая индексация (`src/memory_mcp/core/indexer.py`)
+### Двухуровневая индексация (`src/memory_mcp/core/indexing/`)
 
 - **TwoLevelIndexer** — двухуровневая индексация: L1 (сессии с саммари) и L2 (сообщения с контекстом или группировкой).
 - **L1 уровень**: Индексация сессий с саммаризацией через LLM, создание эмбеддингов для целых сессий.
@@ -202,7 +215,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
 
 ### Менеджмент фоновой индексации
 
-- `IndexingJobTracker` в `core/indexing_tracker.py` отслеживает жизненный цикл индексаций (`start_background_indexing`, `stop_background_indexing`, `get_background_indexing_status`).
+- `IndexingJobTracker` в `core/services/background_indexing.py` отслеживает жизненный цикл индексаций (`start_background_indexing`, `stop_background_indexing`, `get_background_indexing_status`).
 - Стадии включают очистку старых данных, загрузку чатов, оптимизацию SQLite (VACUUM/ANALYZE) и проверку целостности, чтобы диагностировать узкие места.
 - `MemoryServiceAdapter` и CLI используют общий менеджер для чтения/обновления статусов, что позволяет отображать прогресс и предотвращать параллельные full-rebuild для одного чата.
 - Настройки фоновой индексации (`MEMORY_MCP_BACKGROUND_INDEXING_ENABLED`, `MEMORY_MCP_BACKGROUND_INDEXING_INTERVAL`) включают периодический обход `input/` и безопасное завершение при остановке сервера.
@@ -347,17 +360,17 @@ Memory MCP поддерживает интеграцию с LangChain фрейм
 
 #### Компоненты LangChain
 
-**Адаптеры (`src/memory_mcp/core/langchain_adapters.py`):**
+**Адаптеры (`src/memory_mcp/core/adapters/langchain_adapters.py`):**
 - `LangChainEmbeddingAdapter` — обертка над LangChain Embeddings, совместимая с `EmbeddingService`
 - `LangChainLLMAdapter` — обертка над LangChain LLM, совместимая с `LMStudioEmbeddingClient` для LLM вызовов
 - Функции-фабрики: `build_langchain_embeddings_from_env()`, `build_langchain_llm_from_env()`, `get_llm_client_factory()`
 
-**Prompt Manager (`src/memory_mcp/core/langchain_prompts.py`):**
+**Prompt Manager (`src/memory_mcp/core/adapters/langchain_prompts.py`):**
 - `LangChainPromptManager` — менеджер промптов на базе LangChain `PromptTemplate` и `ChatPromptTemplate`
 - Поддержка загрузки промптов из файлов с валидацией переменных
 - Совместимость с существующим `PromptTemplateManager`
 
-**Text Splitters (`src/memory_mcp/core/langchain_text_splitters.py`):**
+**Text Splitters (`src/memory_mcp/core/adapters/langchain_text_splitters.py`):**
 - `LangChainTextSplitter` — обертка над `RecursiveCharacterTextSplitter`
 - Поддержка семантической разбивки через `SemanticChunker` (опционально)
 - Автоматическое использование в `LMStudioEmbeddingClient._split_text_into_chunks()`
@@ -393,7 +406,7 @@ export MEMORY_MCP_LANGCHAIN_SUMMARIZATION_MODE=map_reduce
 **Программное использование:**
 ```python
 # Использование LangChain адаптеров
-from memory_mcp.core.langchain_adapters import (
+from memory_mcp.core.adapters.langchain_adapters import (
     build_langchain_embeddings_from_env,
     build_langchain_llm_from_env,
 )
@@ -430,7 +443,7 @@ Memory MCP поддерживает интеграцию с LMQL (Language Model
 
 #### Компоненты LMQL
 
-**Адаптер (`src/memory_mcp/core/lmql_adapter.py`):**
+**Адаптер (`src/memory_mcp/core/adapters/lmql_adapter.py`):**
 - `LMQLAdapter` — адаптер для работы с LMQL
 - Метод `execute_query()` — выполнение произвольных LMQL запросов
 - Метод `execute_json_query()` — выполнение запросов с гарантированным JSON выводом
@@ -444,7 +457,7 @@ Memory MCP поддерживает интеграцию с LMQL (Language Model
 - Гарантирует валидность полей: `sub_queries`, `implicit_requirements`, `alternative_formulations`, `key_concepts`, `concept_relationships`, `enhanced_query`
 - Встроенные ограничения на размеры массивов (максимум 5 подзапросов, 3 альтернативные формулировки и т.д.)
 
-**RelevanceAnalyzer (`src/memory_mcp/quality_analyzer/core/relevance_analyzer.py`):**
+**RelevanceAnalyzer (`src/memory_mcp/analysis/quality/core/relevance_analyzer.py`):**
 - Использует LMQL для анализа релевантности результатов поиска
 - Гарантирует валидность структуры: `overall_score`, `individual_scores`, `problems`, `explanation`, `recommendations`
 - Валидация числовых диапазонов (0.0 <= score <= 10.0)
@@ -480,7 +493,7 @@ Memory MCP поддерживает интеграцию с LMQL (Language Model
 - Гарантирует формат массивов строк с валидацией размера (2-3 элемента)
 - Устраняет необходимость парсинга markdown code blocks
 
-**ReportGenerator (`src/memory_mcp/quality_analyzer/core/report_generator.py`):**
+**ReportGenerator (`src/memory_mcp/analysis/quality/core/report_generator.py`):**
 - Использует LMQL для генерации структурированных рекомендаций по качеству поиска
 - Гарантирует валидность структуры: `title`, `description`, `suggestions`, `priority`
 - Валидация приоритетов (high/medium/low/ai) и размера массива рекомендаций (до 10)
@@ -519,7 +532,7 @@ export MEMORY_MCP_USE_LMQL=false
 **Программное использование:**
 ```python
 # Использование LMQL адаптера
-from memory_mcp.core.lmql_adapter import build_lmql_adapter_from_env, LMQLAdapter
+from memory_mcp.core.adapters.lmql_adapter import build_lmql_adapter_from_env, LMQLAdapter
 
 # Создание адаптера из настроек
 adapter = build_lmql_adapter_from_env()
