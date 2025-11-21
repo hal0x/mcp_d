@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ...core.langchain_adapters import LangChainLLMAdapter
+from ...core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
 from .templates import DEFAULT_PROMPTS_DIR, PromptTemplateManager
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class RelevanceAnalyzer:
         max_response_tokens: int = 131072,  # Для gpt-oss-20b (максимальный лимит)
         prompts_dir: Path | None = None,
         thinking_level: str | None = None,
+        lmql_adapter: LMQLAdapter | None = None,
     ):
         self.model_name = model_name
         self.base_url = base_url
@@ -43,6 +45,12 @@ class RelevanceAnalyzer:
         )
 
         self.prompt_manager = PromptTemplateManager(prompts_dir or DEFAULT_PROMPTS_DIR)
+        
+        # LMQL адаптер для структурированной генерации
+        try:
+            self.lmql_adapter = lmql_adapter or build_lmql_adapter_from_env()
+        except RuntimeError:
+            self.lmql_adapter = None
 
         logger.info("Инициализирован RelevanceAnalyzer (модель: %s)", model_name)
 
@@ -58,20 +66,15 @@ class RelevanceAnalyzer:
         if not search_results:
             return self._analyze_empty_results(query_data)
 
-        prompt = self._generate_adaptive_prompt(query_data, search_results)
+        # Используем LMQL для анализа релевантности
+        if self.lmql_adapter:
+            logger.debug("Используется LMQL для анализа релевантности")
+            return await self._analyze_relevance_with_lmql(query_data, search_results)
 
-        try:
-            async with self.embedding_client:
-                response = await self.embedding_client.generate_summary(
-                    prompt,
-                    temperature=self.temperature,
-                    max_tokens=self.max_response_tokens,
-                )
-
-            return self._parse_llm_response(response, query_data, search_results)
-        except Exception as exc:  # pragma: no cover - логируем и возвращаем fallback
-            logger.error("Ошибка анализа релевантности: %s", exc)
-            return self._create_error_analysis(str(exc))
+        # Если LMQL недоступен, выбрасываем ошибку
+        raise RuntimeError(
+            "LMQL не настроен. Установите MEMORY_MCP_USE_LMQL=true и настройте модель"
+        )
 
     def _generate_adaptive_prompt(
         self,
@@ -100,6 +103,104 @@ class RelevanceAnalyzer:
             formatted_results=formatted_results,
             instructions=instructions,
         )
+
+    async def _analyze_relevance_with_lmql(
+        self,
+        query_data: dict[str, Any],
+        search_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Анализ релевантности с использованием LMQL.
+        
+        Args:
+            query_data: Данные запроса
+            search_results: Результаты поиска
+            
+        Returns:
+            Словарь с анализом
+            
+        Raises:
+            RuntimeError: Если произошла ошибка при выполнении запроса
+        """
+
+        try:
+            query_type = (query_data.get("type") or "unknown").lower()
+            query_text = query_data.get("query", "")
+
+            instructions_map = {
+                "factual": "- Оцени точность фактов\n- Укажи, хватает ли ответа для пользователя",
+                "contextual": "- Проверь соответствие временного интервала\n- Оцени полноту контекста",
+                "analytical": "- Оцени глубину и структурированность ответа\n- Проверь охват ключевых тем",
+                "custom": "- Используй описание задачи в запросе\n- Укажи возможные ограничения",
+            }
+            instructions = instructions_map.get(
+                query_type, "- Оцени соответствие результатов запросу"
+            )
+
+            formatted_results = self._format_results_for_prompt(search_results)
+
+            # Создаем промпт для LMQL
+            prompt = f"""Ты - эксперт по анализу качества поиска в чатах.
+
+ЗАДАЧА: Оценить релевантность результатов поиска к запросу пользователя.
+
+Запрос: "{query_text}"
+Тип запроса: {query_type}
+
+Результаты поиска:
+{formatted_results}
+
+Инструкции:
+{instructions}
+
+Типы проблем:
+- indexing: проблемы с индексацией
+- search: проблемы поиска
+- context: проблемы контекста
+
+Верни анализ в формате JSON."""
+
+            # Создаем JSON схему с переменными
+            json_schema = """{{
+    "overall_score": [SCORE],
+    "individual_scores": [INDIVIDUAL_SCORES],
+    "problems": {{
+        "indexing": [INDEXING_PROBLEMS],
+        "search": [SEARCH_PROBLEMS],
+        "context": [CONTEXT_PROBLEMS]
+    }},
+    "explanation": "[EXPLANATION]",
+    "recommendations": [RECOMMENDATIONS]
+}}"""
+
+            # Ограничения для переменных
+            results_count = len(search_results)
+            constraints = f"""
+    0.0 <= SCORE <= 10.0 and
+    len(INDIVIDUAL_SCORES) == {results_count} and
+    all(0.0 <= score <= 10.0 for score in INDIVIDUAL_SCORES)
+"""
+
+            # Выполняем LMQL запрос
+            result = await self.lmql_adapter.execute_json_query(
+                prompt=prompt,
+                json_schema=json_schema,
+                constraints=constraints,
+                temperature=self.temperature,
+                max_tokens=self.max_response_tokens,
+            )
+
+            if not result:
+                return None
+
+            # Валидируем структуру результата
+            if not self._validate_analysis_structure(result):
+                raise RuntimeError("LMQL вернул невалидную структуру анализа")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Ошибка при использовании LMQL для анализа релевантности: {e}")
+            raise RuntimeError(f"Ошибка анализа релевантности через LMQL: {e}") from e
 
     def _format_results_for_prompt(self, search_results: list[dict[str, Any]]) -> str:
         lines: list[str] = []

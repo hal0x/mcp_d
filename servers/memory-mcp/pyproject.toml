@@ -57,6 +57,7 @@ dependencies = [
     "langchain-community>=0.3.0",
     "langchain-openai>=0.2.0",
     "langchain-core>=0.3.0",
+    "lmql>=0.9.0",
 ]
 
 [project.optional-dependencies]
@@ -155,6 +156,7 @@ module = [
     "langchain_community.*",
     "langchain_openai.*",
     "langchain_core.*",
+    "lmql.*",
 ]
 ignore_missing_imports = true
 

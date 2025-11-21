@@ -9,6 +9,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from ..core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
+
 logger = logging.getLogger(__name__)
 
 ENTITY_THRESHOLDS = {
@@ -39,6 +41,7 @@ class EntityDictionary:
         batch_validation_size: int = 10,
         enable_description_generation: bool = True,
         graph: Optional[Any] = None,
+        lmql_adapter: Optional[LMQLAdapter] = None,
     ):
         """Инициализирует словарь сущностей.
 
@@ -49,6 +52,7 @@ class EntityDictionary:
             batch_validation_size: Размер батча для валидации сущностей (по умолчанию 10)
             enable_description_generation: Включить генерацию описаний сущностей (по умолчанию True)
             graph: Граф памяти для доступа к контексту сообщений (опционально)
+            lmql_adapter: Опциональный LMQL адаптер для структурированной валидации
         """
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
@@ -74,6 +78,12 @@ class EntityDictionary:
         self.batch_validation_size = batch_validation_size
         self._validation_queue: List[Dict[str, Any]] = []
         self.graph = graph
+        
+        # LMQL адаптер для структурированной валидации
+        try:
+            self.lmql_adapter = lmql_adapter or build_lmql_adapter_from_env()
+        except RuntimeError:
+            self.lmql_adapter = None
         
         # Динамические типы сущностей (могут добавляться LLM)
         self.dynamic_entity_types: Set[str] = set()
@@ -559,6 +569,48 @@ class EntityDictionary:
         
         return self._llm_client
 
+    async def _validate_entity_with_lmql(
+        self,
+        entity_type: str,
+        normalized_value: str,
+        original_value: str,
+        type_name: str,
+        prompt: str,
+        type_specific_rules: str,
+    ) -> bool:
+        """Валидация сущности с использованием LMQL.
+        
+        Args:
+            entity_type: Тип сущности
+            normalized_value: Нормализованное значение
+            original_value: Оригинальное значение
+            type_name: Название типа сущности
+            prompt: Промпт для валидации
+            type_specific_rules: Специфичные правила для типа
+            
+        Returns:
+            True если валидна, False если не валидна
+            
+        Raises:
+            RuntimeError: Если произошла ошибка при выполнении запроса
+        """
+        # Выполняем валидационный запрос через LMQL
+        result = await self.lmql_adapter.execute_validation_query(
+            prompt=prompt,
+            valid_responses=["ДА", "НЕТ", "YES", "NO"],
+            temperature=0.1,
+            max_tokens=10,
+        )
+
+        if result in ["ДА", "YES"]:
+            logger.debug(f"LMQL подтвердил сущность: {entity_type}={normalized_value}")
+            return True
+        elif result in ["НЕТ", "NO"]:
+            logger.debug(f"LMQL отклонил сущность: {entity_type}={normalized_value}")
+            return False
+        else:
+            raise RuntimeError(f"Неожиданный результат валидации: {result}")
+
     async def _validate_entity_with_llm_async(
         self, entity_type: str, normalized_value: str, original_value: str, chat_name: Optional[str] = None
     ) -> bool:
@@ -653,6 +705,14 @@ class EntityDictionary:
 Ответь ТОЛЬКО одним словом: "ДА" если это валидная {type_name}, или "НЕТ" если это не валидная {type_name}.
 Не добавляй никаких объяснений, только "ДА" или "НЕТ"."""
 
+        # Используем LMQL для валидации, если доступен
+        if self.lmql_adapter:
+            logger.debug(f"Используется LMQL для валидации сущности: {entity_type}={normalized_value}")
+            return await self._validate_entity_with_lmql(
+                entity_type, normalized_value, original_value, type_name, prompt, type_specific_rules
+            )
+
+        # Если LMQL недоступен, используем обычный LLM
         try:
             # Используем async контекстный менеджер
             async with llm_client:

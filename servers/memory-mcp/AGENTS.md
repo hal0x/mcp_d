@@ -424,6 +424,84 @@ if llm:
 - Все существующие интерфейсы сохранены
 - Fallback на старую реализацию при ошибках
 
+### LMQL интеграция
+
+Memory MCP поддерживает интеграцию с LMQL (Language Model Query Language) для улучшения надежности парсинга JSON и структурированных ответов от LLM. LMQL позволяет декларативно задавать структуру ответа и ограничения, что гарантирует валидность данных без необходимости парсинга через regex.
+
+#### Компоненты LMQL
+
+**Адаптер (`src/memory_mcp/core/lmql_adapter.py`):**
+- `LMQLAdapter` — адаптер для работы с LMQL
+- Метод `execute_query()` — выполнение произвольных LMQL запросов
+- Метод `execute_json_query()` — выполнение запросов с гарантированным JSON выводом
+- Метод `execute_validation_query()` — выполнение валидационных запросов (ДА/НЕТ)
+- Функция `build_lmql_adapter_from_env()` — создание адаптера из настроек окружения
+
+#### Компоненты с поддержкой LMQL
+
+**QueryUnderstandingEngine (`src/memory_mcp/search/query_understanding.py`):**
+- Использует LMQL для генерации структурированного JSON с декомпозицией запросов
+- Гарантирует валидность полей: `sub_queries`, `implicit_requirements`, `alternative_formulations`, `key_concepts`, `concept_relationships`, `enhanced_query`
+- Встроенные ограничения на размеры массивов (максимум 5 подзапросов, 3 альтернативные формулировки и т.д.)
+
+**RelevanceAnalyzer (`src/memory_mcp/quality_analyzer/core/relevance_analyzer.py`):**
+- Использует LMQL для анализа релевантности результатов поиска
+- Гарантирует валидность структуры: `overall_score`, `individual_scores`, `problems`, `explanation`, `recommendations`
+- Валидация числовых диапазонов (0.0 <= score <= 10.0)
+- Проверка соответствия размеров массивов количеству результатов
+
+**EntityDictionary (`src/memory_mcp/analysis/entity_dictionary.py`):**
+- Использует LMQL для валидации сущностей
+- Гарантирует формат ответа: только "ДА" или "НЕТ" (без дополнительного текста)
+- Устраняет необходимость парсинга и очистки ответов
+
+#### Использование LMQL компонентов
+
+**Настройка:**
+```bash
+# Модель для LMQL (если отличается от MEMORY_MCP_LMSTUDIO_LLM_MODEL)
+export MEMORY_MCP_LMQL_MODEL=gpt-oss-20b
+
+# Бэкенд для LMQL (openai, lmstudio, ollama)
+export MEMORY_MCP_LMQL_BACKEND=lmstudio
+
+# Отключить LMQL (по умолчанию включен)
+export MEMORY_MCP_USE_LMQL=false
+```
+
+**Программное использование:**
+```python
+# Использование LMQL адаптера
+from memory_mcp.core.lmql_adapter import build_lmql_adapter_from_env, LMQLAdapter
+
+# Создание адаптера из настроек
+adapter = build_lmql_adapter_from_env()
+if adapter:
+    # Выполнение JSON запроса
+    result = await adapter.execute_json_query(
+        prompt="Проанализируй запрос: {query}",
+        json_schema='{"sub_queries": [SUB_QUERIES], "key_concepts": [CONCEPTS]}',
+        constraints="len(SUB_QUERIES) <= 5 and len(CONCEPTS) <= 10"
+    )
+    
+    # Выполнение валидационного запроса
+    validation = await adapter.execute_validation_query(
+        prompt="Является ли '{value}' валидной сущностью?",
+        valid_responses=["ДА", "НЕТ"]
+    )
+```
+
+**Преимущества:**
+- Гарантированная структура JSON ответов (нет ошибок парсинга)
+- Встроенная валидация данных на уровне языка запросов
+- Оптимизация использования токенов
+- Более надежная работа с валидационными запросами
+
+**Примечания:**
+- По умолчанию LMQL включен (`MEMORY_MCP_USE_LMQL=true`)
+- `QueryUnderstandingEngine` и `RelevanceAnalyzer` требуют LMQL для работы
+- `EntityDictionary` использует LMQL при наличии, иначе fallback на обычный LLM
+
 ## Конфигурация и запуск
 
 ### Переменные окружения
@@ -514,6 +592,14 @@ if llm:
 | `MEMORY_MCP_USE_LANGCHAIN_RETRIEVERS` | `False` | Использовать LangChain ретриверы для поиска. |
 | `MEMORY_MCP_USE_LANGCHAIN_SUMMARIZATION` | `False` | Использовать LangChain для саммаризации. |
 | `MEMORY_MCP_LANGCHAIN_SUMMARIZATION_MODE` | `map_reduce` | Режим саммаризации LangChain: `stuff`, `map_reduce`, `refine`. |
+
+#### Настройки LMQL интеграции
+
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
+| `MEMORY_MCP_USE_LMQL` | `True` | Использовать LMQL для структурированной генерации. |
+| `MEMORY_MCP_LMQL_MODEL` | - | Модель для LMQL (если отличается от `MEMORY_MCP_LMSTUDIO_LLM_MODEL`). |
+| `MEMORY_MCP_LMQL_BACKEND` | `lmstudio` | Бэкенд для LMQL: `openai`, `lmstudio`, `ollama`. |
 
 **Приоритет конфигурации эмбеддингов:**
 1. `MEMORY_MCP_EMBEDDINGS_URL` — прямой HTTP endpoint.

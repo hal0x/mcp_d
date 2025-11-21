@@ -6,6 +6,33 @@
 
 ### Добавлено ✨
 
+#### Интеграция LMQL (Language Model Query Language)
+
+**Новые возможности:**
+- Поддержка LMQL для структурированной генерации JSON ответов
+- `LMQLAdapter` для работы с LMQL запросами
+- Поддержка LMQL в `QueryUnderstandingEngine` для гарантированной структуры ответов
+- Поддержка LMQL в `RelevanceAnalyzer` для валидации анализа релевантности
+- Поддержка LMQL в `EntityDictionary` для надежной валидации сущностей
+
+**Feature flags:**
+- `MEMORY_MCP_USE_LMQL` — использовать LMQL для структурированной генерации (по умолчанию: False)
+- `MEMORY_MCP_LMQL_MODEL` — модель для LMQL (если отличается от `MEMORY_MCP_LMSTUDIO_LLM_MODEL`)
+- `MEMORY_MCP_LMQL_BACKEND` — бэкенд для LMQL: `openai`, `lmstudio`, `ollama` (по умолчанию: `lmstudio`)
+
+**Новые модули:**
+- `src/memory_mcp/core/lmql_adapter.py` — адаптер для работы с LMQL
+- `tests/test_lmql_adapter.py` — unit тесты для LMQLAdapter
+- `tests/test_query_understanding_lmql.py` — интеграционные тесты для QueryUnderstandingEngine с LMQL
+- `tests/test_relevance_analyzer_lmql.py` — интеграционные тесты для RelevanceAnalyzer с LMQL
+- `tests/test_entity_dictionary_lmql.py` — интеграционные тесты для EntityDictionary с LMQL
+
+**Преимущества:**
+- Гарантированная структура JSON ответов (нет ошибок парсинга)
+- Встроенная валидация данных на уровне языка запросов
+- Оптимизация использования токенов
+- Автоматический fallback на обычный LLM при ошибках
+
 #### Интеграция LangChain фреймворка
 
 **Новые возможности:**
