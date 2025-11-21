@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from ..config import get_settings
 from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
+from ..core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
 from ..utils.naming import slugify
 from .adaptive_message_grouper import AdaptiveMessageGrouper
 from .context_manager import ContextManager
@@ -153,6 +154,7 @@ class SessionSummarizer:
         enable_iterative_refinement: bool = True,
         min_quality_score: float = 80.0,
         strict_mode: bool = False,
+        lmql_adapter: Optional[LMQLAdapter] = None,
     ):
         """
         Инициализация саммаризатора
@@ -165,6 +167,8 @@ class SessionSummarizer:
             enable_iterative_refinement: Включить итеративное улучшение
             min_quality_score: Минимальный приемлемый балл качества
             strict_mode: Если True, выбрасывает исключения вместо использования fallback при ошибках LLM
+            lmql_adapter: Опциональный LMQL адаптер для структурированной генерации.
+                         Если не указан, создается из настроек окружения.
         """
         if embedding_client is None:
             embedding_client = get_llm_client_factory()
@@ -203,6 +207,13 @@ class SessionSummarizer:
             prompt_reserve_tokens=settings.large_context_prompt_reserve,
             embedding_client=self.embedding_client,
         )
+        
+        # Инициализация LMQL адаптера
+        try:
+            self.lmql_adapter = lmql_adapter or build_lmql_adapter_from_env()
+        except RuntimeError:
+            self.lmql_adapter = None
+            logger.debug("LMQL адаптер не настроен для SessionSummarizer")
         
         self.strict_mode = strict_mode
 
@@ -296,18 +307,34 @@ class SessionSummarizer:
                 extended_context,
             )
 
-            # Генерируем саммаризацию через LangChain LLM
-            async with self.embedding_client:
-                summary_text = await self.embedding_client.generate_summary(
-                    prompt=prompt,
-                    temperature=0.3,
-                    max_tokens=30000,  # Уменьшено для предотвращения таймаутов
-                    top_p=0.93,
-                    presence_penalty=0.05,
-                )
+            # Используем LMQL для структурированной генерации саммаризации
+            summary_structure = None
+            summary_text = ""
+            
+            if self.lmql_adapter:
+                try:
+                    logger.debug("Используется LMQL для генерации структурированной саммаризации")
+                    summary_structure = await self._generate_summary_with_lmql(
+                        prompt, chat_mode, language
+                    )
+                except Exception as e:
+                    logger.warning(f"Ошибка при использовании LMQL для саммаризации: {e}, используем fallback")
+                    summary_structure = None
+            
+            # Fallback на старую реализацию (если LMQL не доступен или вернул None)
+            if not summary_structure:
+                async with self.embedding_client:
+                    summary_text = await self.embedding_client.generate_summary(
+                        prompt=prompt,
+                        temperature=0.3,
+                        max_tokens=30000,  # Уменьшено для предотвращения таймаутов
+                        top_p=0.93,
+                        presence_penalty=0.05,
+                    )
+                # Парсим структурированную саммаризацию и дополняем пропуски при необходимости
+                summary_structure = self._parse_summary_structure(summary_text)
 
         # Парсим структурированную саммаризацию и дополняем пропуски при необходимости
-        summary_structure = self._parse_summary_structure(summary_text)
         summary_structure, fallback_used = self._ensure_summary_completeness(
             messages, chat, summary_structure, strict_mode=self.strict_mode
         )
@@ -1105,6 +1132,83 @@ class SessionSummarizer:
                 structure[current_section] = current_text
 
         return structure
+
+    async def _generate_summary_with_lmql(
+        self, prompt: str, chat_mode: str, language: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Генерация структурированной саммаризации через LMQL.
+
+        Args:
+            prompt: Промпт для саммаризации
+            chat_mode: Режим чата (channel/group)
+            language: Язык вывода
+
+        Returns:
+            Словарь со структурой саммаризации или None при ошибке
+        """
+        if not self.lmql_adapter:
+            return None
+
+        try:
+            # Определяем JSON схему в зависимости от режима чата
+            if chat_mode == "channel":
+                json_schema = """{
+    "context": "[CONTEXT]",
+    "key_points": [KEY_POINTS],
+    "important_items": [IMPORTANT_ITEMS],
+    "risks": [RISKS]
+}"""
+                constraints = """
+    len(TOKENS(CONTEXT)) >= 20 and
+    len(KEY_POINTS) <= 5 and
+    len(IMPORTANT_ITEMS) >= 0 and
+    len(RISKS) >= 0 and
+    all(isinstance(kp, str) for kp in KEY_POINTS) and
+    all(isinstance(ii, str) for ii in IMPORTANT_ITEMS) and
+    all(isinstance(r, str) for r in RISKS)
+"""
+            else:
+                json_schema = """{
+    "context": "[CONTEXT]",
+    "discussion": [DISCUSSION],
+    "decisions": [DECISIONS],
+    "risks": [RISKS]
+}"""
+                constraints = """
+    len(TOKENS(CONTEXT)) >= 20 and
+    len(DISCUSSION) <= 6 and
+    len(DECISIONS) >= 0 and
+    len(RISKS) >= 0 and
+    all(isinstance(d, str) for d in DISCUSSION) and
+    all(isinstance(dec, str) for dec in DECISIONS) and
+    all(isinstance(r, str) for r in RISKS)
+"""
+
+            # Выполняем LMQL запрос
+            response_data = await self.lmql_adapter.execute_json_query(
+                prompt=prompt,
+                json_schema=json_schema,
+                constraints=constraints,
+                temperature=0.3,
+                max_tokens=30000,
+            )
+
+            # Нормализуем структуру для единого формата
+            structure = {
+                "context": response_data.get("context", ""),
+                "key_points": response_data.get("key_points", []),
+                "important_items": response_data.get("important_items", []),
+                "discussion": response_data.get("discussion", []),
+                "decisions": response_data.get("decisions", []),
+                "risks": response_data.get("risks", []),
+            }
+
+            return structure
+
+        except Exception as e:
+            logger.error(f"Ошибка при генерации саммаризации через LMQL: {e}")
+            return None
 
     def _ensure_summary_completeness(
         self, messages: List[Dict[str, Any]], chat: str, structure: Dict[str, Any], strict_mode: bool = False

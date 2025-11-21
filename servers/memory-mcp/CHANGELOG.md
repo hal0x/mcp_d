@@ -18,6 +18,7 @@
 - Рефакторинг `ClusterSummarizer` с использованием LMQL для генерации сводок кластеров
 - Рефакторинг `SemanticRegrouper` с использованием LMQL для перегруппировки сессий
 - Рефакторинг `SmartSearchEngine` с использованием LMQL для генерации уточняющих вопросов и предложений
+- Рефакторинг `SessionSummarizer` с использованием LMQL для структурированной генерации саммаризаций сессий
 
 **Feature flags:**
 - `MEMORY_MCP_USE_LMQL` — использовать LMQL для структурированной генерации (по умолчанию: False)
@@ -30,6 +31,7 @@
 - `tests/test_query_understanding_lmql.py` — интеграционные тесты для QueryUnderstandingEngine с LMQL
 - `tests/test_relevance_analyzer_lmql.py` — интеграционные тесты для RelevanceAnalyzer с LMQL
 - `tests/test_entity_dictionary_lmql.py` — интеграционные тесты для EntityDictionary с LMQL
+- `tests/test_session_summarizer_lmql.py` — интеграционные тесты для SessionSummarizer с LMQL
 
 **Преимущества:**
 - Гарантированная структура JSON ответов (нет ошибок парсинга)

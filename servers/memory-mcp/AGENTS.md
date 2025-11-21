@@ -486,6 +486,15 @@ Memory MCP поддерживает интеграцию с LMQL (Language Model
 - Валидация приоритетов (high/medium/low/ai) и размера массива рекомендаций (до 10)
 - Fallback на старую реализацию при ошибках LMQL
 
+**SessionSummarizer (`src/memory_mcp/analysis/session_summarizer.py`):**
+- Использует LMQL для генерации структурированных саммаризаций сессий
+- Гарантирует валидность структуры в зависимости от режима чата:
+  - Для каналов: `context`, `key_points` (до 5), `important_items`, `risks`
+  - Для групп: `context`, `discussion` (до 6), `decisions`, `risks`
+- Валидация минимальной длины контекста (>= 20 токенов) и типов данных
+- Fallback на старую реализацию с парсингом markdown при ошибках LMQL или отсутствии адаптера
+- Устраняет необходимость парсинга markdown-структуры с заголовками
+
 **EntityDictionary (`src/memory_mcp/analysis/entity_dictionary.py`):**
 - Использует LMQL для классификации типов сущностей (`_classify_entity_type`)
 - Использует LMQL для батч-генерации описаний сущностей (`_generate_descriptions_batch_single`)
