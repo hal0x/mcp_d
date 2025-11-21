@@ -25,12 +25,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 # Импортируем только доступные модули
 try:
-    from memory_mcp.core.lmstudio_client import LMStudioEmbeddingClient
+    from memory_mcp.memory.embeddings import build_embedding_service_from_env
 
     EMBEDDING_CLIENT_AVAILABLE = True
 except ImportError:
     EMBEDDING_CLIENT_AVAILABLE = False
-    print("⚠️ LMStudioEmbeddingClient недоступен")
+    print("⚠️ LangChain embedding service недоступен")
 
 try:
     from memory_mcp.analysis.instruction_manager import InstructionManager
@@ -341,7 +341,7 @@ class TelegramDumpManager:
             self.mcp = None
 
         if EMBEDDING_CLIENT_AVAILABLE:
-            self.embedding_client = LMStudioEmbeddingClient()
+            self.embedding_client = build_embedding_service_from_env()
         else:
             self.embedding_client = None
 
@@ -356,28 +356,33 @@ class TelegramDumpManager:
 
     async def __aenter__(self):
         """Асинхронный контекстный менеджер - вход"""
-        if self.embedding_client:
-            await self.embedding_client.__aenter__()
+        # LangChain адаптеры не требуют async context manager
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Асинхронный контекстный менеджер - выход"""
+        # LangChain адаптеры не требуют async context manager
         if self.embedding_client:
-            await self.embedding_client.__aexit__(exc_type, exc_val, exc_tb)
+            self.embedding_client.close()
 
     async def check_system(self) -> bool:
         """Проверка системы"""
         print("🔧 Проверка системы...")
 
-        # Проверяем LM Studio Server
+        # Проверяем embedding service
         if self.embedding_client:
-            if not await self.embedding_client.check_model_availability():
-                print("❌ LM Studio Server недоступен или модель не найдена")
-                print("Убедитесь, что LM Studio Server запущен и модель установлена")
+            if not self.embedding_client.available():
+                print("❌ Embedding service недоступен")
+                print("Убедитесь, что embedding service настроен и доступен")
                 return False
-            print("✅ LM Studio Server доступен")
+            # Проверяем размерность для подтверждения работоспособности
+            dimension = self.embedding_client.dimension
+            if dimension:
+                print(f"✅ Embedding service доступен (размерность: {dimension})")
+            else:
+                print("✅ Embedding service доступен")
         else:
-            print("⚠️ LMStudioEmbeddingClient недоступен")
+            print("⚠️ LangChain embedding service недоступен")
 
         # Проверяем ChromaDB
         if self.mcp:
