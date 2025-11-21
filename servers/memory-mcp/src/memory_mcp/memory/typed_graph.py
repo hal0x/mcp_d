@@ -148,14 +148,12 @@ class TypedGraphMemory:
             f"без эмбеддингов: {nodes_without_embeddings}"
         )
 
-        # Загружаем рёбра
         edges_loaded = 0
         cursor.execute(
             "SELECT source_id, target_id, type, weight, properties FROM edges"
         )
         for row in cursor.fetchall():
             props = json.loads(row["properties"]) if row["properties"] else {}
-            # Проверяем, что оба узла существуют в графе
             if row["source_id"] not in self.graph:
                 logger.debug(f"Исходный узел {row['source_id']} не найден в графе, пропускаем ребро")
                 continue
@@ -178,7 +176,7 @@ class TypedGraphMemory:
             f"{self.graph.number_of_edges()} рёбер в графе"
         )
 
-        # Обновляем FTS индекс из существующих данных
+        # Обновление FTS индекса из существующих данных
         for node_id, data in self.graph.nodes(data=True):
             if data.get("node_type") in (NodeType.DOC_CHUNK, NodeType.DOC_CHUNK.value):
                 props = data.get("properties", {})
@@ -206,19 +204,17 @@ class TypedGraphMemory:
             return False
 
         try:
-            # Добавляем в NetworkX
             node_data = node.dict(exclude={"embedding"})
             self.graph.add_node(node.id, **node_data)
 
-            # Сохраняем в БД
             cursor = self.conn.cursor()
 
             embedding_bytes = (
                 json.dumps(node.embedding).encode() if node.embedding else None
             )
 
-            # Для EntityNode добавляем описание в properties, если оно есть
             node_properties = dict(node.properties)
+            # Для EntityNode добавляем описание в properties, если оно есть
             if node.type == NodeType.ENTITY and hasattr(node, "description") and node.description:
                 node_properties["description"] = node.description
             

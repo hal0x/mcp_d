@@ -60,7 +60,6 @@ def build_fallback_structure(
     if last_text and last_text != first_text:
         context_lines.append(f"Финал обсуждения: {last_text}")
 
-    # Для канала больше упор на ключевые публикации, для группы — на реплики
     discussion_limit = 5 if chat_mode == "channel" else 4
     discussion_msgs = select_key_messages(
         valid_messages, limit=discussion_limit
@@ -87,7 +86,7 @@ def build_fallback_structure(
         limit=3,
     )
     if chat_mode == "channel":
-        # В каналах решения обычно неуместны — делаем пустой список или заметку
+        # В каналах решения обычно неуместны
         decision_lines = (
             []
             if decision_msgs == []
@@ -119,16 +118,15 @@ def build_fallback_structure(
             "- Автопроверка: явных рисков в сообщениях не найдено; проверить вручную."
         ]
 
-    # Для каналов добавляем ключевые тезисы и важные моменты
     if chat_mode == "channel":
-        # Извлекаем ключевые тезисы из первых сообщений
+        # Ключевые тезисы из первых сообщений
         key_points = []
         for msg in valid_messages[:3]:
             text = truncate_text(msg.get("text", ""), 100)
             if text:
                 key_points.append(f"- {text}")
 
-        # Извлекаем важные моменты (ссылки, даты, имена, ключевые слова)
+        # Важные моменты: ссылки, даты, имена, ключевые слова
         important_items = []
         important_keywords = [
             "важно",
@@ -158,10 +156,9 @@ def build_fallback_structure(
             text = msg.get("text", "")
             text_lower = text.lower()
 
-            # Проверяем ключевые слова
             if any(keyword in text_lower for keyword in important_keywords):
                 important_items.append(f"- {truncate_text(text, 80)}")
-            # Также добавляем сообщения с датами и временем (часто важные объявления)
+            # Сообщения с датами и временем (часто важные объявления)
             elif any(
                 pattern in text
                 for pattern in ["UTC", "GMT", "at ", "on ", "2024", "2025"]
@@ -171,14 +168,12 @@ def build_fallback_structure(
             if len(important_items) >= 3:
                 break
 
-        # Если ничего не найдено, берем первые сообщения как важные
         if not important_items:
             for msg in valid_messages[:2]:
                 text = truncate_text(msg.get("text", ""), 80)
                 if text:
                     important_items.append(f"- {text}")
 
-        # Если все еще пусто, добавляем заметку
         if not important_items:
             important_items = [
                 "- Автопроверка: важные моменты не выделены; требуется ручная проверка."

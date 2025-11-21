@@ -102,7 +102,6 @@ def configure_logging() -> None:
         )
 
 
-# Настраиваем логирование при импорте модуля
 configure_logging()
 
 logger = logging.getLogger(__name__)
@@ -112,7 +111,7 @@ logger.info(f"MCP сервер '{server.name}' создан, начинаем р
 
 ToolResponse = Tuple[List[TextContent], Dict[str, Any]]
 
-# Глобальные сервисы с ленивой инициализацией
+# Ленивая инициализация сервисов
 _adapter: MemoryServiceAdapter | None = None
 _smart_search_engine: Any | None = None
 _indexing_tracker: Any | None = None
@@ -152,10 +151,7 @@ def _get_indexing_tracker():
 
 
 def _get_smart_search_engine():
-    """Инициализирует интерактивный поисковый движок при первом обращении.
-    
-    Использует ленивый импорт для избежания циклических зависимостей.
-    """
+    """Инициализирует интерактивный поисковый движок при первом обращении."""
     global _smart_search_engine
     if _smart_search_engine is None:
         from ..search import SmartSearchEngine, SearchSessionStore
@@ -225,7 +221,6 @@ async def list_tools() -> List[Tool]:
             description="Return server version and enabled capabilities.",
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
-        # Новые универсальные инструменты
         Tool(
             name="search",
             description="Universal search tool supporting hybrid, smart, embedding, similar, and trading search types. Use search_type parameter to specify the search mode. Required parameters depend on search_type: 'query' for hybrid/smart/trading, 'embedding' for embedding, 'record_id' for similar.",

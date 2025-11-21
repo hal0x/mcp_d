@@ -33,7 +33,6 @@ async def generate_summary_with_lmql(
         return None
 
     try:
-        # Определяем JSON схему в зависимости от режима чата
         if chat_mode == "channel":
             json_schema = """{
     "context": "[CONTEXT]",
@@ -67,7 +66,6 @@ async def generate_summary_with_lmql(
     all(isinstance(r, str) for r in RISKS)
 """
 
-        # Выполняем LMQL запрос
         response_data = await lmql_adapter.execute_json_query(
             prompt=prompt,
             json_schema=json_schema,
@@ -76,7 +74,6 @@ async def generate_summary_with_lmql(
             max_tokens=30000,
         )
 
-        # Нормализуем структуру для единого формата
         structure = {
             "context": response_data.get("context", ""),
             "key_points": response_data.get("key_points", []),

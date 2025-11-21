@@ -27,7 +27,7 @@ def ensure_summary_completeness(
     Returns:
         (дополненная структура, признак использования fallback)
     """
-    # Безопасное извлечение context (может быть строкой или списком)
+    # context может быть строкой или списком
     context_raw = structure.get("context") or ""
     if isinstance(context_raw, list):
         context_text = "\n".join(context_raw).strip()
@@ -40,7 +40,6 @@ def ensure_summary_completeness(
     decisions = structure.get("decisions") or []
     risks = structure.get("risks") or []
 
-    # Определяем тип чата
     chat_mode = detect_chat_mode(messages)
 
     needs_context = len(context_text) < 40
@@ -48,7 +47,6 @@ def ensure_summary_completeness(
     needs_decisions = len(decisions) == 0
     needs_risks = len(risks) == 0
 
-    # Для каналов всегда заполняем ключевые тезисы и важные моменты
     if chat_mode == "channel":
         needs_key_points = len(key_points) == 0
         needs_important_items = len(important_items) == 0

@@ -231,14 +231,13 @@ class MemoryServiceAdapter:
         _total_weight = _fts_weight_raw + _vector_weight_raw
         self._fts_weight = _fts_weight_raw / _total_weight
         self._vector_weight = _vector_weight_raw / _total_weight
-        self._rrf_k = 60  # Reciprocal Rank Fusion параметр
+        self._rrf_k = 60  # Reciprocal Rank Fusion
         self._use_rrf = True
         
         from ..config import get_settings
         settings = get_settings()
         self.artifacts_reader = ArtifactsReader(artifacts_dir=settings.artifacts_path)
         
-        # Инициализируем обогатитель контекста сущностей
         from ..search.entity_context_enricher import EntityContextEnricher
         from ..analysis.entities import get_entity_dictionary
         

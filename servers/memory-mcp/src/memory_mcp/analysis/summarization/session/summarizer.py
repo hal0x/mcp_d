@@ -89,20 +89,16 @@ class SessionSummarizer:
         self.incremental_context_manager = IncrementalContextManager()
         self.instruction_manager = instruction_manager or InstructionManager()
 
-        # Система оценки качества
         self.enable_quality_check = enable_quality_check
         self.enable_iterative_refinement = enable_iterative_refinement
         self.quality_evaluator = QualityEvaluator(min_quality_score=min_quality_score)
-        # Используем тот же порог для улучшения (или чуть ниже для гарантии достижимости)
+        # Целевой балл чуть ниже min_quality для margin
         self.iterative_refiner = IterativeRefiner(
             self,
             max_iterations=5,
-            target_score=max(
-                85.0, min_quality_score - 2.0
-            ),  # Целевой балл чуть ниже min_quality для margin
+            target_score=max(85.0, min_quality_score - 2.0),
         )
 
-        # Инициализация процессора больших контекстов (отложенный импорт для избежания циклических зависимостей)
         from ...aggregation.large_context_processor import LargeContextProcessor
         
         settings = get_settings()
@@ -112,7 +108,6 @@ class SessionSummarizer:
             embedding_client=self.embedding_client,
         )
         
-        # Инициализация LMQL адаптера
         try:
             self.lmql_adapter = lmql_adapter or build_lmql_adapter_from_env()
         except RuntimeError:
@@ -138,15 +133,12 @@ class SessionSummarizer:
 
         logger.info(f"Саммаризация сессии {session_id} ({len(messages)} сообщений)")
 
-        # Определяем тип коммуникации (группа/канал)
         chat_mode = detect_chat_mode(messages)
-
-        # Получаем контекст из предыдущих сессий
         previous_context = self.context_manager.get_previous_context(chat, session_id)
 
-        # Получаем расширенный контекст для малых сессий
+        # Расширенный контекст для малых сессий (< 20 сообщений)
         extended_context = None
-        if len(messages) < 20:  # Для сессий с менее чем 20 сообщениями
+        if len(messages) < 20:
             extended_context = (
                 self.incremental_context_manager.get_extended_context_for_session(
                     chat, messages, context_window_hours=24, max_previous_messages=50
@@ -158,24 +150,20 @@ class SessionSummarizer:
                 f"{extended_context['previous_sessions_count']} предыдущих сессий"
             )
 
-        # Извлекаем сущности из сессии
         entities = self.entity_extractor.extract_from_messages(messages)
 
-        # Проверяем, нужна ли обработка большим контекстом
-        # Используем большие контексты только для действительно больших сессий (>100K токенов)
-        # чтобы не замедлять обработку маленьких сессий
+        # Обработка большим контекстом для сессий > 100K токенов
         estimated_tokens = self.large_context_processor.estimate_messages_tokens(messages)
-        use_large_context = estimated_tokens > 100000  # Используем для сессий > 100K токенов
+        use_large_context = estimated_tokens > 100000
 
         if use_large_context:
             logger.info(
                 f"Используется обработка большим контекстом для сессии {session_id} "
                 f"(~{estimated_tokens} токенов)"
             )
-            # Используем LargeContextProcessor для больших сессий
-            # Создаем базовый промпт без conversation_text (он будет добавлен процессором)
+            # Базовый промпт без conversation_text (добавится процессором)
             base_prompt = create_summarization_prompt(
-                "",  # Пустой текст, так как процессор сам форматирует сообщения
+                "",
                 chat,
                 dominant_language,
                 session,
@@ -199,10 +187,7 @@ class SessionSummarizer:
                 ])
         else:
             # Стандартная обработка для небольших сессий
-            # Подготавливаем текст разговора
             conversation_text = prepare_conversation_text(messages)
-
-            # Создаём промпт для саммаризации с контекстом
             prompt = create_summarization_prompt(
                 conversation_text,
                 chat,
@@ -215,7 +200,6 @@ class SessionSummarizer:
                 incremental_context_manager=self.incremental_context_manager,
             )
 
-            # Используем LMQL для структурированной генерации саммаризации
             summary_structure = None
             summary_text = ""
             
@@ -229,7 +213,6 @@ class SessionSummarizer:
                     logger.warning(f"Ошибка при использовании LMQL для саммаризации: {e}, используем fallback")
                     summary_structure = None
             
-            # Fallback на старую реализацию (если LMQL не доступен или вернул None)
             if not summary_structure:
                 async with self.embedding_client:
                     summary_text = await self.embedding_client.generate_summary(
@@ -239,10 +222,8 @@ class SessionSummarizer:
                         top_p=0.93,
                         presence_penalty=0.05,
                     )
-                # Парсим структурированную саммаризацию и дополняем пропуски при необходимости
                 summary_structure = parse_summary_structure(summary_text)
 
-        # Парсим структурированную саммаризацию и дополняем пропуски при необходимости
         summary_structure, fallback_used = ensure_summary_completeness(
             messages, chat, summary_structure, strict_mode=self.strict_mode
         )
@@ -252,10 +233,8 @@ class SessionSummarizer:
                 f"Саммаризация {session_id} дополнена эвристиками (это нормально)"
             )
 
-        # Извлекаем Action Items после возможного дополнения саммаризации
         action_items = await extract_action_items(messages, summary_structure)
 
-        # Формируем итоговую саммаризацию
         legacy_summary = {
             "session_id": session_id,
             "chat": chat,
@@ -308,7 +287,6 @@ class SessionSummarizer:
                 "issues": metrics.issues,
             }
 
-            # Если качество неприемлемо, зафиксируем это — структурные проходы выполнятся позже
             if not self.quality_evaluator.is_acceptable(metrics):
                 logger.warning(
                     f"Качество саммаризации {session_id} ниже порога ({metrics.score:.1f}). Будет применён структурный IterativeRefiner."
@@ -371,7 +349,7 @@ class SessionSummarizer:
 
 
 
-    # Методы для IterativeRefiner (должны быть методами класса)
+    # Методы для IterativeRefiner
     def _run_structural_pass(
         self,
         summary: Dict[str, Any],
