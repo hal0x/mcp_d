@@ -48,48 +48,54 @@ class TestRelevanceAnalyzerLMQL:
             "explanation": "Результаты релевантны запросу",
             "recommendations": [],
         }
+        
+        mock_llm_client = MagicMock()
+        with patch('memory_mcp.core.langchain_adapters.get_llm_client_factory', return_value=mock_llm_client):
+            analyzer = RelevanceAnalyzer(
+                model_name="test-model",
+                base_url="http://localhost:1234",
+                lmql_adapter=mock_lmql_adapter,
+            )
 
-        analyzer = RelevanceAnalyzer(
-            model_name="test-model",
-            base_url="http://localhost:1234",
-            lmql_adapter=mock_lmql_adapter,
-        )
+            query_data = {"query": "test query", "type": "factual"}
+            result = await analyzer.analyze_relevance(query_data, sample_search_results)
 
-        query_data = {"query": "test query", "type": "factual"}
-        result = await analyzer.analyze_relevance(query_data, sample_search_results)
-
-        assert result["overall_score"] == 8.5
-        assert len(result["individual_scores"]) == 2
-        assert result["individual_scores"][0] == 9.0
-        assert "explanation" in result
+            assert result["overall_score"] == 8.5
+            assert len(result["individual_scores"]) == 2
+            assert result["individual_scores"][0] == 9.0
+            assert "explanation" in result
 
     @pytest.mark.asyncio
     async def test_analyze_relevance_without_lmql(self, sample_search_results):
         """Тест ошибки при отсутствии LMQL адаптера."""
-        analyzer = RelevanceAnalyzer(
-            model_name="test-model",
-            base_url="http://localhost:1234",
-            lmql_adapter=None,
-        )
+        mock_llm_client = MagicMock()
+        with patch('memory_mcp.core.langchain_adapters.get_llm_client_factory', return_value=mock_llm_client):
+            analyzer = RelevanceAnalyzer(
+                model_name="test-model",
+                base_url="http://localhost:1234",
+                lmql_adapter=None,
+            )
 
-        query_data = {"query": "test query", "type": "factual"}
-        
-        with pytest.raises(RuntimeError, match="LMQL не настроен"):
-            await analyzer.analyze_relevance(query_data, sample_search_results)
+            query_data = {"query": "test query", "type": "factual"}
+            
+            with pytest.raises(RuntimeError, match="LMQL не настроен"):
+                await analyzer.analyze_relevance(query_data, sample_search_results)
 
     @pytest.mark.asyncio
     async def test_analyze_relevance_lmql_error(self, mock_lmql_adapter, sample_search_results):
         """Тест ошибки при исключении в LMQL."""
         mock_lmql_adapter.execute_json_query.side_effect = RuntimeError("LMQL error")
-
-        analyzer = RelevanceAnalyzer(
-            model_name="test-model",
-            base_url="http://localhost:1234",
-            lmql_adapter=mock_lmql_adapter,
-        )
-
-        query_data = {"query": "test query", "type": "factual"}
         
-        with pytest.raises(RuntimeError, match="Ошибка анализа релевантности через LMQL"):
-            await analyzer.analyze_relevance(query_data, sample_search_results)
+        mock_llm_client = MagicMock()
+        with patch('memory_mcp.core.langchain_adapters.get_llm_client_factory', return_value=mock_llm_client):
+            analyzer = RelevanceAnalyzer(
+                model_name="test-model",
+                base_url="http://localhost:1234",
+                lmql_adapter=mock_lmql_adapter,
+            )
+
+            query_data = {"query": "test query", "type": "factual"}
+            
+            with pytest.raises(RuntimeError, match="Ошибка анализа релевантности через LMQL"):
+                await analyzer.analyze_relevance(query_data, sample_search_results)
 

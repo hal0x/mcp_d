@@ -39,10 +39,14 @@ class RelevanceAnalyzer:
         self.thinking_level = thinking_level
 
         # Используем LangChainLLMAdapter для работы с LLM
-        self.embedding_client = LangChainLLMAdapter(
-            model_name=model_name,
-            base_url=base_url,
-        )
+        from ...core.langchain_adapters import get_llm_client_factory
+        llm_client = get_llm_client_factory()
+        if llm_client is None:
+            raise ValueError(
+                f"Не удалось инициализировать LLM клиент для RelevanceAnalyzer. "
+                f"Проверьте настройки MEMORY_MCP_LMSTUDIO_LLM_MODEL и MEMORY_MCP_LMSTUDIO_HOST."
+            )
+        self.embedding_client = llm_client
 
         self.prompt_manager = PromptTemplateManager(prompts_dir or DEFAULT_PROMPTS_DIR)
         

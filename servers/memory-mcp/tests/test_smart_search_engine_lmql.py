@@ -37,18 +37,21 @@ class TestSmartSearchEngineLMQL:
     @pytest.fixture
     def sample_results(self):
         """Пример результатов поиска."""
+        from datetime import datetime, timezone
         return [
             SearchResultItem(
                 record_id="result_1",
                 content="Содержимое результата 1",
                 score=0.9,
                 source="telegram",
+                timestamp=datetime.now(timezone.utc),
             ),
             SearchResultItem(
                 record_id="result_2",
                 content="Содержимое результата 2",
                 score=0.8,
                 source="telegram",
+                timestamp=datetime.now(timezone.utc),
             ),
         ]
 

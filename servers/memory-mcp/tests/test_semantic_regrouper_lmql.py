@@ -78,8 +78,12 @@ class TestSemanticRegrouperLMQL:
 
         regrouper = SemanticRegrouper(lmql_adapter=mock_lmql_adapter)
 
-        with pytest.raises(RuntimeError, match="Ошибка семантической перегруппировки"):
-            await regrouper.regroup_sessions(sample_sessions, "test_chat")
+        # При ошибке LMQL метод возвращает исходные сессии как отдельные группы
+        result = await regrouper.regroup_sessions(sample_sessions, "test_chat")
+        
+        # Проверяем, что вернулись исходные сессии
+        assert len(result) == len(sample_sessions)
+        assert all("session_id" in group for group in result)
 
     @pytest.mark.asyncio
     async def test_regroup_sessions_empty_list(self, mock_lmql_adapter):

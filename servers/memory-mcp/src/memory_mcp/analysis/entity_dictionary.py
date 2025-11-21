@@ -550,17 +550,14 @@ class EntityDictionary:
                 
                 settings = get_settings()
                 
-                # Пытаемся использовать LM Studio, если указана LLM модель
-                if settings.lmstudio_llm_model:
-                    self._llm_client = LangChainLLMAdapter(
-                        model_name=settings.lmstudio_model,  # Для эмбеддингов (не используется здесь)
-                        llm_model_name=settings.lmstudio_llm_model,  # Для генерации текста
-                        base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
-                    )
-                    logger.debug("Используется LM Studio для валидации сущностей")
+                # Пытаемся использовать фабрику для создания LLM клиента
+                llm_client = get_llm_client_factory()
+                if llm_client:
+                    self._llm_client = llm_client
+                    logger.debug("Используется LLM клиент для валидации сущностей")
                 else:
-                    logger.error("LM Studio не настроен, валидация сущностей невозможна")
-                    raise ValueError("Для валидации сущностей требуется настроенный LM Studio (MEMORY_MCP_LMSTUDIO_LLM_MODEL)")
+                    logger.error("LLM клиент не настроен, валидация сущностей невозможна")
+                    raise ValueError("Для валидации сущностей требуется настроенный LLM клиент (MEMORY_MCP_LMSTUDIO_LLM_MODEL)")
                 
                 self._llm_client_initialized = True
             except Exception as e:
@@ -625,11 +622,6 @@ class EntityDictionary:
         Returns:
             True если сущность валидна, False иначе
         """
-        llm_client = self._get_llm_client()
-        if not llm_client:
-            # Если LLM недоступен, пропускаем валидацию (разрешаем добавление)
-            return True
-        
         # Промпт для валидации сущностей
         entity_type_names = {
             "persons": "имя человека",
@@ -713,6 +705,11 @@ class EntityDictionary:
             )
 
         # Если LMQL недоступен, используем обычный LLM
+        llm_client = self._get_llm_client()
+        if not llm_client:
+            # Если LLM недоступен, пропускаем валидацию (разрешаем добавление)
+            return True
+        
         try:
             # Используем async контекстный менеджер
             async with llm_client:

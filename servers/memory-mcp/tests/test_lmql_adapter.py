@@ -76,9 +76,10 @@ class TestLMQLAdapter:
         mock_lmql.run.side_effect = Exception("Test error")
 
         adapter = LMQLAdapter(model="test", backend="openai")
-        result = await adapter.execute_query("test query")
-
-        assert result is None
+        
+        # При ошибке должен быть выброшен RuntimeError
+        with pytest.raises(RuntimeError, match="Ошибка выполнения LMQL запроса"):
+            await adapter.execute_query("test query")
 
     @pytest.mark.asyncio
     async def test_execute_json_query_success(self, mock_lmql):
@@ -103,12 +104,13 @@ class TestLMQLAdapter:
         mock_lmql.run.return_value = [mock_result]
 
         adapter = LMQLAdapter(model="test", backend="openai")
-        result = await adapter.execute_json_query(
-            prompt="test",
-            json_schema='{"key": "[VALUE]"}',
-        )
-
-        assert result is None
+        
+        # При невалидном JSON должен быть выброшен RuntimeError
+        with pytest.raises(RuntimeError, match="Не удалось извлечь JSON"):
+            await adapter.execute_json_query(
+                prompt="test",
+                json_schema='{"key": "[VALUE]"}',
+            )
 
     @pytest.mark.asyncio
     async def test_execute_validation_query_success(self, mock_lmql):
@@ -133,12 +135,13 @@ class TestLMQLAdapter:
         mock_lmql.run.return_value = [mock_result]
 
         adapter = LMQLAdapter(model="test", backend="openai")
-        result = await adapter.execute_validation_query(
-            prompt="test",
-            valid_responses=["ДА", "НЕТ"],
-        )
-
-        assert result is None
+        
+        # При невалидном ответе должен быть выброшен RuntimeError
+        with pytest.raises(RuntimeError, match="Невалидный результат валидации"):
+            await adapter.execute_validation_query(
+                prompt="test",
+                valid_responses=["ДА", "НЕТ"],
+            )
 
     def test_extract_json_from_result(self, mock_lmql):
         """Тест извлечения JSON из результата."""
@@ -169,8 +172,8 @@ class TestLMQLAdapter:
         assert result == "ДА"
 
         # Тест с невалидным ответом
-        result = adapter._extract_validation_result("INVALID", ["ДА", "НЕТ"])
-        assert result is None
+        with pytest.raises(RuntimeError, match="Невалидный результат валидации"):
+            adapter._extract_validation_result("INVALID", ["ДА", "НЕТ"])
 
 
 class TestBuildLMQLAdapterFromEnv:

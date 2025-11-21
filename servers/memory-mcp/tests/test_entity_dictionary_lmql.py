@@ -22,12 +22,16 @@ class TestEntityDictionaryLMQL:
     @pytest.fixture
     def entity_dict(self, tmp_path, mock_lmql_adapter):
         """Создание экземпляра EntityDictionary для тестов."""
+        from unittest.mock import patch, MagicMock
         storage_path = tmp_path / "entity_dictionaries"
-        return EntityDictionary(
+        entity_dict = EntityDictionary(
             storage_path=storage_path,
             enable_llm_validation=True,
             lmql_adapter=mock_lmql_adapter,
         )
+        # Мокируем _get_llm_client, чтобы не требовался реальный LLM клиент
+        entity_dict._get_llm_client = MagicMock(return_value=None)
+        return entity_dict
 
     @pytest.mark.asyncio
     async def test_validate_entity_with_lmql_success_yes(self, entity_dict, mock_lmql_adapter):
