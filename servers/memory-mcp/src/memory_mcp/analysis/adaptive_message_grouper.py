@@ -28,7 +28,6 @@ class AdaptiveMessageGrouper:
         prompt_reserve_tokens: int = 5000,
         avg_tokens_per_char: float = 0.25,  # ~4 символа на токен
         min_group_size_tokens: int = 50000,  # Минимум для эффективного использования
-        strategy: str = "hybrid",  # "hybrid", "temporal", "quantitative", "semantic"
     ):
         """
         Инициализация адаптивного группировщика.
@@ -38,13 +37,11 @@ class AdaptiveMessageGrouper:
             prompt_reserve_tokens: Резерв токенов для промпта
             avg_tokens_per_char: Среднее количество токенов на символ
             min_group_size_tokens: Минимальный размер группы для эффективного использования
-            strategy: Стратегия группировки ("hybrid", "temporal", "quantitative")
         """
         self.max_tokens = max_tokens
         self.prompt_reserve_tokens = prompt_reserve_tokens
         self.avg_tokens_per_char = avg_tokens_per_char
         self.min_group_size_tokens = min_group_size_tokens
-        self.strategy = strategy
 
     def estimate_tokens(self, text: str) -> int:
         """
@@ -162,22 +159,14 @@ class AdaptiveMessageGrouper:
             logger.info(f"Все сообщения помещаются в одну группу ({total_tokens} токенов)")
             return [sorted_messages]
 
-        # Выбираем стратегию группировки
-        if self.strategy == "hybrid":
-            return self._group_hybrid(sorted_messages, chat_name)
-        elif self.strategy == "temporal":
-            return self._group_temporal(sorted_messages, chat_name)
-        elif self.strategy == "quantitative":
-            return self._group_quantitative(sorted_messages, chat_name)
-        else:
-            logger.warning(f"Неизвестная стратегия {self.strategy}, используем hybrid")
-            return self._group_hybrid(sorted_messages, chat_name)
+        # Используем гибридную стратегию группировки
+        return self._group_hybrid(sorted_messages, chat_name)
 
     def _group_hybrid(
         self, messages: List[Dict[str, Any]], chat_name: Optional[str]
     ) -> List[List[Dict[str, Any]]]:
         """
-        Гибридная стратегия: комбинация временной и количественной группировки.
+        Адаптивная группировка: комбинация временной и количественной группировки.
 
         Алгоритм:
         1. Вычисляем средний размер сообщения
@@ -234,64 +223,10 @@ class AdaptiveMessageGrouper:
         final_groups = self._merge_small_groups(final_groups)
 
         logger.info(
-            f"Создано {len(final_groups)} групп из {len(messages)} сообщений "
-            f"(гибридная стратегия)"
+            f"Создано {len(final_groups)} групп из {len(messages)} сообщений"
         )
 
         return final_groups
-
-    def _group_temporal(
-        self, messages: List[Dict[str, Any]], chat_name: Optional[str]
-    ) -> List[List[Dict[str, Any]]]:
-        """Временная группировка по неделям/месяцам."""
-        activity = self._estimate_activity(messages)
-        if activity == "high":
-            time_window = "week"
-        else:
-            time_window = "month"
-
-        groups = self._group_by_time_window(messages, time_window)
-
-        # Разбиваем слишком большие группы
-        final_groups = []
-        for group in groups:
-            group_tokens = self.estimate_group_tokens(group)
-            if group_tokens <= self.max_tokens:
-                final_groups.append(group)
-            else:
-                # Разбиваем на более мелкие временные окна
-                if time_window == "month":
-                    split_groups = self._group_by_time_window(group, "week")
-                else:
-                    # Разбиваем по дням
-                    split_groups = self._group_by_time_window(group, "day")
-                final_groups.extend(split_groups)
-
-        logger.info(
-            f"Создано {len(final_groups)} групп из {len(messages)} сообщений "
-            f"(временная стратегия: {time_window})"
-        )
-
-        return final_groups
-
-    def _group_quantitative(
-        self, messages: List[Dict[str, Any]], chat_name: Optional[str]
-    ) -> List[List[Dict[str, Any]]]:
-        """Количественная группировка по фиксированному количеству сообщений."""
-        # Вычисляем оптимальное количество сообщений на группу
-        total_tokens = self.estimate_group_tokens(messages)
-        avg_tokens_per_message = total_tokens / len(messages) if messages else 0
-        messages_per_group = int(self.max_tokens / avg_tokens_per_message) if avg_tokens_per_message > 0 else 1000
-        messages_per_group = max(500, min(messages_per_group, 2000))
-
-        groups = self._split_by_count(messages, messages_per_group)
-
-        logger.info(
-            f"Создано {len(groups)} групп из {len(messages)} сообщений "
-            f"(количественная стратегия: {messages_per_group} сообщений на группу)"
-        )
-
-        return groups
 
     def _estimate_activity(self, messages: List[Dict[str, Any]]) -> str:
         """

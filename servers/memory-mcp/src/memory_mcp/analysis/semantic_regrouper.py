@@ -108,11 +108,16 @@ class SemanticRegrouper:
             # Парсим ответ от LMQL
             regrouped_sessions = self._parse_lmql_response(response_data, sessions)
 
-        logger.info(
-            f"Перегруппировано {len(sessions)} сессий в {len(regrouped_sessions)} групп"
-        )
+            logger.info(
+                f"Перегруппировано {len(sessions)} сессий в {len(regrouped_sessions)} групп"
+            )
 
-        return regrouped_sessions
+            return regrouped_sessions
+        except Exception as e:
+            logger.error(f"Ошибка при перегруппировке сессий: {e}")
+            # Возвращаем исходные сессии как отдельные группы
+            return [{"session_id": s.get("session_id", f"session_{i}"), "sessions": [s]} 
+                    for i, s in enumerate(sessions)]
 
     def _format_sessions_info(
         self,

@@ -231,7 +231,6 @@ class TwoLevelIndexer:
             elif self.message_grouping_strategy == "adaptive":
                 self.adaptive_grouper = AdaptiveMessageGrouper(
                     max_tokens=max_group_tokens,
-                    strategy="hybrid"
                 )
 
         self.graph = graph

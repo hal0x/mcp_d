@@ -44,7 +44,6 @@ class LargeContextProcessor:
         self.grouper = AdaptiveMessageGrouper(
             max_tokens=self.available_tokens,
             prompt_reserve_tokens=prompt_reserve_tokens,
-            strategy="hybrid",
         )
 
     def estimate_tokens(self, text: str) -> int:

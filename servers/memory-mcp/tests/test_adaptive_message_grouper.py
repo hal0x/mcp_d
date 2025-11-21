@@ -50,9 +50,9 @@ def test_group_large_context():
     assert len(groups) > 1  # Должно быть несколько групп
 
 
-def test_temporal_grouping():
-    """Тест временной группировки."""
-    grouper = AdaptiveMessageGrouper(strategy="temporal", max_tokens=10000)
+def test_hybrid_grouping_with_time():
+    """Тест гибридной группировки с временными окнами."""
+    grouper = AdaptiveMessageGrouper(max_tokens=10000)
     messages = [
         create_test_message(f"Message {i}", days_ago=i) for i in range(30)
     ]
@@ -60,9 +60,9 @@ def test_temporal_grouping():
     assert len(groups) > 0
 
 
-def test_quantitative_grouping():
-    """Тест количественной группировки."""
-    grouper = AdaptiveMessageGrouper(strategy="quantitative", max_tokens=10000)
+def test_hybrid_grouping_quantitative():
+    """Тест гибридной группировки с количественным ограничением."""
+    grouper = AdaptiveMessageGrouper(max_tokens=10000)
     messages = [create_test_message(f"Message {i}") for i in range(50)]
     groups = grouper.group_messages_adaptively(messages, "test_chat")
     assert len(groups) > 0
