@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     )
     large_context_cache_size: int = Field(100, description="Размер кэша для промежуточных результатов")
 
+    # Настройки поиска и буста результатов
+    search_boost_path_1: float = Field(1.3, description="Коэффициент буста для результатов с путем длины 1 в графе")
+    search_boost_path_2: float = Field(1.2, description="Коэффициент буста для результатов с путем длины 2 в графе")
+    search_boost_path_3: float = Field(1.1, description="Коэффициент буста для результатов с путем длины 3 в графе")
+    search_boost_strength_multiplier: float = Field(0.1, description="Множитель для силы связи при расчете буста")
+
+    # Настройки качества и оценки
+    quality_score_epsilon: float = Field(0.001, description="Epsilon для сравнения float значений при оценке качества (1e-3)")
+
     # Настройки генерации описаний сущностей
     entity_description_enabled: bool = Field(True, description="Включить генерацию описаний сущностей")
     entity_description_max_length: int = Field(200, description="Максимальная длина описания сущности")
@@ -68,6 +77,17 @@ class Settings(BaseSettings):
     # LangChain настройки
     langchain_summarization_mode: Literal["stuff", "map_reduce", "refine"] = Field(
         "map_reduce", description="Режим саммаризации LangChain"
+    )
+
+    # LMQL настройки
+    use_lmql: bool = Field(
+        True, description="Использовать LMQL для структурированной генерации"
+    )
+    lmql_model: str | None = Field(
+        None, description="Модель для LMQL (если отличается от lmstudio_llm_model)"
+    )
+    lmql_backend: Literal["openai", "lmstudio", "ollama"] = Field(
+        "lmstudio", description="Бэкенд для LMQL"
     )
 
     model_config = SettingsConfigDict(

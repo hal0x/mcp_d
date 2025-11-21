@@ -314,25 +314,20 @@ class SmartSearchEngine:
 
         all_results: Dict[str, SearchResultItem] = {}
 
+        # Обрабатываем результаты из БД с прямым взвешиванием
         if db_results:
-            max_db_score = max(r.score for r in db_results) if db_results else 1.0
             for result in db_results:
-                normalized_score = result.score / max_db_score if max_db_score > 0 else 0.0
-                weighted_score = normalized_score * db_weight
+                weighted_score = result.score * db_weight
                 result.score = weighted_score
                 all_results[result.record_id] = result
 
+        # Обрабатываем результаты из артифактов с прямым взвешиванием
         if artifact_results:
-            max_artifact_score = (
-                max(r.score for r in artifact_results) if artifact_results else 1.0
-            )
             for result in artifact_results:
-                normalized_score = (
-                    result.score / max_artifact_score if max_artifact_score > 0 else 0.0
-                )
-                weighted_score = normalized_score * artifact_weight
+                weighted_score = result.score * artifact_weight
 
                 if result.record_id in all_results:
+                    # Если результат уже есть, суммируем скоры
                     all_results[result.record_id].score += weighted_score
                 else:
                     result.score = weighted_score
@@ -526,17 +521,20 @@ class SmartSearchEngine:
 
             boost_factor = 1.0
             if connections:
+                from ..config import get_settings
+                settings = get_settings()
+                
                 min_path_length = min(c.path_length for c in connections)
                 
                 if min_path_length == 1:
-                    boost_factor = 1.3
+                    boost_factor = settings.search_boost_path_1
                 elif min_path_length == 2:
-                    boost_factor = 1.2
+                    boost_factor = settings.search_boost_path_2
                 elif min_path_length == 3:
-                    boost_factor = 1.1
+                    boost_factor = settings.search_boost_path_3
                 
                 max_strength = max(c.path_strength for c in connections)
-                boost_factor += max_strength * 0.1
+                boost_factor += max_strength * settings.search_boost_strength_multiplier
                 
                 logger.debug(
                     f"Буст для результата {result_id}: "

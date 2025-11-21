@@ -13,64 +13,9 @@ from typing import Any, Iterator
 logger = logging.getLogger(__name__)
 
 
-def _try_fix_missing_commas(content: str, error: json.JSONDecodeError) -> dict | list | None:
-    """
-    Пытается исправить отсутствующие запятые между объектами в JSON массиве.
-    
-    Args:
-        content: Содержимое файла
-        error: Ошибка парсинга JSON
-        
-    Returns:
-        Распарсенные данные или None при неудаче
-    """
-    if not content.strip().startswith('['):
-        return None
-    
-    import re
-    # Заменяем '}\s*{' на '},\n    {' для объектов верхнего уровня
-    fixed_content = re.sub(r'\}\s*\n\s*\{', '},\n    {', content)
-    try:
-        return json.loads(fixed_content)
-    except json.JSONDecodeError:
-        return None
-
-
-def _try_load_partial(content: str, error: json.JSONDecodeError) -> dict | list | None:
-    """
-    Пытается загрузить частичное содержимое до позиции ошибки.
-    
-    Args:
-        content: Содержимое файла
-        error: Ошибка парсинга JSON
-        
-    Returns:
-        Распарсенные данные или None при неудаче
-    """
-    error_pos = getattr(error, 'pos', None)
-    if not error_pos or error_pos <= 0:
-        return None
-    
-    # Пытаемся найти последний валидный объект
-    partial_content = content[:error_pos]
-    # Находим последнюю закрывающую скобку объекта
-    last_brace = partial_content.rfind('}')
-    if last_brace <= 0:
-        return None
-    
-    partial_content = partial_content[:last_brace + 1] + '\n]'
-    try:
-        return json.loads(partial_content)
-    except json.JSONDecodeError:
-        return None
-
-
 def load_json_file(path: Path) -> dict | list | None:
     """
     Загружает JSON файл (обычный JSON, не JSONL).
-    
-    Если файл поврежден (например, отсутствуют запятые между объектами),
-    пытается исправить и загрузить частично.
 
     Args:
         path: Путь к JSON файлу
@@ -88,22 +33,6 @@ def load_json_file(path: Path) -> dict | list | None:
             return json.load(fp)
     except json.JSONDecodeError as e:
         logger.debug("Файл %s не является валидным JSON: %s", path, e)
-        # Пытаемся загрузить частично, исправляя формат
-        try:
-            with open(path, encoding="utf-8") as fp:
-                content = fp.read()
-            
-            # Сначала пытаемся исправить отсутствующие запятые
-            result = _try_fix_missing_commas(content, e)
-            if result is not None:
-                return result
-            
-            # Если не получилось, пытаемся загрузить частично
-            result = _try_load_partial(content, e)
-            if result is not None:
-                return result
-        except Exception as repair_error:
-            logger.debug("Не удалось исправить файл %s: %s", path, repair_error)
         return None
     except Exception as e:
         logger.error("Ошибка при загрузке JSON файла %s: %s", path, e)

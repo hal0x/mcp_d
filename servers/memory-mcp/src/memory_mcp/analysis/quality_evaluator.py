@@ -301,6 +301,10 @@ class IterativeRefiner:
         session: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Запускает детерминированные проходы улучшения."""
+        from ..config import get_settings
+        
+        settings = get_settings()
+        epsilon = settings.quality_score_epsilon
 
         if aux_data.get("small_session_info"):
             logger.info("⚠️ Малый объём сессии — IterativeRefiner пропущен")
@@ -365,8 +369,14 @@ class IterativeRefiner:
                 delta,
             )
 
-            if new_score > best_score + 1e-3 or (
-                abs(new_score - best_score) <= 1e-3 and changed
+            # Используем относительное сравнение с epsilon из конфига
+            # Относительное сравнение: abs(a - b) <= epsilon * max(abs(a), abs(b), 1.0)
+            score_diff = abs(new_score - best_score)
+            max_score = max(abs(new_score), abs(best_score), 1.0)
+            is_approximately_equal = score_diff <= epsilon * max_score
+            
+            if new_score > best_score + epsilon * max_score or (
+                is_approximately_equal and changed
             ):
                 best_summary = copy.deepcopy(improved)
                 best_score = new_score
