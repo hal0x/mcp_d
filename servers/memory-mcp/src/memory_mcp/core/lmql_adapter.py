@@ -35,8 +35,8 @@ class LMQLAdapter:
 
         Args:
             model: Название модели для LMQL
-            backend: Бэкенд для LMQL (openai, lmstudio, ollama)
-            base_url: Базовый URL для API (для lmstudio/ollama)
+            backend: Бэкенд для LMQL (игнорируется, всегда используется lmstudio)
+            base_url: Базовый URL для API (для lmstudio)
         """
         if lmql is None:
             raise ImportError(
@@ -44,32 +44,41 @@ class LMQLAdapter:
             )
 
         self.model = model
-        self.backend = backend
+        self.backend = "lmstudio"  # Всегда используем lmstudio
         self.base_url = base_url
 
-        # Настройка бэкенда
-        if backend == "lmstudio" and base_url:
-            # LM Studio использует OpenAI-совместимый API
-            self.model_identifier = f"openai/{model}"
-            self.api_config = {"api_base": base_url}
-        elif backend == "openai":
-            self.model_identifier = f"openai/{model}"
-            self.api_config = {}
-        elif backend == "ollama" and base_url:
-            self.model_identifier = f"ollama/{model}"
-            self.api_config = {"api_base": base_url}
-        else:
-            self.model_identifier = model
-            self.api_config = {}
+        # Всегда используем lmstudio с OpenAI-совместимым API
+        self.model_identifier = f"openai/{model}"
+        self.api_config = {"api_base": base_url} if base_url else {}
 
         logger.info(
             f"Инициализирован LMQLAdapter (модель: {self.model_identifier}, "
-            f"бэкенд: {backend})"
+            f"бэкенд: lmstudio)"
         )
 
     def available(self) -> bool:
         """Проверка доступности LMQL."""
         return lmql is not None
+
+    def _extract_result_value(self, result: Any) -> str:
+        """Извлекает значение из результата LMQL.
+        
+        Args:
+            result: Результат выполнения LMQL запроса (может быть списком или объектом)
+            
+        Returns:
+            Строковое представление результата
+        """
+        # Если результат - список, берем первый элемент
+        if isinstance(result, list) and len(result) > 0:
+            result = result[0]
+        
+        # Пытаемся извлечь variables или prompt, иначе конвертируем в строку
+        if hasattr(result, "variables"):
+            return str(result.variables)
+        if hasattr(result, "prompt"):
+            return str(result.prompt)
+        return str(result)
 
     async def execute_query(
         self, query: str, temperature: float = 0.3, max_tokens: int = 2048
@@ -101,19 +110,7 @@ class LMQLAdapter:
             )
 
             # Извлекаем результат
-            if isinstance(result, list) and len(result) > 0:
-                first_result = result[0]
-                if hasattr(first_result, "variables"):
-                    return str(first_result.variables)
-                elif hasattr(first_result, "prompt"):
-                    return str(first_result.prompt)
-                return str(first_result)
-            elif hasattr(result, "variables"):
-                return str(result.variables)
-            elif hasattr(result, "prompt"):
-                return str(result.prompt)
-            else:
-                return str(result)
+            return self._extract_result_value(result)
 
         except Exception as exc:
             logger.error(f"Ошибка выполнения LMQL запроса: {exc}")
@@ -348,17 +345,13 @@ def build_lmql_adapter_from_env() -> LMQLAdapter:
             "Установите MEMORY_MCP_LMQL_MODEL или MEMORY_MCP_LMSTUDIO_LLM_MODEL"
         )
 
-    # Определяем базовый URL в зависимости от бэкенда
-    base_url = None
-    if settings.lmql_backend == "lmstudio":
-        base_url = f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
-    elif settings.lmql_backend == "ollama":
-        base_url = "http://localhost:11434"
+    # Всегда используем lmstudio
+    base_url = f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
 
     try:
         adapter = LMQLAdapter(
             model=model,
-            backend=settings.lmql_backend,
+            backend="lmstudio",
             base_url=base_url,
         )
         logger.info("LMQL адаптер успешно создан")

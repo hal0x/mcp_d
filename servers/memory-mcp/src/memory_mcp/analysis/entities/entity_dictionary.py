@@ -697,81 +697,17 @@ class EntityDictionary:
 Ответь ТОЛЬКО одним словом: "ДА" если это валидная {type_name}, или "НЕТ" если это не валидная {type_name}.
 Не добавляй никаких объяснений, только "ДА" или "НЕТ"."""
 
-        # Используем LMQL для валидации, если доступен
-        if self.lmql_adapter:
-            logger.debug(f"Используется LMQL для валидации сущности: {entity_type}={normalized_value}")
-            return await self._validate_entity_with_lmql(
-                entity_type, normalized_value, original_value, type_name, prompt, type_specific_rules
-            )
-
-        # Если LMQL недоступен, используем обычный LLM
-        llm_client = self._get_llm_client()
-        if not llm_client:
-            # Если LLM недоступен, пропускаем валидацию (разрешаем добавление)
-            return True
-        
-        try:
-            # Используем async контекстный менеджер
-            async with llm_client:
-                if hasattr(llm_client, 'generate_summary'):
-                    # LangChainLLMAdapter
-                    # Для reasoning-моделей увеличиваем max_tokens, так как они генерируют reasoning перед ответом
-                    # Минимум 200 токенов для reasoning-моделей, 100 для обычных
-                    # Используем максимальное значение модели (131072 для gpt-oss-20b)
-                    from ..config import get_settings
-                    settings = get_settings()
-                    max_tokens = settings.large_context_max_tokens  # 131072
-                    
-                    response = await llm_client.generate_summary(
-                        prompt=prompt,
-                        temperature=0.1,  # Низкая температура для более детерминированных ответов
-                        max_tokens=max_tokens,  # Максимальное значение модели
-                        top_p=0.9,
-                        presence_penalty=0.0,
-                    )
-                else:
-                    logger.error("LLM клиент не поддерживает generate_summary, валидация невозможна")
-                    raise ValueError("LLM клиент должен поддерживать метод generate_summary")
-                
-                # Парсим ответ
-                # Метод generate_summary должен вернуть только content, но на всякий случай проверяем
-                response_clean = response.strip().upper()
-                
-                # Если ответ содержит JSON (что не должно происходить, но на всякий случай)
-                if response_clean.startswith("{") or response_clean.startswith("["):
-                    try:
-                        import json
-                        parsed = json.loads(response)
-                        # Пытаемся извлечь content из JSON
-                        if isinstance(parsed, dict):
-                            if "choices" in parsed and len(parsed["choices"]) > 0:
-                                message = parsed["choices"][0].get("message", {})
-                                response_clean = message.get("content", "").strip().upper()
-                            elif "content" in parsed:
-                                response_clean = parsed["content"].strip().upper()
-                    except (json.JSONDecodeError, KeyError, AttributeError):
-                        logger.warning(f"Не удалось распарсить JSON-ответ от LLM для '{normalized_value}': {response[:200]}")
-                
-                if "ДА" in response_clean or "YES" in response_clean:
-                    logger.debug(f"LLM подтвердил сущность: {entity_type}={normalized_value}")
-                    return True
-                elif "НЕТ" in response_clean or "NO" in response_clean:
-                    logger.debug(f"LLM отклонил сущность: {entity_type}={normalized_value}")
-                    return False
-                else:
-                    # Если ответ неоднозначный, логируем и отклоняем (консервативный подход)
-                    logger.warning(
-                        f"Неоднозначный ответ LLM для '{normalized_value}' (тип: {entity_type}): '{response[:100]}'. "
-                        f"Отклоняем добавление для безопасности."
-                    )
-                    return False
-                    
-        except Exception as e:
-            logger.error(f"Ошибка при валидации сущности '{normalized_value}' через LLM: {e}")
+        # Используем LMQL для валидации (обязательно)
+        if not self.lmql_adapter:
             raise RuntimeError(
-                f"Ошибка валидации сущности '{normalized_value}' (тип: {entity_type}) через LLM: {e}. "
-                "Проверьте конфигурацию LLM клиента."
-            ) from e
+                "LMQL адаптер не настроен. Валидация сущностей требует LMQL. "
+                "Установите MEMORY_MCP_USE_LMQL=true и настройте LMQL."
+            )
+        
+        logger.debug(f"Используется LMQL для валидации сущности: {entity_type}={normalized_value}")
+        return await self._validate_entity_with_lmql(
+            entity_type, normalized_value, original_value, type_name, prompt, type_specific_rules
+        )
 
     async def _classify_entity_type(
         self, value: str, normalized_value: str, context: Optional[str] = None
@@ -825,72 +761,17 @@ class EntityDictionary:
 3. Новый тип должен быть на английском языке, в нижнем регистре, без пробелов (используй подчеркивания).
 4. Новый тип должен быть описательным (например: "games", "products", "events", "technologies")."""
         
-        # Используем LMQL для структурированной классификации
-        if self.lmql_adapter:
-            try:
-                logger.debug("Используется LMQL для классификации типа сущности")
-                return await self._classify_entity_type_with_lmql(
-                    prompt, value, normalized_value, existing_types
-                )
-            except Exception as e:
-                logger.warning(f"Ошибка при использовании LMQL для классификации типа сущности: {e}")
-                # Fallback на старую реализацию
+        # Используем LMQL для структурированной классификации (обязательно)
+        if not self.lmql_adapter:
+            raise RuntimeError(
+                "LMQL адаптер не настроен. Классификация сущностей требует LMQL. "
+                "Установите MEMORY_MCP_USE_LMQL=true и настройте LMQL."
+            )
         
-        # Fallback на старую реализацию
-        llm_client = self._get_llm_client()
-        if not llm_client:
-            return None
-        
-        try:
-            async with llm_client:
-                if hasattr(llm_client, 'generate_summary'):
-                    from ..config import get_settings
-                    settings = get_settings()
-                    max_tokens = settings.large_context_max_tokens
-                    
-                    full_prompt = f"""{prompt}
-
-Верни ответ в формате JSON:
-{{
-    "type": "название_типа",
-    "is_new": true/false,
-    "description": "краткое описание типа (только для новых типов)"
-}}
-
-Только JSON, без дополнительного текста."""
-                    
-                    response = await llm_client.generate_summary(
-                        prompt=full_prompt,
-                        temperature=0.3,
-                        max_tokens=max_tokens,
-                        top_p=0.9,
-                        presence_penalty=0.0,
-                    )
-                    
-                    # Парсим JSON ответ
-                    response = response.strip()
-                    if response.startswith("```"):
-                        response = response.split("```")[1]
-                        if response.startswith("json"):
-                            response = response[4:]
-                    response = response.strip()
-                    
-                    result = json.loads(response)
-                    entity_type = result.get("type")
-                    is_new = result.get("is_new", False)
-                    
-                    if entity_type:
-                        # Если тип новый - добавляем его
-                        if is_new and entity_type not in existing_types:
-                            threshold = 3  # По умолчанию порог 3
-                            self._add_dynamic_entity_type(entity_type, threshold)
-                            logger.info(f"LLM определил новый тип сущности: {entity_type} для '{value}'")
-                        
-                        return entity_type
-        except Exception as e:
-            logger.warning(f"Ошибка при классификации типа сущности для '{value}': {e}")
-        
-        return None
+        logger.debug("Используется LMQL для классификации типа сущности")
+        return await self._classify_entity_type_with_lmql(
+            prompt, value, normalized_value, existing_types
+        )
 
     async def _classify_entity_type_with_lmql(
         self, prompt: str, value: str, normalized_value: str, existing_types: List[str]
