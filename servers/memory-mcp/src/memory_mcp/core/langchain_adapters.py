@@ -415,44 +415,24 @@ def build_langchain_llm_from_env() -> Optional[LangChainLLMAdapter]:
     return adapter
 
 
-def get_llm_client_factory() -> Optional[LangChainLLMAdapter | Any]:
-    """Фабричная функция для получения LLM клиента (LangChain или старый).
+def get_llm_client_factory() -> Optional[LangChainLLMAdapter]:
+    """Фабричная функция для получения LangChain LLM клиента.
     
     Returns:
-        LangChainLLMAdapter, LMStudioEmbeddingClient или None
+        LangChainLLMAdapter или None
     """
-    settings = get_settings()
-    
-    # Проверяем, нужно ли использовать LangChain
-    if settings.use_langchain_llm:
-        try:
-            adapter = build_langchain_llm_from_env()
-            if adapter:
-                logger.debug("Используется LangChain LLM адаптер")
-                return adapter
-            else:
-                logger.warning("LangChain LLM requested but failed to initialize, falling back to default")
-        except ImportError as e:
-            logger.warning(f"LangChain not available, falling back to default LLM: {e}")
-        except Exception as e:
-            logger.warning(f"Error initializing LangChain LLM, falling back to default: {e}")
-    
-    # Используем LM Studio клиент
     try:
-        from .lmstudio_client import LMStudioEmbeddingClient
-        
-        if not settings.lmstudio_llm_model:
-            logger.warning("LM Studio LLM модель не задана, LLM клиент не создан")
+        adapter = build_langchain_llm_from_env()
+        if adapter:
+            logger.debug("Используется LangChain LLM адаптер")
+            return adapter
+        else:
+            logger.error("LangChain LLM failed to initialize")
             return None
-        
-        client = LMStudioEmbeddingClient(
-            model_name=settings.lmstudio_model,
-            llm_model_name=settings.lmstudio_llm_model,
-            base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}",
-        )
-        logger.debug("Используется LM Studio для LLM")
-        return client
+    except ImportError as e:
+        logger.error(f"LangChain not available: {e}. Install: pip install langchain langchain-community langchain-openai")
+        return None
     except Exception as e:
-        logger.error(f"Не удалось инициализировать LLM клиент: {e}")
+        logger.error(f"Error initializing LangChain LLM: {e}")
         return None
 

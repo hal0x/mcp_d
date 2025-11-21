@@ -65,11 +65,7 @@ class Settings(BaseSettings):
     entity_description_enabled: bool = Field(True, description="Включить генерацию описаний сущностей")
     entity_description_max_length: int = Field(200, description="Максимальная длина описания сущности")
 
-    # LangChain настройки (feature flags)
-    use_langchain_embeddings: bool = Field(False, description="Использовать LangChain для эмбеддингов")
-    use_langchain_llm: bool = Field(False, description="Использовать LangChain для LLM")
-    use_langchain_retrievers: bool = Field(False, description="Использовать LangChain ретриверы")
-    use_langchain_summarization: bool = Field(False, description="Использовать LangChain для саммаризации")
+    # LangChain настройки
     langchain_summarization_mode: Literal["stuff", "map_reduce", "refine"] = Field(
         "map_reduce", description="Режим саммаризации LangChain"
     )
