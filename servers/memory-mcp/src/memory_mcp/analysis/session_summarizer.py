@@ -315,7 +315,7 @@ class SessionSummarizer:
                 try:
                     logger.debug("Используется LMQL для генерации структурированной саммаризации")
                     summary_structure = await self._generate_summary_with_lmql(
-                        prompt, chat_mode, language
+                        prompt, chat_mode, dominant_language
                     )
                 except Exception as e:
                     logger.warning(f"Ошибка при использовании LMQL для саммаризации: {e}, используем fallback")

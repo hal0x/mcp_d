@@ -170,20 +170,20 @@ class QueryIntentAnalyzer:
         Returns:
             QueryIntent объект
         """
-            intent_type = data.get("intent_type", "informational")
-            confidence = float(data.get("confidence", 0.7))
+        intent_type = data.get("intent_type", "informational")
+        confidence = float(data.get("confidence", 0.7))
 
-            # Генерируем рекомендации на основе типа намерения
-            recommendations = self._generate_recommendations(intent_type, query)
+        # Генерируем рекомендации на основе типа намерения
+        recommendations = self._generate_recommendations(intent_type, query)
 
-            return QueryIntent(
-                intent_type=intent_type,
-                confidence=confidence,
-                recommended_db_weight=recommendations["db_weight"],
-                recommended_artifact_weight=recommendations["artifact_weight"],
-                recommended_top_k=recommendations.get("top_k"),
-                recommended_filters=recommendations.get("filters"),
-            )
+        return QueryIntent(
+            intent_type=intent_type,
+            confidence=confidence,
+            recommended_db_weight=recommendations["db_weight"],
+            recommended_artifact_weight=recommendations["artifact_weight"],
+            recommended_top_k=recommendations.get("top_k"),
+            recommended_filters=recommendations.get("filters"),
+        )
 
     def _generate_recommendations(
         self, intent_type: str, query: str

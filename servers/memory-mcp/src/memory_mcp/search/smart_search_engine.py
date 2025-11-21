@@ -235,16 +235,16 @@ class SmartSearchEngine:
         suggested_refinements = None
         if request.clarify or confidence_score < self.min_confidence:
             try:
-            clarifying_questions = await self._generate_clarifying_questions(
-                request.query, combined_results
-            )
+                clarifying_questions = await self._generate_clarifying_questions(
+                    request.query, combined_results
+                )
             except RuntimeError as e:
                 logger.warning(f"Не удалось сгенерировать уточняющие вопросы: {e}")
             
             try:
-            suggested_refinements = await self._suggest_refinements(
-                request.query, combined_results
-            )
+                suggested_refinements = await self._suggest_refinements(
+                    request.query, combined_results
+                )
             except RuntimeError as e:
                 logger.warning(f"Не удалось сгенерировать предложения: {e}")
 
