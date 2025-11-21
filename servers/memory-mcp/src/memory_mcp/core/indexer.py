@@ -3203,9 +3203,12 @@ class TwoLevelIndexer:
             # 1. С нормализованным именем: "semya-old-S%", "semya-S%"
             # 2. С оригинальным именем: "Семья-old-S%", "Семья-S%"
             # 3. С любым префиксом, если chat_slug пустой
+            # 4. Regrouped groups: "regrouped_group_%", "regrouped_%"
             pattern1 = f"{chat_slug}-%-S%" if chat_slug else "%"
             pattern2 = f"{chat}-%-S%" if chat else "%"
             pattern3 = f"{chat_slug}-S%" if chat_slug else "%"
+            pattern4 = "regrouped_%"  # Для regrouped groups
+            pattern5 = f"{chat_slug}-%-D%" if chat_slug else "%"  # Для day grouping
             
             cursor.execute(query, (session_id, chat, chat, pattern1, pattern2, pattern3, chat_slug))
             existing_sessions = cursor.fetchall()
