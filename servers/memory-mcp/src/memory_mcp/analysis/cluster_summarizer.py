@@ -7,7 +7,9 @@
 
 import asyncio
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from ..core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -15,14 +17,20 @@ logger = logging.getLogger(__name__)
 class ClusterSummarizer:
     """Генератор сводок для кластеров через LLM"""
 
-    def __init__(self, embedding_client):
+    def __init__(self, embedding_client, lmql_adapter: Optional[LMQLAdapter] = None):
         """
         Инициализация
 
         Args:
             embedding_client: LangChainLLMAdapter для взаимодействия с LLM
+            lmql_adapter: Опциональный LMQL адаптер для структурированной генерации.
+                         Если не указан, создается из настроек окружения.
         """
         self.embedding_client = embedding_client
+        try:
+            self.lmql_adapter = lmql_adapter or build_lmql_adapter_from_env()
+        except RuntimeError:
+            self.lmql_adapter = None
         logger.info("Инициализирован ClusterSummarizer")
 
     async def summarize_cluster(
@@ -59,15 +67,21 @@ class ClusterSummarizer:
         # Собираем ключевую информацию из сессий
         cluster_content = self._extract_cluster_content(sample_sessions, cluster)
 
-        # Генерируем сводку через LLM
+        # Генерируем сводку через LMQL
         try:
-            summary = await self._generate_llm_summary(cluster_content, cluster)
+            if self.lmql_adapter:
+                logger.debug("Используется LMQL для генерации сводки кластера")
+                summary = await self._generate_lmql_summary(cluster_content, cluster)
+            else:
+                raise RuntimeError(
+                    "LMQL не настроен. Установите MEMORY_MCP_USE_LMQL=true и настройте модель"
+                )
             return summary
         except Exception as e:
-            logger.error(f"Ошибка генерации LLM сводки: {e}")
+            logger.error(f"Ошибка генерации LMQL сводки: {e}")
             raise RuntimeError(
-                f"Ошибка генерации LLM сводки для кластера: {e}. "
-                "Проверьте конфигурацию LLM клиента."
+                f"Ошибка генерации LMQL сводки для кластера: {e}. "
+                "Проверьте конфигурацию LMQL."
             ) from e
 
     def _extract_cluster_content(
@@ -145,11 +159,11 @@ class ClusterSummarizer:
 
         return "\n".join(content_parts)
 
-    async def _generate_llm_summary(
+    async def _generate_lmql_summary(
         self, cluster_content: str, cluster: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Генерация сводки через LLM
+        Генерация сводки через LMQL
 
         Args:
             cluster_content: Контент кластера
@@ -157,9 +171,14 @@ class ClusterSummarizer:
 
         Returns:
             Сводка
+
+        Raises:
+            RuntimeError: Если произошла ошибка при выполнении запроса
         """
-        # Формируем промпт
-        prompt = f"""Ты - аналитик, который создаёт краткие сводки для тематических кластеров обсуждений в Telegram чатах.
+        try:
+            lmql_query_str = self._create_lmql_summary_query(cluster_content)
+            response_data = await self.lmql_adapter.execute_json_query(
+                prompt=f"""Ты - аналитик, который создаёт краткие сводки для тематических кластеров обсуждений в Telegram чатах.
 
 Дано:
 {cluster_content}
@@ -167,50 +186,48 @@ class ClusterSummarizer:
 Задача:
 1. Определи **одну главную тему**, которая объединяет все эти сессии (макс 10 слов)
 2. Напиши краткое описание кластера (2-3 предложения)
-3. Выдели 3-5 ключевых инсайтов из обсуждений
+3. Выдели 3-5 ключевых инсайтов из обсуждений""",
+                json_schema='{"title": "[TITLE]", "description": "[DESCRIPTION]", "key_insights": [KEY_INSIGHTS]}',
+                constraints="""
+                    len(TOKENS(TITLE)) <= 10 and
+                    3 <= len(KEY_INSIGHTS) <= 5
+                """,
+                temperature=0.3,
+                max_tokens=2048,
+            )
 
-Формат ответа (строго JSON):
-{{
-  "title": "Главная тема кластера",
-  "description": "Краткое описание того, что обсуждается",
-  "key_insights": [
-    "Инсайт 1",
-    "Инсайт 2",
-    "Инсайт 3"
-  ]
-}}
-
-Ответ:"""
-
-        # Запрашиваем LLM
-        try:
-            async with self.embedding_client:
-                response = await self.embedding_client.generate_summary(
-                    prompt, max_tokens=30000, temperature=0.3  # Уменьшено для предотвращения таймаутов
-                )
-
-            # Парсим JSON ответ
-            import json
-            import re
-
-            # Пробуем найти JSON в ответе
-            json_match = re.search(r"\{.*\}", response, re.DOTALL)
-            if json_match:
-                summary_data = json.loads(json_match.group(0))
-            else:
-                raise ValueError("Не найден JSON в ответе LLM")
-
-            logger.info("LLM сводка сгенерирована успешно")
-
-            return {
-                "title": summary_data.get("title", "Тематический кластер"),
-                "description": summary_data.get("description", ""),
-                "key_insights": summary_data.get("key_insights", []),
-            }
+            return self._parse_lmql_response(response_data)
 
         except Exception as e:
-            logger.error(f"Ошибка парсинга LLM ответа: {e}")
-            raise
+            logger.error(f"Ошибка при использовании LMQL для генерации сводки: {e}")
+            raise RuntimeError(f"Ошибка генерации сводки через LMQL: {e}") from e
+
+    def _create_lmql_summary_query(self, cluster_content: str) -> str:
+        """Создание LMQL запроса для генерации сводки.
+        
+        Args:
+            cluster_content: Контент кластера
+            
+        Returns:
+            Строка с LMQL запросом (для логирования/отладки)
+        """
+        # Этот метод возвращает строку для отладки, фактический запрос выполняется в execute_json_query
+        return f"LMQL query for cluster summary: {cluster_content[:100]}..."
+
+    def _parse_lmql_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Парсинг ответа LMQL в структуру сводки.
+        
+        Args:
+            data: Данные из LMQL ответа
+            
+        Returns:
+            Словарь со сводкой
+        """
+        return {
+            "title": data.get("title", "Тематический кластер"),
+            "description": data.get("description", ""),
+            "key_insights": data.get("key_insights", []),
+        }
 
     def _fallback_summary(self, cluster: Dict[str, Any]) -> Dict[str, Any]:
         """

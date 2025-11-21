@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 else:
     from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 
+from ..core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,14 +29,21 @@ class SemanticRegrouper:
     def __init__(
         self,
         embedding_client: Optional[LangChainLLMAdapter] = None,
+        lmql_adapter: Optional[LMQLAdapter] = None,
     ):
         """
         Инициализация семантического перегруппировщика.
 
         Args:
-            embedding_client: Клиент для LLM (опционально)
+            embedding_client: Клиент для LLM (опционально, для обратной совместимости)
+            lmql_adapter: Опциональный LMQL адаптер для структурированной генерации.
+                         Если не указан, создается из настроек окружения.
         """
         self.embedding_client = embedding_client
+        try:
+            self.lmql_adapter = lmql_adapter or build_lmql_adapter_from_env()
+        except RuntimeError:
+            self.lmql_adapter = None
 
     async def regroup_sessions(
         self,
@@ -64,22 +73,40 @@ class SemanticRegrouper:
             f"Семантическая перегруппировка {len(sessions)} сессий для чата {chat_name}"
         )
 
-        # Формируем промпт для перегруппировки
-        prompt = self._create_regroup_prompt(sessions, chat_name, accumulative_context)
+        # Используем LMQL для перегруппировки
+        if not self.lmql_adapter:
+            raise RuntimeError(
+                "LMQL не настроен. Установите MEMORY_MCP_USE_LMQL=true и настройте модель"
+            )
 
-        # Отправляем запрос в LLM
-        if not self.embedding_client:
-            raise ValueError("LLM клиент не доступен для семантической перегруппировки")
+        # Формируем информацию о сессиях для промпта
+        sessions_info = self._format_sessions_info(sessions, chat_name, accumulative_context)
 
-        async with self.embedding_client:
-            response = await self.embedding_client.generate_summary(
-                prompt=prompt,
+        try:
+            lmql_query_str = self._create_lmql_regroup_query(sessions_info, chat_name, accumulative_context)
+            response_data = await self.lmql_adapter.execute_json_query(
+                prompt=f"""Проанализируй следующие сессии из чата "{chat_name}" и перегруппируй их по смыслу и темам.
+{accumulative_context if accumulative_context else ""}
+
+Сессии для анализа:
+{sessions_info}
+
+Задачи:
+1. Определи основные темы и контекст каждой сессии
+2. Объедини связанные по смыслу сессии в новые группы
+3. Обоснуй каждую группировку (почему эти сессии связаны)
+4. Сохрани хронологический порядок внутри групп
+5. Если сессии не связаны по смыслу, оставь их отдельными
+
+Важно: каждый session_id должен быть включен ровно в одну группу.""",
+                json_schema='{"groups": [{"group_id": "[GROUP_ID]", "theme": "[THEME]", "rationale": "[RATIONALE]", "session_ids": [SESSION_IDS], "combined_summary": "[COMBINED_SUMMARY]"}]}',
+                constraints="True",  # Валидация уникальности session_ids будет в _parse_lmql_response
                 temperature=0.3,
                 max_tokens=8192,
             )
 
-        # Парсим ответ от LLM
-        regrouped_sessions = self._parse_llm_response(response, sessions)
+            # Парсим ответ от LMQL
+            regrouped_sessions = self._parse_lmql_response(response_data, sessions)
 
         logger.info(
             f"Перегруппировано {len(sessions)} сессий в {len(regrouped_sessions)} групп"
@@ -87,18 +114,13 @@ class SemanticRegrouper:
 
         return regrouped_sessions
 
-    def _create_regroup_prompt(
+    def _format_sessions_info(
         self,
         sessions: List[Dict[str, Any]],
         chat_name: str,
         accumulative_context: Optional[str],
     ) -> str:
-        """Создает промпт для семантической перегруппировки."""
-        context_part = ""
-        if accumulative_context:
-            context_part = f"\n\nНакопительный контекст чата:\n{accumulative_context}\n"
-
-        # Формируем информацию о сессиях
+        """Форматирует информацию о сессиях для промпта."""
         sessions_info = []
         for i, session in enumerate(sessions, 1):
             session_id = session.get("session_id", f"session_{i}")
@@ -128,57 +150,44 @@ class SemanticRegrouper:
                 f"  Примеры сообщений:\n" + "\n".join(sample_messages)
             )
 
-        return f"""Проанализируй следующие сессии из чата "{chat_name}" и перегруппируй их по смыслу и темам.
-{context_part}
-Сессии для анализа:
-{chr(10).join(sessions_info)}
+        return "\n".join(sessions_info)
 
-Задачи:
-1. Определи основные темы и контекст каждой сессии
-2. Объедини связанные по смыслу сессии в новые группы
-3. Обоснуй каждую группировку (почему эти сессии связаны)
-4. Сохрани хронологический порядок внутри групп
-5. Если сессии не связаны по смыслу, оставь их отдельными
+    def _create_lmql_regroup_query(
+        self,
+        sessions_info: str,
+        chat_name: str,
+        context: Optional[str],
+    ) -> str:
+        """Создание LMQL запроса для перегруппировки сессий.
+        
+        Args:
+            sessions_info: Отформатированная информация о сессиях
+            chat_name: Название чата
+            context: Накопительный контекст
+            
+        Returns:
+            Строка с LMQL запросом (для логирования/отладки)
+        """
+        # Этот метод возвращает строку для отладки, фактический запрос выполняется в execute_json_query
+        return f"LMQL query for regrouping sessions in {chat_name}: {len(sessions_info)} chars"
 
-Верни результат в формате JSON:
-{{
-  "groups": [
-    {{
-      "group_id": "group_1",
-      "theme": "Основная тема группы",
-      "rationale": "Обоснование группировки",
-      "session_ids": ["session_1", "session_2"],
-      "combined_summary": "Краткая саммаризация объединенной группы"
-    }}
-  ]
-}}
-
-Важно: каждый session_id должен быть включен ровно в одну группу."""
-
-    def _parse_llm_response(
-        self, response: str, original_sessions: List[Dict[str, Any]]
+    def _parse_lmql_response(
+        self, data: Dict[str, Any], original_sessions: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
-        Парсит ответ от LLM и создает перегруппированные сессии.
+        Парсит ответ от LMQL и создает перегруппированные сессии.
 
         Args:
-            response: Ответ от LLM
+            data: Данные из LMQL ответа
             original_sessions: Оригинальные сессии
 
         Returns:
             Список перегруппированных сессий
+
+        Raises:
+            RuntimeError: Если произошла ошибка при обработке ответа
         """
         try:
-            # Пытаемся извлечь JSON из ответа
-            json_start = response.find("{")
-            json_end = response.rfind("}") + 1
-
-            if json_start == -1 or json_end == 0:
-                logger.warning("Не найден JSON в ответе LLM, используем оригинальные сессии")
-                return original_sessions
-
-            json_str = response[json_start:json_end]
-            data = json.loads(json_str)
 
             # Создаем словарь для быстрого доступа к сессиям по ID
             sessions_by_id = {
@@ -252,27 +261,18 @@ class SemanticRegrouper:
             all_ids = set(sessions_by_id.keys())
             missing_ids = all_ids - included_ids
 
-            # Добавляем пропущенные сессии как отдельные группы
-            for session_id in missing_ids:
-                logger.warning(f"Сессия {session_id} не включена в перегруппировку, добавляем отдельно")
-                regrouped_sessions.append(sessions_by_id[session_id])
+            if missing_ids:
+                logger.warning(f"Сессии {missing_ids} не включены в перегруппировку, добавляем отдельно")
+                # Добавляем пропущенные сессии как отдельные группы
+                for session_id in missing_ids:
+                    regrouped_sessions.append(sessions_by_id[session_id])
 
             return regrouped_sessions
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Ошибка парсинга JSON ответа от LLM: {e}")
-            logger.debug(f"Ответ LLM: {response[:500]}")
-            raise RuntimeError(
-                f"Ошибка семантической перегруппировки: не удалось распарсить JSON ответ от LLM: {e}. "
-                f"Ответ LLM: {response[:500] if len(response) > 500 else response}. "
-                f"Проверьте конфигурацию LLM клиента."
-            ) from e
         except Exception as e:
-            logger.error(f"Ошибка при обработке ответа LLM: {e}")
-            response_preview = response[:500] if 'response' in locals() and response else 'N/A'
+            logger.error(f"Ошибка при обработке ответа LMQL: {e}")
             raise RuntimeError(
                 f"Ошибка семантической перегруппировки: {e}. "
-                f"Ответ LLM: {response_preview}. "
-                f"Проверьте конфигурацию LLM клиента."
+                f"Проверьте конфигурацию LMQL."
             ) from e
 

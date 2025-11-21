@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from ..config import get_settings
 from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
+from ..core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
 from ..memory.artifacts_reader import ArtifactsReader, ArtifactSearchResult
 from ..mcp.schema import (
     SearchRequest,
@@ -31,6 +32,7 @@ class SmartSearchEngine:
         artifacts_reader: ArtifactsReader,
         session_store: SearchSessionStore,
         min_confidence: float = 0.5,
+        lmql_adapter: Optional[LMQLAdapter] = None,
     ):
         """Инициализация интерактивного поискового движка."""
         self.adapter = adapter
@@ -38,6 +40,10 @@ class SmartSearchEngine:
         self.session_store = session_store
         self.min_confidence = min_confidence
         self._llm_client: Optional[LangChainLLMAdapter] = None
+        try:
+            self.lmql_adapter = lmql_adapter or build_lmql_adapter_from_env()
+        except RuntimeError:
+            self.lmql_adapter = None
         
         from .entity_context_enricher import EntityContextEnricher
         from ..analysis.entity_dictionary import get_entity_dictionary
@@ -228,12 +234,19 @@ class SmartSearchEngine:
         clarifying_questions = None
         suggested_refinements = None
         if request.clarify or confidence_score < self.min_confidence:
-            clarifying_questions = await self._generate_clarifying_questions(
-                request.query, combined_results
-            )
-            suggested_refinements = await self._suggest_refinements(
-                request.query, combined_results
-            )
+            try:
+                clarifying_questions = await self._generate_clarifying_questions(
+                    request.query, combined_results
+                )
+            except RuntimeError as e:
+                logger.warning(f"Не удалось сгенерировать уточняющие вопросы: {e}")
+            
+            try:
+                suggested_refinements = await self._suggest_refinements(
+                    request.query, combined_results
+                )
+            except RuntimeError as e:
+                logger.warning(f"Не удалось сгенерировать предложения: {e}")
 
         return SmartSearchResponse(
             results=combined_results,
@@ -392,108 +405,119 @@ class SmartSearchEngine:
 
     async def _generate_clarifying_questions(
         self, query: str, results: List[SearchResultItem]
-    ) -> Optional[List[str]]:
-        """Генерация уточняющих вопросов через LLM."""
-        llm_client = self._get_llm_client()
-        if not llm_client:
-            return None
+    ) -> List[str]:
+        """Генерация уточняющих вопросов для запроса.
+        
+        Returns:
+            Список уточняющих вопросов
+            
+        Raises:
+            RuntimeError: Если LMQL не настроен или произошла ошибка
+        """
+        if not self.lmql_adapter:
+            raise RuntimeError(
+                "LMQL не настроен. Установите MEMORY_MCP_USE_LMQL=true и настройте модель"
+            )
 
         results_preview = "\n".join(
             [f"- {r.content[:100]}..." for r in results[:5]]
         )
 
-        prompt = f"""Ты помощник для улучшения поиска. Пользователь искал: "{query}"
+        try:
+            lmql_query_str = self._create_lmql_questions_query(query, results_preview)
+            response_data = await self.lmql_adapter.execute_json_query(
+                prompt=f"""Ты помощник для улучшения поиска. Пользователь искал: "{query}"
 
 Текущие результаты поиска:
 {results_preview}
 
-Сгенерируй 2-3 уточняющих вопроса, которые помогут пользователю лучше сформулировать запрос.
-
-Верни вопросы в формате JSON массива строк, например: ["Вопрос 1?", "Вопрос 2?", "Вопрос 3?"]
-Только JSON, без дополнительного текста."""
-
-        from ..config import get_settings
-        settings = get_settings()
-        max_tokens = settings.large_context_max_tokens
-        
-        try:
-            async with llm_client:
-                response = await llm_client.generate_summary(
-                    prompt=prompt,
-                    temperature=0.5,
-                    max_tokens=max_tokens,
-                    top_p=0.9,
-                    presence_penalty=0.1,
-                )
-
-                import json
-                response = response.strip()
-                if response.startswith("```"):
-                    response = response.split("```")[1]
-                    if response.startswith("json"):
-                        response = response[4:]
-                response = response.strip()
-
-                questions = json.loads(response)
-                if isinstance(questions, list) and all(
-                    isinstance(q, str) for q in questions
-                ):
-                    return questions[:3]
-        except Exception as e:
-            logger.warning(
-                f"Ошибка при генерации уточняющих вопросов: {e}", exc_info=True
+Сгенерируй 2-3 уточняющих вопроса, которые помогут пользователю лучше сформулировать запрос.""",
+                json_schema="[QUESTIONS]",
+                constraints="""
+                    2 <= len(QUESTIONS) <= 3 and
+                    all(isinstance(q, str) for q in QUESTIONS)
+                """,
+                temperature=0.5,
+                max_tokens=512,
             )
 
-        return None
+            if isinstance(response_data, list) and all(
+                isinstance(q, str) for q in response_data
+            ):
+                return response_data[:3]
+            else:
+                raise RuntimeError(f"Неожиданный формат ответа LMQL: {response_data}")
+
+        except Exception as e:
+            logger.error(f"Ошибка при генерации уточняющих вопросов через LMQL: {e}")
+            raise RuntimeError(f"Ошибка генерации уточняющих вопросов: {e}") from e
+
+    def _create_lmql_questions_query(self, query: str, results_preview: str) -> str:
+        """Создание LMQL запроса для генерации уточняющих вопросов.
+        
+        Args:
+            query: Поисковый запрос
+            results_preview: Превью результатов поиска
+            
+        Returns:
+            Строка с LMQL запросом (для логирования/отладки)
+        """
+        # Этот метод возвращает строку для отладки, фактический запрос выполняется в execute_json_query
+        return f"LMQL query for clarifying questions: {query[:50]}..."
 
     async def _suggest_refinements(
         self, query: str, results: List[SearchResultItem]
-    ) -> Optional[List[str]]:
-        """Генерация предложений по уточнению запроса."""
-        llm_client = self._get_llm_client()
-        if not llm_client:
-            return None
-
-        prompt = f"""Ты помощник для улучшения поиска. Пользователь искал: "{query}"
-
-Предложи 2-3 альтернативных формулировки этого запроса, которые могут дать лучшие результаты.
-
-Верни предложения в формате JSON массива строк, например: ["Вариант 1", "Вариант 2", "Вариант 3"]
-Только JSON, без дополнительного текста."""
-
-        from ..config import get_settings
-        settings = get_settings()
-        max_tokens = settings.large_context_max_tokens
+    ) -> List[str]:
+        """Генерация предложений по уточнению запроса.
         
-        try:
-            async with llm_client:
-                response = await llm_client.generate_summary(
-                    prompt=prompt,
-                    temperature=0.5,
-                    max_tokens=max_tokens,
-                    top_p=0.9,
-                    presence_penalty=0.1,
-                )
-
-                import json
-                response = response.strip()
-                if response.startswith("```"):
-                    response = response.split("```")[1]
-                    if response.startswith("json"):
-                        response = response[4:]
-                response = response.strip()
-
-                refinements = json.loads(response)
-                if isinstance(refinements, list) and all(
-                    isinstance(r, str) for r in refinements
-                ):
-                    return refinements[:3]
-        except Exception as e:
-            logger.warning(
-                f"Ошибка при генерации предложений: {e}", exc_info=True
+        Returns:
+            Список альтернативных формулировок запроса
+            
+        Raises:
+            RuntimeError: Если LMQL не настроен или произошла ошибка
+        """
+        if not self.lmql_adapter:
+            raise RuntimeError(
+                "LMQL не настроен. Установите MEMORY_MCP_USE_LMQL=true и настройте модель"
             )
 
-        return None
+        try:
+            lmql_query_str = self._create_lmql_refinements_query(query)
+            response_data = await self.lmql_adapter.execute_json_query(
+                prompt=f"""Ты помощник для улучшения поиска. Пользователь искал: "{query}"
+
+Предложи 2-3 альтернативных формулировки этого запроса, которые могут дать лучшие результаты.""",
+                json_schema="[REFINEMENTS]",
+                constraints="""
+                    2 <= len(REFINEMENTS) <= 3 and
+                    all(isinstance(r, str) for r in REFINEMENTS)
+                """,
+                temperature=0.5,
+                max_tokens=512,
+            )
+
+            if isinstance(response_data, list) and all(
+                isinstance(r, str) for r in response_data
+            ):
+                return response_data[:3]
+            else:
+                raise RuntimeError(f"Неожиданный формат ответа LMQL: {response_data}")
+
+        except Exception as e:
+            logger.error(f"Ошибка при генерации предложений через LMQL: {e}")
+            raise RuntimeError(f"Ошибка генерации предложений: {e}") from e
+
+    def _create_lmql_refinements_query(self, query: str) -> str:
+        """Создание LMQL запроса для генерации предложений по уточнению.
+        
+        Args:
+            query: Поисковый запрос
+            
+        Returns:
+            Строка с LMQL запросом (для логирования/отладки)
+        """
+        # Этот метод возвращает строку для отладки, фактический запрос выполняется в execute_json_query
+        return f"LMQL query for refinements: {query[:50]}..."
 
     def _boost_results_with_graph_connections(
         self, results: List[SearchResultItem], query: str

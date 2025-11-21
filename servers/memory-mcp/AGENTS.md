@@ -455,6 +455,26 @@ Memory MCP поддерживает интеграцию с LMQL (Language Model
 - Гарантирует формат ответа: только "ДА" или "НЕТ" (без дополнительного текста)
 - Устраняет необходимость парсинга и очистки ответов
 
+**QueryIntentAnalyzer (`src/memory_mcp/search/query_intent_analyzer.py`):**
+- Использует LMQL для классификации намерений запросов
+- Гарантирует валидность типа намерения: только "informational", "transactional", "navigational", "analytical"
+- Валидация confidence в диапазоне 0.0-1.0
+
+**ClusterSummarizer (`src/memory_mcp/analysis/cluster_summarizer.py`):**
+- Использует LMQL для генерации сводок тематических кластеров
+- Гарантирует структуру: `title` (макс 10 слов), `description`, `key_insights` (3-5 элементов)
+- Валидация размера массива инсайтов на уровне запроса
+
+**SemanticRegrouper (`src/memory_mcp/analysis/semantic_regrouper.py`):**
+- Использует LMQL для семантической перегруппировки сессий
+- Гарантирует структуру групп с темами, обоснованием и списком session_ids
+- Валидация уникальности session_ids (каждый включен ровно в одну группу)
+
+**SmartSearchEngine (`src/memory_mcp/search/smart_search_engine.py`):**
+- Использует LMQL для генерации уточняющих вопросов и предложений по уточнению
+- Гарантирует формат массивов строк с валидацией размера (2-3 элемента)
+- Устраняет необходимость парсинга markdown code blocks
+
 #### Использование LMQL компонентов
 
 **Настройка:**
