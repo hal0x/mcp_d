@@ -12,18 +12,10 @@ ENV UV_HTTP_TIMEOUT=300 \
 
 COPY pyproject.toml uv.lock ./
 
-RUN mkdir -p ./wheels ./src
-COPY wheels/ ./wheels/
-
 # Кэш зависимостей: слой пересобирается только при изменении pyproject.toml/uv.lock
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ -d "./wheels" ] && [ "$(ls -A ./wheels 2>/dev/null)" ]; then \
-    uv sync --frozen --no-dev --find-links ./wheels && \
-    uv pip install setuptools>=61.0; \
-    else \
     uv sync --frozen --no-dev && \
-    uv pip install setuptools>=61.0; \
-    fi
+    uv pip install setuptools>=61.0
 
 FROM deps as final
 
