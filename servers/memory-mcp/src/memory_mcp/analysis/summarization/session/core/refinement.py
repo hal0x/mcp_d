@@ -10,7 +10,7 @@ from .generation import (
     generate_claims,
 )
 from .quality import refresh_quality
-from ..utils import (
+from ...utils import (
     build_claim_summary,
     build_topic_title,
     collect_segment_by_ids,

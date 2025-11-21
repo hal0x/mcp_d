@@ -5,14 +5,14 @@ Fallback структуры для session_summarizer
 
 from typing import Any, Dict, List
 
-from ..utils.chat import (
+from ...utils.chat import (
     collect_participants,
     detect_chat_mode,
     select_key_messages,
     select_messages_with_keywords,
 )
-from ..utils.message import format_message_bullet
-from ..utils.text import truncate_text
+from ...utils.message import format_message_bullet
+from ...utils.text import truncate_text
 
 
 def build_fallback_structure(

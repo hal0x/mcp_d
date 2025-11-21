@@ -6,7 +6,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from ..core.lmql_adapter import LMQLAdapter
+from ....core.lmql_adapter import LMQLAdapter
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..utils import strip_markdown
+from ...utils import strip_markdown
 
 
 def refresh_quality(

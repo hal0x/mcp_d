@@ -12,13 +12,13 @@ from typing import TYPE_CHECKING
 
 from ..config import get_settings
 from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
-from ...core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
-from ...utils.naming import slugify
-from ..context.context_manager import ContextManager
-from ..entities.entity_extraction import EntityExtractor
-from ..context.incremental_context_manager import IncrementalContextManager
-from ..utils.instruction_manager import InstructionManager
-from ..summarization.quality_evaluator import IterativeRefiner, QualityEvaluator
+from ....core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
+from ....utils.naming import slugify
+from ...context.context_manager import ContextManager
+from ...entities.entity_extraction import EntityExtractor
+from ...context.incremental_context_manager import IncrementalContextManager
+from ...utils.instruction_manager import InstructionManager
+from ..quality_evaluator import IterativeRefiner, QualityEvaluator
 from .core.batch import summarize_batch_sessions
 from .core.canonical import build_canonical_summary_internal
 from .prompts import (
@@ -38,7 +38,7 @@ from .utils import (
 )
 
 if TYPE_CHECKING:
-    from ..aggregation.large_context_processor import LargeContextProcessor
+    from ...aggregation.large_context_processor import LargeContextProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ class SessionSummarizer:
         )
 
         # Инициализация процессора больших контекстов (отложенный импорт для избежания циклических зависимостей)
-        from ..aggregation.large_context_processor import LargeContextProcessor
+        from ...aggregation.large_context_processor import LargeContextProcessor
         
         settings = get_settings()
         self.large_context_processor = LargeContextProcessor(

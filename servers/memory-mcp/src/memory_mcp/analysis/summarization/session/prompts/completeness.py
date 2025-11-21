@@ -5,7 +5,7 @@
 
 from typing import Any, Dict, List, Tuple
 
-from ..utils.chat import detect_chat_mode
+from ...utils.chat import detect_chat_mode
 from .fallback import build_fallback_structure
 
 

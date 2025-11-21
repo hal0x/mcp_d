@@ -6,7 +6,7 @@
 import re
 from typing import Any, Dict, List, Optional
 
-from ..utils import (
+from ...utils import (
     build_claim_summary,
     build_message_envelope,
     build_topic_title,
@@ -52,7 +52,7 @@ def generate_topics(
             r"[\.?!]\s+", legacy_summary.get("context", "")
         )
         for sentence in context_sentences:
-            from ..utils import strip_markdown
+            from ...utils import strip_markdown
             sentence = strip_markdown(sentence).strip()
             if len(sentence.split()) >= 4 and sentence not in cleaned:
                 cleaned.append(sentence)

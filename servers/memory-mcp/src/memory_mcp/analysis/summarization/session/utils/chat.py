@@ -6,7 +6,7 @@
 from collections import Counter
 from typing import Any, Dict, List
 
-from ..utils.datetime_utils import parse_datetime_utc
+from ....utils.datetime_utils import parse_datetime_utc
 
 
 def detect_chat_mode(messages: List[Dict[str, Any]]) -> str:

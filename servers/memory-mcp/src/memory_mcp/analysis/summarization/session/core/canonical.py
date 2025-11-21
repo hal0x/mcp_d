@@ -5,8 +5,8 @@
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from ...utils.naming import slugify
-from ..constants import SESSION_SUMMARY_VERSION
+from ....utils.naming import slugify
+from ...constants import SESSION_SUMMARY_VERSION
 from .generation import (
     generate_actions,
     generate_claims,
@@ -15,7 +15,7 @@ from .generation import (
     generate_topics,
 )
 from .quality import refresh_quality
-from ..utils import (
+from ...utils import (
     apply_small_session_policy,
     build_attachments,
     build_message_envelope,

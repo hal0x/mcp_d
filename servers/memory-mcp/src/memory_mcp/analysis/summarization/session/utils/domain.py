@@ -7,7 +7,7 @@ import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from ..constants import (
+from ...constants import (
     CRYPTO_EXCHANGES,
     CRYPTO_TERMS,
     CRYPTO_TICKERS,
