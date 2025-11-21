@@ -1315,6 +1315,14 @@ class TwoLevelIndexer:
                     from datetime import datetime, timezone
                     timestamp = datetime.now(timezone.utc)
                 
+                # Создаём теги для сессии
+                tags = []
+                chat_name = meta.get("chat_name", "")
+                if chat_name:
+                    # Добавляем тег на основе имени чата
+                    chat_tag = chat_name.lower().replace(" ", "_")
+                    tags.append(chat_tag)
+                
                 # Создаём MemoryRecord для сессии
                 record = MemoryRecord(
                     record_id=session_id,
@@ -1322,7 +1330,7 @@ class TwoLevelIndexer:
                     content=embedding_text,
                     timestamp=timestamp,
                     author=None,  # Сессии не имеют автора
-                    tags=[],
+                    tags=tags,  # Применяем теги
                     entities=summary.get("entities", []),
                     attachments=[],
                     metadata={
