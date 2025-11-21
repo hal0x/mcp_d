@@ -6,7 +6,7 @@
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...utils.naming import slugify
-from ...session_summarizer_constants import SESSION_SUMMARY_VERSION
+from ..constants import SESSION_SUMMARY_VERSION
 from .generation import (
     generate_actions,
     generate_claims,

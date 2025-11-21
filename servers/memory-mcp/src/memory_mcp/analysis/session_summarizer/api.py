@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from ..core.langchain_adapters import LangChainLLMAdapter
-from .instruction_manager import InstructionManager
-from .session_segmentation import SessionSegmenter
-from .session_summarizer import SessionSummarizer
+from ...core.langchain_adapters import LangChainLLMAdapter
+from ..instruction_manager import InstructionManager
+from ..session_segmentation import SessionSegmenter
+from .summarizer import SessionSummarizer
 
 logger = logging.getLogger(__name__)
 

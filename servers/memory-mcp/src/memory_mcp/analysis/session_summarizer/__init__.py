@@ -3,7 +3,8 @@
 Пакет для структурной саммаризации сессий
 """
 
-from ..session_summarizer import SessionSummarizer
+from .api import summarize_chat_sessions
+from .summarizer import SessionSummarizer
 
-__all__ = ["SessionSummarizer"]
+__all__ = ["SessionSummarizer", "summarize_chat_sessions"]
 

@@ -19,19 +19,20 @@ from .entity_extraction import EntityExtractor
 from .incremental_context_manager import IncrementalContextManager
 from .instruction_manager import InstructionManager
 from .quality_evaluator import IterativeRefiner, QualityEvaluator
-from .session_summarizer.core.batch import summarize_batch_sessions
-from .session_summarizer.core.canonical import build_canonical_summary_internal
-from .session_summarizer.prompts import (
+from .core.batch import summarize_batch_sessions
+from .core.canonical import build_canonical_summary_internal
+from .prompts import (
     create_summarization_prompt,
     ensure_summary_completeness,
     generate_summary_with_lmql,
     parse_summary_structure,
 )
-from .session_summarizer.core.quality import refresh_quality
-from .session_summarizer.core.refinement import run_structural_pass
-from .session_summarizer.utils import (
+from .core.quality import refresh_quality
+from .core.refinement import run_structural_pass
+from .utils import (
     detect_chat_mode,
     extract_action_items,
+    format_links_artifacts,
     map_profile,
     prepare_conversation_text,
 )

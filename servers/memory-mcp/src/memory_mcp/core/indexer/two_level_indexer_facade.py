@@ -19,7 +19,7 @@ from ...analysis.markdown_renderer import MarkdownRenderer
 from ...analysis.semantic_regrouper import SemanticRegrouper
 from ...analysis.session_clustering import SessionClusterer
 from ...analysis.session_segmentation import SessionSegmenter
-from ...analysis.session_summarizer import SessionSummarizer
+from ...analysis.session_summarizer.summarizer import SessionSummarizer
 from ...analysis.time_processor import TimeProcessor
 from ...memory.qdrant_collections import QdrantCollectionsManager
 from ...utils.naming import slugify

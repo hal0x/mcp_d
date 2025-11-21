@@ -7,7 +7,7 @@ import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from ...session_summarizer_constants import (
+from ..constants import (
     CRYPTO_EXCHANGES,
     CRYPTO_TERMS,
     CRYPTO_TICKERS,
