@@ -1368,7 +1368,7 @@ class TwoLevelIndexer:
                                 payload_data = {
                                     "record_id": session_id,
                                     "source": meta.get("chat_name", ""),
-                                    "tags": [],
+                                    "tags": tags,  # Сохраняем теги в Qdrant
                                     "timestamp": start_time_utc.timestamp() if start_time_utc else 0,
                                     "timestamp_iso": start_time_utc.isoformat() if start_time_utc else "",
                                     "content_preview": summary.get("context", "")[:200],
