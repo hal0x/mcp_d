@@ -49,7 +49,6 @@ class BatchSessionProcessor:
             max_tokens=max_tokens,
             prompt_reserve_tokens=prompt_reserve_tokens,
             embedding_client=embedding_client,
-            enable_hierarchical=False,  # Батч-обработка сама управляет размером
         )
 
     def estimate_session_tokens(self, session: Dict[str, Any]) -> int:

@@ -21,7 +21,7 @@ def create_test_message(text: str, days_ago: int = 0) -> dict:
 @pytest.mark.asyncio
 async def test_process_without_smart_search():
     """Тест обработки без smart_search."""
-    large_processor = LargeContextProcessor(enable_hierarchical=False)
+    large_processor = LargeContextProcessor()
     context_processor = ContextAwareProcessor(
         large_processor, enable_smart_search=False
     )

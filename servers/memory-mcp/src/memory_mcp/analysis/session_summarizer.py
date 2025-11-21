@@ -201,10 +201,7 @@ class SessionSummarizer:
         self.large_context_processor = LargeContextProcessor(
             max_tokens=settings.large_context_max_tokens,
             prompt_reserve_tokens=settings.large_context_prompt_reserve,
-            hierarchical_threshold=settings.large_context_hierarchical_threshold,
             embedding_client=self.embedding_client,
-            enable_hierarchical=settings.large_context_enable_hierarchical,
-            enable_caching=True,
         )
         
         self.strict_mode = strict_mode

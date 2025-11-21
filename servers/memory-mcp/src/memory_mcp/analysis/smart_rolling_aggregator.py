@@ -122,7 +122,6 @@ class SmartAggregationState:
         self.last_aggregation_time: Optional[datetime] = None
         self.window_summaries: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         self.now_summary_file: Optional[str] = None
-        self.context_cache: Dict[str, Any] = {}
 
     def to_dict(self) -> Dict[str, Any]:
         """Сериализация состояния в словарь."""
@@ -134,7 +133,6 @@ class SmartAggregationState:
             else None,
             "window_summaries": dict(self.window_summaries.items()),
             "now_summary_file": self.now_summary_file,
-            "context_cache": self.context_cache,
         }
 
     @classmethod
@@ -150,7 +148,6 @@ class SmartAggregationState:
             ) or datetime.now(ZoneInfo("UTC"))
         state.window_summaries = defaultdict(list, data.get("window_summaries", {}))
         state.now_summary_file = data.get("now_summary_file")
-        state.context_cache = data.get("context_cache", {})
         return state
 
 
@@ -209,10 +206,7 @@ class SmartRollingAggregator:
         self.large_context_processor = LargeContextProcessor(
             max_tokens=settings.large_context_max_tokens,
             prompt_reserve_tokens=settings.large_context_prompt_reserve,
-            hierarchical_threshold=settings.large_context_hierarchical_threshold,
             embedding_client=self.embedding_client,
-            enable_hierarchical=settings.large_context_enable_hierarchical,
-            enable_caching=True,
         )
 
         self.batch_processor = BatchSessionProcessor(

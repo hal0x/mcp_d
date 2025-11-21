@@ -17,8 +17,7 @@ class LargeContextProcessor:
     
     Особенности:
     - Определение оптимального размера контекста на основе модели
-    - Иерархическая обработка: сначала общий контекст, потом детализация
-    - Кэширование промежуточных результатов
+    - Простая группировка сообщений с последующей саммаризацией
     - Интеграция с AdaptiveMessageGrouper для умной группировки
     """
 
@@ -26,10 +25,7 @@ class LargeContextProcessor:
         self,
         max_tokens: int = 30000,  # Максимальный контекст модели (уменьшено для предотвращения таймаутов)
         prompt_reserve_tokens: int = 5000,
-        hierarchical_threshold: int = 25000,  # Порог для иерархической обработки (уменьшено)
         embedding_client: Optional[LangChainLLMAdapter] = None,
-        enable_hierarchical: bool = True,
-        enable_caching: bool = True,
     ):
         """
         Инициализация обработчика больших контекстов.
@@ -37,18 +33,12 @@ class LargeContextProcessor:
         Args:
             max_tokens: Максимальный контекст модели
             prompt_reserve_tokens: Резерв токенов для промпта
-            hierarchical_threshold: Порог для включения иерархической обработки
             embedding_client: Клиент для LLM (опционально)
-            enable_hierarchical: Включить иерархическую обработку
-            enable_caching: Включить кэширование промежуточных результатов
         """
         self.max_tokens = max_tokens
         self.prompt_reserve_tokens = prompt_reserve_tokens
         self.available_tokens = max_tokens - prompt_reserve_tokens
-        self.hierarchical_threshold = hierarchical_threshold
         self.embedding_client = embedding_client
-        self.enable_hierarchical = enable_hierarchical
-        self.enable_caching = enable_caching
 
         # Инициализируем группировщик
         self.grouper = AdaptiveMessageGrouper(
@@ -56,9 +46,6 @@ class LargeContextProcessor:
             prompt_reserve_tokens=prompt_reserve_tokens,
             strategy="hybrid",
         )
-
-        # Кэш для промежуточных результатов
-        self._cache: Dict[str, Any] = {}
 
     def estimate_tokens(self, text: str) -> int:
         """Оценка количества токенов в тексте."""
@@ -68,22 +55,6 @@ class LargeContextProcessor:
         """Оценка количества токенов в группе сообщений."""
         return self.grouper.estimate_group_tokens(messages)
 
-    def should_use_hierarchical(self, messages: List[Dict[str, Any]]) -> bool:
-        """
-        Определение необходимости иерархической обработки.
-
-        Args:
-            messages: Список сообщений
-
-        Returns:
-            True, если нужна иерархическая обработка
-        """
-        if not self.enable_hierarchical:
-            return False
-
-        total_tokens = self.estimate_messages_tokens(messages)
-        return total_tokens > self.hierarchical_threshold
-
     async def process_large_context(
         self,
         messages: List[Dict[str, Any]],
@@ -91,14 +62,12 @@ class LargeContextProcessor:
         summarization_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Обработка большого контекста с адаптивной стратегией.
+        Обработка большого контекста с простой группировкой.
 
         Алгоритм:
         1. Оценка размера контекста в токенах
-        2. Если < hierarchical_threshold → обрабатываем целиком одним запросом
-        3. Если > hierarchical_threshold → иерархическая обработка:
-           - Уровень 1: Общая саммаризация всего контекста (сжатие до 20K токенов)
-           - Уровень 2: Детальная обработка частей с учетом общей саммаризации
+        2. Если помещается в один запрос → обрабатываем целиком
+        3. Иначе → группируем и обрабатываем по частям
 
         Args:
             messages: Список сообщений для обработки
@@ -126,24 +95,10 @@ class LargeContextProcessor:
             f"~{total_tokens} токенов для чата {chat_name}"
         )
 
-        # Проверяем кэш
-        cache_key = self._get_cache_key(messages, chat_name)
-        if self.enable_caching and cache_key in self._cache:
-            logger.info(f"Использован кэш для {chat_name}")
-            return self._cache[cache_key]
-
         # Если контекст помещается в один запрос
         if total_tokens <= self.available_tokens:
             logger.info(f"Контекст помещается в один запрос ({total_tokens} токенов)")
             result = await self._process_single_request(
-                messages, chat_name, summarization_prompt
-            )
-        elif self.should_use_hierarchical(messages):
-            logger.info(
-                f"Используется иерархическая обработка "
-                f"({total_tokens} токенов > {self.hierarchical_threshold})"
-            )
-            result = await self._process_hierarchical(
                 messages, chat_name, summarization_prompt
             )
         else:
@@ -152,10 +107,6 @@ class LargeContextProcessor:
             result = await self._process_grouped(
                 messages, chat_name, summarization_prompt
             )
-
-        # Сохраняем в кэш
-        if self.enable_caching:
-            self._cache[cache_key] = result
 
         return result
 
@@ -230,15 +181,6 @@ class LargeContextProcessor:
                 all_messages, sessions, session_boundaries, chat_name,
                 accumulative_context, summarization_prompt
             )
-        elif self.should_use_hierarchical(all_messages):
-            logger.info(
-                f"Используется иерархическая обработка батча "
-                f"({total_tokens} токенов > {self.hierarchical_threshold})"
-            )
-            result = await self._process_batch_hierarchical(
-                all_messages, sessions, session_boundaries, chat_name,
-                accumulative_context, summarization_prompt
-            )
         else:
             # Группируем и обрабатываем по частям
             logger.info(f"Группировка батча и обработка по частям ({total_tokens} токенов)")
@@ -281,42 +223,6 @@ class LargeContextProcessor:
             "detailed_summaries": detailed_summaries,
             "groups": [all_messages],
             "tokens_used": self.estimate_tokens(context_text) + self.estimate_tokens(enhanced_prompt),
-        }
-
-    async def _process_batch_hierarchical(
-        self,
-        all_messages: List[Dict[str, Any]],
-        sessions: List[Dict[str, Any]],
-        session_boundaries: List[Dict[str, Any]],
-        chat_name: str,
-        accumulative_context: Optional[str],
-        prompt: Optional[str],
-    ) -> Dict[str, Any]:
-        """Иерархическая обработка батча."""
-        # Используем стандартную иерархическую обработку
-        enhanced_prompt = prompt or ""
-        if accumulative_context:
-            enhanced_prompt = f"{enhanced_prompt}\n\nНакопительный контекст чата:\n{accumulative_context}\n" if prompt else f"Накопительный контекст чата:\n{accumulative_context}\n"
-
-        result = await self._process_hierarchical(
-            all_messages, chat_name, enhanced_prompt
-        )
-
-        # Адаптируем результат для батча сессий
-        detailed_summaries = result.get("detailed_summaries", [])
-        if len(detailed_summaries) != len(sessions):
-            # Если количество не совпадает, создаем саммаризации для каждой сессии
-            overall_summary = result.get("summary", "")
-            detailed_summaries = [
-                {"summary": overall_summary, "session_id": session.get("session_id", "unknown")}
-                for session in sessions
-            ]
-
-        return {
-            "summary": result.get("summary", ""),
-            "detailed_summaries": detailed_summaries,
-            "groups": result.get("groups", []),
-            "tokens_used": result.get("tokens_used", 0),
         }
 
     async def _process_batch_grouped(
@@ -387,81 +293,13 @@ class LargeContextProcessor:
             "tokens_used": self.estimate_tokens(context_text),
         }
 
-    async def _process_hierarchical(
-        self,
-        messages: List[Dict[str, Any]],
-        chat_name: Optional[str],
-        prompt: Optional[str],
-    ) -> Dict[str, Any]:
-        """
-        Иерархическая обработка большого контекста.
-
-        Уровень 1: Общая саммаризация всего контекста
-        Уровень 2: Детальная обработка частей с учетом общей саммаризации
-        """
-        # Уровень 1: Общая саммаризация
-        logger.info("Уровень 1: Генерация общей саммаризации")
-
-        # Создаем сжатую версию контекста для общей саммаризации
-        compressed_context = self._compress_context(messages, target_tokens=20000)
-        level1_prompt = self._create_hierarchical_prompt(
-            compressed_context, level=1, chat_name=chat_name
-        )
-        overall_summary = await self._generate_summary(
-            compressed_context, level1_prompt, chat_name
-        )
-
-        # Уровень 2: Детальная обработка частей
-        logger.info("Уровень 2: Детальная обработка частей")
-
-        # Группируем сообщения
-        groups = self.grouper.group_messages_adaptively(messages, chat_name)
-
-        detailed_summaries = []
-        total_tokens = 0
-
-        for i, group in enumerate(groups):
-            group_text = self._format_messages_for_llm(group)
-            group_tokens = self.estimate_tokens(group_text)
-
-            # Создаем промпт с учетом общей саммаризации
-            level2_prompt = self._create_hierarchical_prompt(
-                group_text,
-                level=2,
-                chat_name=chat_name,
-                overall_summary=overall_summary,
-                group_index=i + 1,
-                total_groups=len(groups),
-            )
-
-            group_summary = await self._generate_summary(
-                group_text, level2_prompt, chat_name
-            )
-
-            detailed_summaries.append({
-                "group_index": i + 1,
-                "summary": group_summary,
-                "messages_count": len(group),
-                "tokens": group_tokens,
-            })
-
-            total_tokens += group_tokens
-
-        return {
-            "summary": overall_summary,
-            "detailed_summaries": detailed_summaries,
-            "groups": groups,
-            "tokens_used": total_tokens,
-            "hierarchical": True,
-        }
-
     async def _process_grouped(
         self,
         messages: List[Dict[str, Any]],
         chat_name: Optional[str],
         prompt: Optional[str],
     ) -> Dict[str, Any]:
-        """Обработка контекста по группам без иерархии."""
+        """Обработка контекста по группам с последующим объединением саммаризаций."""
         # Группируем сообщения
         groups = self.grouper.group_messages_adaptively(messages, chat_name)
 
@@ -497,7 +335,6 @@ class LargeContextProcessor:
             "detailed_summaries": summaries,
             "groups": groups,
             "tokens_used": total_tokens,
-            "hierarchical": False,
         }
 
     def _format_messages_for_llm(self, messages: List[Dict[str, Any]]) -> str:
@@ -512,92 +349,6 @@ class LargeContextProcessor:
                 lines.append(f"[{date}] {author}: {text}")
 
         return "\n".join(lines)
-
-    def _compress_context(
-        self, messages: List[Dict[str, Any]], target_tokens: int
-    ) -> str:
-        """
-        Сжатие контекста до целевого количества токенов.
-
-        Стратегия:
-        - Берем первые и последние сообщения
-        - Добавляем сообщения с высокой важностью (если есть метрики)
-        - Сжимаем длинные сообщения
-        """
-        total_tokens = self.estimate_messages_tokens(messages)
-
-        if total_tokens <= target_tokens:
-            return self._format_messages_for_llm(messages)
-
-        # Берем первые 30% и последние 30% сообщений
-        first_count = int(len(messages) * 0.3)
-        last_count = int(len(messages) * 0.3)
-
-        selected = messages[:first_count] + messages[-last_count:]
-
-        # Если все еще слишком много, сжимаем сообщения
-        compressed_text = self._format_messages_for_llm(selected)
-        compressed_tokens = self.estimate_tokens(compressed_text)
-
-        if compressed_tokens > target_tokens:
-            # Сжимаем текст, обрезая длинные сообщения
-            ratio = target_tokens / compressed_tokens
-            max_chars_per_msg = int(200 * ratio)  # Примерно 200 символов на сообщение
-
-            compressed_lines = []
-            for msg in selected:
-                author = msg.get("from") or msg.get("author") or "Unknown"
-                text = msg.get("text") or msg.get("content") or ""
-                if len(text) > max_chars_per_msg:
-                    text = text[:max_chars_per_msg] + "..."
-                if text:
-                    compressed_lines.append(f"{author}: {text}")
-
-            compressed_text = "\n".join(compressed_lines)
-
-        return compressed_text
-
-    def _create_hierarchical_prompt(
-        self,
-        context: str,
-        level: int,
-        chat_name: Optional[str] = None,
-        overall_summary: Optional[str] = None,
-        group_index: Optional[int] = None,
-        total_groups: Optional[int] = None,
-    ) -> str:
-        """Создание промпта для иерархической обработки."""
-        if level == 1:
-            return f"""Создай краткую общую саммаризацию следующего контекста чата {chat_name or ""}.
-
-Контекст содержит множество сообщений. Твоя задача - выделить основные темы, ключевые события и общий тон обсуждения.
-
-Контекст:
-{context[:50000]}  # Ограничиваем для промпта
-
-Создай структурированную саммаризацию с разделами:
-1. Основные темы
-2. Ключевые события
-3. Участники и их роли
-4. Общий тон и атмосфера"""
-
-        elif level == 2:
-            group_info = f" (группа {group_index} из {total_groups})" if group_index else ""
-            summary_context = f"\n\nОбщая саммаризация всего контекста:\n{overall_summary}\n" if overall_summary else ""
-
-            return f"""Создай детальную саммаризацию части контекста чата {chat_name or ""}{group_info}.
-
-{summary_context}
-
-Детальный контекст группы:
-{context[:80000]}  # Ограничиваем для промпта
-
-Создай детальную саммаризацию, которая:
-1. Соответствует общей саммаризации выше
-2. Раскрывает детали этой части обсуждения
-3. Выделяет важные моменты и переходы тем"""
-
-        return "Создай саммаризацию следующего контекста."
 
     def _create_default_prompt(
         self,
@@ -653,25 +404,4 @@ class LargeContextProcessor:
             combined.append(f"{group_info}\n{summary_text}\n")
 
         return "\n---\n\n".join(combined)
-
-    def _get_cache_key(
-        self, messages: List[Dict[str, Any]], chat_name: Optional[str]
-    ) -> str:
-        """Генерация ключа кэша."""
-        import hashlib
-        import json
-
-        # Используем первые и последние сообщения + количество для ключа
-        key_data = {
-            "chat": chat_name,
-            "count": len(messages),
-            "first": messages[0].get("text", "")[:100] if messages else "",
-            "last": messages[-1].get("text", "")[:100] if messages else "",
-        }
-        key_str = json.dumps(key_data, sort_keys=True)
-        return hashlib.md5(key_str.encode()).hexdigest()
-
-    def clear_cache(self) -> None:
-        """Очистка кэша."""
-        self._cache.clear()
 

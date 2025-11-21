@@ -50,16 +50,9 @@ class Settings(BaseSettings):
     # Настройки больших контекстов
     large_context_max_tokens: int = Field(131072, description="Максимальный контекст модели (токенов)")
     large_context_prompt_reserve: int = Field(5000, description="Резерв токенов для промпта")
-    large_context_hierarchical_threshold: int = Field(
-        100000, description="Порог для включения иерархической обработки (токенов)"
-    )
-    large_context_enable_hierarchical: bool = Field(
-        True, description="Включить иерархическую обработку"
-    )
     large_context_use_smart_search: bool = Field(
         True, description="Использовать smart_search для анализа контекста"
     )
-    large_context_cache_size: int = Field(100, description="Размер кэша для промежуточных результатов")
 
     # Настройки поиска и буста результатов
     search_boost_path_1: float = Field(1.3, description="Коэффициент буста для результатов с путем длины 1 в графе")
