@@ -13,6 +13,8 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from ..utils.russian_tokenizer import STOP_WORDS, get_tokenizer
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,6 +41,8 @@ class ImportanceScorer:
         self.task_weight = task_weight
         self.length_weight = length_weight
         self.search_hits_weight = search_hits_weight
+        self.stop_words = STOP_WORDS
+        self.tokenizer = get_tokenizer()
 
         logger.info(
             f"Инициализирован ImportanceScorer (entity={entity_weight}, "
@@ -111,7 +115,8 @@ class ImportanceScorer:
 
     def _compute_special_patterns(self, text: str) -> float:
         """
-        Дополнительные баллы за специальные паттерны в тексте
+        Дополнительные баллы за специальные паттерны в тексте.
+        Использует библиотеку стоп-слов для фильтрации неважных слов.
 
         Args:
             text: Текст сообщения
@@ -119,6 +124,9 @@ class ImportanceScorer:
         Returns:
             Дополнительный score
         """
+        if not text:
+            return 0.0
+
         bonus = 0.0
 
         # Ссылки (http, https)
@@ -147,6 +155,18 @@ class ImportanceScorer:
         numbers = re.findall(r"\d+", text)
         if len(numbers) > 3:
             bonus += 0.03
+
+        # Анализ важных слов (исключая стоп-слова)
+        # Токенизируем текст и считаем количество значимых слов
+        tokens = self.tokenizer.extract_tokens(text)
+        # Слова, которые не являются стоп-словами, считаются более важными
+        significant_words = [t for t in tokens if t.lower() not in self.stop_words]
+        
+        # Бонус за наличие значимых слов (нормализованный)
+        if len(significant_words) > 10:
+            # Много значимых слов = более содержательное сообщение
+            word_bonus = min(len(significant_words) / 100.0, 0.1)
+            bonus += word_bonus
 
         return min(bonus, 0.3)  # Максимум 0.3 за паттерны
 
