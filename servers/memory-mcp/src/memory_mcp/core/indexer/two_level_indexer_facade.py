@@ -20,7 +20,7 @@ from ...analysis.entities import EntityExtractor, get_entity_dictionary
 from ...analysis.utils import InstructionManager, TimeProcessor
 from ...analysis.rendering import MarkdownRenderer
 from ...analysis.summarization import ClusterSummarizer
-from ...analysis.session_summarizer.summarizer import SessionSummarizer
+from ...analysis.summarization.session.summarizer import SessionSummarizer
 from ...memory.qdrant_collections import QdrantCollectionsManager
 from ...utils.naming import slugify
 from ..langchain_adapters import LangChainLLMAdapter, get_llm_client_factory

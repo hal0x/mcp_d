@@ -26,7 +26,7 @@ from .segmentation import (
     SessionClusterer,
     SessionSegmenter,
 )
-from .session_summarizer import SessionSummarizer, summarize_chat_sessions
+from .summarization.session import SessionSummarizer, summarize_chat_sessions
 from .summarization import (
     ClusterSummarizer,
     IterativeRefiner,

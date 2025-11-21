@@ -27,7 +27,7 @@ from .batch_session_processor import BatchSessionProcessor
 from ..context.context_manager import ContextManager
 from ..segmentation.semantic_regrouper import SemanticRegrouper
 from ..segmentation.session_segmentation import SessionSegmenter
-from ..session_summarizer.summarizer import SessionSummarizer
+from ..summarization.session.summarizer import SessionSummarizer
 
 logger = logging.getLogger(__name__)
 
