@@ -84,8 +84,9 @@ def test_artifacts_reader_search_by_type(temp_artifacts_dir):
     reader = ArtifactsReader(artifacts_dir=temp_artifacts_dir)
     reader.scan_artifacts_directory()
 
+    # Ищем слово, которое точно есть в файле chat_contexts/test_chat.md
     results = reader.search_artifacts(
-        "тест", artifact_types=["chat_context"], limit=10
+        "криптовалюты", artifact_types=["chat_context"], limit=10
     )
     assert len(results) > 0
     assert all(r.artifact_type == "chat_context" for r in results)

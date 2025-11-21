@@ -307,6 +307,7 @@ class ArtifactsReader:
         total_words = len(content_words)
 
         # 3. Наличие точной фразы
+        query_lower = query.lower()
         phrase_bonus = 2.0 if query_lower in content_lower else 1.0
 
         # Вычисляем score

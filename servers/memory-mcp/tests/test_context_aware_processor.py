@@ -21,7 +21,11 @@ def create_test_message(text: str, days_ago: int = 0) -> dict:
 @pytest.mark.asyncio
 async def test_process_without_smart_search():
     """Тест обработки без smart_search."""
-    large_processor = LargeContextProcessor()
+    # Мокируем LLM клиент
+    mock_llm_client = AsyncMock()
+    mock_llm_client.generate_summary = AsyncMock(return_value="Test summary")
+    
+    large_processor = LargeContextProcessor(embedding_client=mock_llm_client)
     context_processor = ContextAwareProcessor(
         large_processor, enable_smart_search=False
     )
@@ -38,7 +42,9 @@ async def test_process_without_smart_search():
 @pytest.mark.asyncio
 async def test_extract_context_query():
     """Тест извлечения поискового запроса из сообщений."""
-    large_processor = LargeContextProcessor()
+    # Мокируем LLM клиент
+    mock_llm_client = AsyncMock()
+    large_processor = LargeContextProcessor(embedding_client=mock_llm_client)
     context_processor = ContextAwareProcessor(large_processor)
     
     messages = [
@@ -52,7 +58,9 @@ async def test_extract_context_query():
 
 def test_extract_topics_from_text():
     """Тест извлечения тем из текста."""
-    large_processor = LargeContextProcessor()
+    # Мокируем LLM клиент
+    mock_llm_client = AsyncMock()
+    large_processor = LargeContextProcessor(embedding_client=mock_llm_client)
     context_processor = ContextAwareProcessor(large_processor)
     
     text = "Bitcoin and Ethereum are cryptocurrencies. Bitcoin is popular."
@@ -63,7 +71,9 @@ def test_extract_topics_from_text():
 
 def test_enhance_prompt_with_context():
     """Тест улучшения промпта с контекстом."""
-    large_processor = LargeContextProcessor()
+    # Мокируем LLM клиент
+    mock_llm_client = AsyncMock()
+    large_processor = LargeContextProcessor(embedding_client=mock_llm_client)
     context_processor = ContextAwareProcessor(large_processor)
     
     original_prompt = "Create summary"
@@ -82,7 +92,9 @@ def test_enhance_prompt_with_context():
 
 def test_create_default_prompt():
     """Тест создания стандартного промпта."""
-    large_processor = LargeContextProcessor()
+    # Мокируем LLM клиент
+    mock_llm_client = AsyncMock()
+    large_processor = LargeContextProcessor(embedding_client=mock_llm_client)
     context_processor = ContextAwareProcessor(large_processor)
     
     prompt = context_processor._create_default_prompt("test_chat")

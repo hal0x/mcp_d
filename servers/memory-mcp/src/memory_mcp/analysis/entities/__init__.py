@@ -4,10 +4,11 @@
 """
 
 from .entity_extraction import EntityExtractor
-from .entity_dictionary import EntityDictionary
+from .entity_dictionary import EntityDictionary, get_entity_dictionary
 
 __all__ = [
     "EntityExtractor",
     "EntityDictionary",
+    "get_entity_dictionary",
 ]
 

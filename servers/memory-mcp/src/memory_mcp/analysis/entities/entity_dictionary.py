@@ -1066,7 +1066,7 @@ class EntityDictionary:
             async with llm_client:
                 if hasattr(llm_client, 'generate_summary'):
                     # Используем максимальное значение модели (131072 для gpt-oss-20b)
-                    from ..config import get_settings
+                    from ...config import get_settings
                     settings = get_settings()
                     max_tokens = settings.large_context_max_tokens  # 131072
                     
@@ -1615,7 +1615,7 @@ class EntityDictionary:
             async with llm_client:
                 if hasattr(llm_client, 'generate_summary'):
                     # Используем максимальное значение модели (131072 для gpt-oss-20b)
-                    from ..config import get_settings
+                    from ...config import get_settings
                     settings = get_settings()
                     max_tokens = settings.large_context_max_tokens  # 131072
                     
@@ -1809,7 +1809,7 @@ class EntityDictionary:
         try:
             async with llm_client:
                 if hasattr(llm_client, 'generate_summary'):
-                    from ..config import get_settings
+                    from ...config import get_settings
                     settings = get_settings()
                     max_tokens = settings.large_context_max_tokens  # 131072
                     

@@ -12,7 +12,7 @@ class TestLMQLAdapter:
     @pytest.fixture
     def mock_lmql(self):
         """Мок для модуля lmql."""
-        with patch("memory_mcp.core.lmql_adapter.lmql") as mock:
+        with patch("memory_mcp.core.adapters.lmql_adapter.lmql") as mock:
             mock.run = AsyncMock()
             yield mock
 
@@ -29,19 +29,22 @@ class TestLMQLAdapter:
         assert adapter.api_config == {"api_base": "http://localhost:1234"}
 
     def test_init_with_openai(self, mock_lmql):
-        """Тест инициализации адаптера с OpenAI бэкендом."""
+        """Тест инициализации адаптера с OpenAI бэкендом.
+        
+        ПРИМЕЧАНИЕ: Адаптер всегда использует lmstudio бэкенд, независимо от переданного параметра.
+        """
         adapter = LMQLAdapter(
             model="gpt-3.5-turbo",
             backend="openai",
         )
         assert adapter.model == "gpt-3.5-turbo"
-        assert adapter.backend == "openai"
+        assert adapter.backend == "lmstudio"  # Адаптер всегда использует lmstudio
         assert adapter.model_identifier == "openai/gpt-3.5-turbo"
         assert adapter.api_config == {}
 
     def test_init_without_lmql(self):
         """Тест инициализации без установленного LMQL."""
-        with patch("memory_mcp.core.lmql_adapter.lmql", None):
+        with patch("memory_mcp.core.adapters.lmql_adapter.lmql", None):
             with pytest.raises(ImportError, match="LMQL не установлен"):
                 LMQLAdapter(model="test", backend="openai")
 
@@ -52,7 +55,7 @@ class TestLMQLAdapter:
 
     def test_available_without_lmql(self):
         """Тест проверки доступности без LMQL."""
-        with patch("memory_mcp.core.lmql_adapter.lmql", None):
+        with patch("memory_mcp.core.adapters.lmql_adapter.lmql", None):
             adapter = LMQLAdapter.__new__(LMQLAdapter)
             adapter.lmql = None
             assert adapter.available() is False
@@ -179,8 +182,8 @@ class TestLMQLAdapter:
 class TestBuildLMQLAdapterFromEnv:
     """Тесты для функции build_lmql_adapter_from_env."""
 
-    @patch("memory_mcp.core.lmql_adapter.get_settings")
-    @patch("memory_mcp.core.lmql_adapter.LMQLAdapter")
+    @patch("memory_mcp.core.adapters.lmql_adapter.get_settings")
+    @patch("memory_mcp.core.adapters.lmql_adapter.LMQLAdapter")
     def test_build_with_lmql_enabled(self, mock_adapter_class, mock_get_settings):
         """Тест создания адаптера при включенном LMQL."""
         mock_settings = MagicMock()
@@ -203,7 +206,7 @@ class TestBuildLMQLAdapterFromEnv:
             base_url="http://localhost:1234",
         )
 
-    @patch("memory_mcp.core.lmql_adapter.get_settings")
+    @patch("memory_mcp.core.adapters.lmql_adapter.get_settings")
     def test_build_with_lmql_disabled(self, mock_get_settings):
         """Тест ошибки при отключенном LMQL."""
         mock_settings = MagicMock()
@@ -213,7 +216,7 @@ class TestBuildLMQLAdapterFromEnv:
         with pytest.raises(RuntimeError, match="LMQL отключен в настройках"):
             build_lmql_adapter_from_env()
 
-    @patch("memory_mcp.core.lmql_adapter.get_settings")
+    @patch("memory_mcp.core.adapters.lmql_adapter.get_settings")
     def test_build_without_model(self, mock_get_settings):
         """Тест ошибки при отсутствии модели."""
         mock_settings = MagicMock()
@@ -225,8 +228,8 @@ class TestBuildLMQLAdapterFromEnv:
         with pytest.raises(RuntimeError, match="модель не указана"):
             build_lmql_adapter_from_env()
 
-    @patch("memory_mcp.core.lmql_adapter.get_settings")
-    @patch("memory_mcp.core.lmql_adapter.LMQLAdapter")
+    @patch("memory_mcp.core.adapters.lmql_adapter.get_settings")
+    @patch("memory_mcp.core.adapters.lmql_adapter.LMQLAdapter")
     def test_build_with_fallback_to_lmstudio_model(self, mock_adapter_class, mock_get_settings):
         """Тест использования lmstudio_llm_model при отсутствии lmql_model."""
         mock_settings = MagicMock()

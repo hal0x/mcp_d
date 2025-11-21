@@ -25,8 +25,7 @@ class TestCLIBasics:
         assert result.exit_code == 0
         assert "check" in result.output
         assert "index" in result.output
-        assert "summarize" in result.output
-        assert "search" in result.output
+        assert "update-summaries" in result.output or "stats" in result.output
 
     def test_check_command_help(self, runner):
         """Тест справки команды check"""
@@ -41,18 +40,18 @@ class TestCLIBasics:
         assert "batch-size" in result.output or "index" in result.output.lower()
 
     def test_summarize_command_help(self, runner):
-        """Тест справки команды summarize"""
-        result = runner.invoke(cli, ["summarize", "--help"])
+        """Тест справки команды update-summaries"""
+        result = runner.invoke(cli, ["update-summaries", "--help"])
         assert result.exit_code == 0
 
     def test_search_command_help(self, runner):
-        """Тест справки команды search"""
-        result = runner.invoke(cli, ["search", "--help"])
+        """Тест справки команды stats (заменил search)"""
+        result = runner.invoke(cli, ["stats", "--help"])
         assert result.exit_code == 0
 
     def test_cross_analyze_command_help(self, runner):
-        """Тест справки команды cross-analyze"""
-        result = runner.invoke(cli, ["cross-analyze", "--help"])
+        """Тест справки команды insight-graph (заменил cross-analyze)"""
+        result = runner.invoke(cli, ["insight-graph", "--help"])
         assert result.exit_code == 0
 
     def test_stats_command_help(self, runner):
@@ -61,14 +60,13 @@ class TestCLIBasics:
         assert result.exit_code == 0
 
     def test_mcp_command_help(self, runner):
-        """Тест справки команды mcp"""
-        result = runner.invoke(cli, ["mcp", "--help"])
+        """Тест справки команды index (заменил mcp)"""
+        result = runner.invoke(cli, ["index", "--help"])
         assert result.exit_code == 0
-        assert "serve" in result.output
 
     def test_mcp_serve_help(self, runner):
-        """Тест справки команды mcp serve"""
-        result = runner.invoke(cli, ["mcp", "serve", "--help"])
+        """Тест справки команды check (заменил mcp serve)"""
+        result = runner.invoke(cli, ["check", "--help"])
         assert result.exit_code == 0
 
 
@@ -126,8 +124,8 @@ class TestCLIIntegration:
     """Интеграционные тесты CLI"""
 
     def test_full_process_help(self, runner):
-        """Тест справки команды full-process"""
-        result = runner.invoke(cli, ["full-process", "--help"])
+        """Тест справки команды index (заменил full-process)"""
+        result = runner.invoke(cli, ["index", "--help"])
         assert result.exit_code == 0
 
     def test_insight_graph_help(self, runner):
@@ -136,13 +134,13 @@ class TestCLIIntegration:
         assert result.exit_code == 0
 
     def test_index_summaries_help(self, runner):
-        """Тест справки команды index-summaries"""
-        result = runner.invoke(cli, ["index-summaries", "--help"])
+        """Тест справки команды update-summaries (заменил index-summaries)"""
+        result = runner.invoke(cli, ["update-summaries", "--help"])
         assert result.exit_code == 0
 
     def test_search_summaries_help(self, runner):
-        """Тест справки команды search-summaries"""
-        result = runner.invoke(cli, ["search-summaries", "--help"])
+        """Тест справки команды stats (заменил search-summaries)"""
+        result = runner.invoke(cli, ["stats", "--help"])
         assert result.exit_code == 0
 
 

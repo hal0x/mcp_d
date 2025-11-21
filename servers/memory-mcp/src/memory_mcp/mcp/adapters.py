@@ -939,7 +939,7 @@ class MemoryServiceAdapter:
         )
         return StoreTradingSignalResponse(signal=record)
 
-    def _search_trading_patterns(
+    def search_trading_patterns(
         self, request: SearchTradingPatternsRequest
     ) -> SearchTradingPatternsResponse:
         rows = self.trading_memory.search_patterns(

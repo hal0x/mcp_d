@@ -63,28 +63,20 @@ class TestEntityDictionaryLMQL:
 
     @pytest.mark.asyncio
     async def test_validate_entity_without_lmql(self, tmp_path):
-        """Тест работы без LMQL адаптера (fallback на обычный LLM)."""
+        """Тест работы без LMQL адаптера (должен выбросить RuntimeError)."""
         entity_dict = EntityDictionary(
             storage_path=tmp_path / "entity_dictionaries",
             enable_llm_validation=True,
             lmql_adapter=None,
         )
 
-        with patch.object(entity_dict, "_get_llm_client") as mock_get_client:
-            mock_llm_client = MagicMock()
-            mock_llm_client.__aenter__ = AsyncMock(return_value=mock_llm_client)
-            mock_llm_client.__aexit__ = AsyncMock(return_value=None)
-            mock_llm_client.generate_summary = AsyncMock(return_value="ДА")
-            mock_get_client.return_value = mock_llm_client
-
-            result = await entity_dict._validate_entity_with_llm_async(
+        # Без LMQL адаптера должен быть выброшен RuntimeError
+        with pytest.raises(RuntimeError, match="LMQL адаптер не настроен"):
+            await entity_dict._validate_entity_with_llm_async(
                 entity_type="persons",
                 normalized_value="иван",
                 original_value="Иван",
             )
-
-            assert result is True
-            mock_llm_client.generate_summary.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_validate_entity_lmql_error(self, entity_dict, mock_lmql_adapter):
@@ -136,29 +128,19 @@ class TestEntityDictionaryLMQL:
 
     @pytest.mark.asyncio
     async def test_classify_entity_type_without_lmql(self, tmp_path):
-        """Тест классификации без LMQL (fallback на обычный LLM)."""
+        """Тест классификации без LMQL (должен выбросить RuntimeError)."""
         entity_dict = EntityDictionary(
             storage_path=tmp_path / "entity_dictionaries",
             enable_llm_validation=True,
             lmql_adapter=None,
         )
 
-        with patch.object(entity_dict, "_get_llm_client") as mock_get_client:
-            mock_llm_client = MagicMock()
-            mock_llm_client.__aenter__ = AsyncMock(return_value=mock_llm_client)
-            mock_llm_client.__aexit__ = AsyncMock(return_value=None)
-            mock_llm_client.generate_summary = AsyncMock(
-                return_value='{"type": "persons", "is_new": false}'
-            )
-            mock_get_client.return_value = mock_llm_client
-
-            result = await entity_dict._classify_entity_type(
+        # Без LMQL адаптера должен быть выброшен RuntimeError
+        with pytest.raises(RuntimeError, match="LMQL адаптер не настроен"):
+            await entity_dict._classify_entity_type(
                 value="Иван",
                 normalized_value="иван",
             )
-
-            assert result == "persons"
-            mock_llm_client.generate_summary.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_generate_descriptions_batch_with_lmql_success(
