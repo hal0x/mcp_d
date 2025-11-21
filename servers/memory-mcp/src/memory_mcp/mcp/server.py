@@ -1211,6 +1211,67 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
         raise RuntimeError(error_msg) from exc
 
 
+def _get_indexer_config(request: "IndexChatRequest") -> Dict[str, Any]:
+    """Извлекает конфигурацию индексера из запроса с применением дефолтных значений.
+    
+    Pydantic автоматически применяет дефолты при валидации модели через Field(default=...).
+    Если значение явно None, используем дефолты из TwoLevelIndexer.__init__.
+    
+    Args:
+        request: Запрос на индексацию чата
+        
+    Returns:
+        Словарь с параметрами для TwoLevelIndexer
+    """
+    # Дефолтные значения из TwoLevelIndexer.__init__ (для случаев, когда значение явно None)
+    defaults = {
+        "enable_quality_check": True,
+        "enable_iterative_refinement": True,
+        "min_quality_score": 80.0,
+        "enable_clustering": True,
+        "clustering_threshold": 0.8,
+        "min_cluster_size": 2,
+        "max_messages_per_group": 100,
+        "max_session_hours": 6,
+        "gap_minutes": 60,
+        "enable_smart_aggregation": True,
+        "aggregation_strategy": "smart",
+        "now_window_hours": 24,
+        "fresh_window_days": 14,
+        "recent_window_days": 30,
+        "strategy_threshold": 1000,
+        "enable_entity_learning": True,
+        "enable_time_analysis": True,
+    }
+    
+    # Helper функция для получения значения с дефолтом
+    def get_value(field_name: str, default_value: Any) -> Any:
+        value = getattr(request, field_name, None)
+        return value if value is not None else default_value
+    
+    # Извлекаем значения из запроса, используя дефолты если значение None
+    return {
+        "enable_quality_check": get_value("enable_quality_check", defaults["enable_quality_check"]),
+        "enable_iterative_refinement": get_value("enable_iterative_refinement", defaults["enable_iterative_refinement"]),
+        "min_quality_score": get_value("min_quality_score", defaults["min_quality_score"]),
+        "enable_clustering": get_value("enable_clustering", defaults["enable_clustering"]),
+        "clustering_threshold": get_value("clustering_threshold", defaults["clustering_threshold"]),
+        "min_cluster_size": get_value("min_cluster_size", defaults["min_cluster_size"]),
+        "max_messages_per_group": get_value("max_messages_per_group", defaults["max_messages_per_group"]),
+        "max_session_hours": get_value("max_session_hours", defaults["max_session_hours"]),
+        "gap_minutes": get_value("gap_minutes", defaults["gap_minutes"]),
+        "enable_smart_aggregation": get_value("enable_smart_aggregation", defaults["enable_smart_aggregation"]),
+        "aggregation_strategy": get_value("aggregation_strategy", defaults["aggregation_strategy"]),
+        "now_window_hours": get_value("now_window_hours", defaults["now_window_hours"]),
+        "fresh_window_days": get_value("fresh_window_days", defaults["fresh_window_days"]),
+        "recent_window_days": get_value("recent_window_days", defaults["recent_window_days"]),
+        "strategy_threshold": get_value("strategy_threshold", defaults["strategy_threshold"]),
+        "force": request.force_full,
+        "enable_entity_learning": get_value("enable_entity_learning", defaults["enable_entity_learning"]),
+        "enable_time_analysis": get_value("enable_time_analysis", defaults["enable_time_analysis"]),
+    }
+
+
 async def _run_indexing_job(
     job_id: str,
     request: "IndexChatRequest",
@@ -1240,27 +1301,11 @@ async def _run_indexing_job(
                 "Убедитесь, что LangChain установлен и MEMORY_MCP_LMSTUDIO_LLM_MODEL настроен."
             )
         
+        config = _get_indexer_config(request)
         indexer = TwoLevelIndexer(
             artifacts_path=settings.artifacts_path,
             embedding_client=embedding_client,
-            enable_quality_check=request.enable_quality_check if request.enable_quality_check is not None else True,
-            enable_iterative_refinement=request.enable_iterative_refinement if request.enable_iterative_refinement is not None else True,
-            min_quality_score=request.min_quality_score if request.min_quality_score is not None else 80.0,
-            enable_clustering=request.enable_clustering if request.enable_clustering is not None else True,
-            clustering_threshold=request.clustering_threshold if request.clustering_threshold is not None else 0.8,
-            min_cluster_size=request.min_cluster_size if request.min_cluster_size is not None else 2,
-            max_messages_per_group=request.max_messages_per_group if request.max_messages_per_group is not None else 100,
-            max_session_hours=request.max_session_hours if request.max_session_hours is not None else 6,
-            gap_minutes=request.gap_minutes if request.gap_minutes is not None else 60,
-            enable_smart_aggregation=request.enable_smart_aggregation if request.enable_smart_aggregation is not None else True,
-            aggregation_strategy=request.aggregation_strategy if request.aggregation_strategy is not None else "smart",
-            now_window_hours=request.now_window_hours if request.now_window_hours is not None else 24,
-            fresh_window_days=request.fresh_window_days if request.fresh_window_days is not None else 14,
-            recent_window_days=request.recent_window_days if request.recent_window_days is not None else 30,
-            strategy_threshold=request.strategy_threshold if request.strategy_threshold is not None else 1000,
-            force=request.force_full,
-            enable_entity_learning=request.enable_entity_learning if request.enable_entity_learning is not None else True,
-            enable_time_analysis=request.enable_time_analysis if request.enable_time_analysis is not None else True,
+            **config
         )
         
         if request.force_full:
