@@ -165,6 +165,10 @@ class L1Indexer:
                     # Добавляем тег на основе имени чата
                     chat_tag = chat_name.lower().replace(" ", "_")
                     tags.append(chat_tag)
+                
+                # Добавляем теги из summary (если есть)
+                if "tags" in summary and summary["tags"]:
+                    tags.extend(summary["tags"])
 
                 # Создаём MemoryRecord для сессии
                 record = MemoryRecord(

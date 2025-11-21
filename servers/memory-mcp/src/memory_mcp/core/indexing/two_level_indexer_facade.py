@@ -581,8 +581,22 @@ class TwoLevelIndexer:
                     continue
                 
                 # Индексация L1
-                await self.l1_indexer.index_session_l1(summary)
+                await self.l1_indexer.index_session(summary)
                 stats["sessions_indexed"] += 1
+                
+                # Создаем связи с предыдущими сессиями
+                if self.smart_aggregation_manager and self.graph:
+                    try:
+                        from ...utils.processing.datetime_utils import parse_datetime_utc
+                        session_timestamp_str = summary.get("meta", {}).get("start_time_utc", "")
+                        if session_timestamp_str:
+                            session_timestamp = parse_datetime_utc(session_timestamp_str, default=None)
+                            if session_timestamp:
+                                self.smart_aggregation_manager.link_session_to_previous_sessions(
+                                    session_id, chat_name, session_timestamp
+                                )
+                    except Exception as e:
+                        logger.debug(f"Ошибка при связывании сессии {session_id} с предыдущими: {e}")
                 
                 # Индексация L2 (сообщения)
                 messages_count = await self.l2_indexer.index_messages_l2(session)
