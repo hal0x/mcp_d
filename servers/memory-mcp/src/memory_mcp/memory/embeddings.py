@@ -1,4 +1,4 @@
-"""LangChain embeddings service wrapper - реэкспорт для обратной совместимости."""
+"""LangChain embeddings service wrapper."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from ..core.langchain_adapters import (
 
 logger = logging.getLogger(__name__)
 
-# Алиас для обратной совместимости
+# Алиас для удобства
 EmbeddingService = LangChainEmbeddingAdapter
 
 

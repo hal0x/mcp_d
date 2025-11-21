@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import ValidationError
 
-from ..core.lmstudio_client import LMStudioEmbeddingClient
+from ..core.langchain_adapters import LangChainEmbeddingAdapter, build_langchain_embeddings_from_env
 from ..search import HybridSearchManager
 from .core import (
     HistoryManager,
@@ -62,7 +62,7 @@ class QualityAnalyzer:
         Инициализация анализатора качества
 
         Args:
-            llm_model: Модель LLM для анализа (используется через LMStudioEmbeddingClient)
+            llm_model: Модель LLM для анализа (используется через LangChain)
             llm_base_url: URL LM Studio сервера
             max_context_tokens: Максимальное количество токенов в контексте
             temperature: Температура для генерации
@@ -114,8 +114,13 @@ class QualityAnalyzer:
         )
 
         # Компоненты поиска и эмбеддингов
-        # Используем LMStudioEmbeddingClient для эмбеддингов
-        self._embedding_client = LMStudioEmbeddingClient(base_url=llm_base_url or "http://127.0.0.1:1234")
+        # Используем LangChain для эмбеддингов
+        self._embedding_client = build_langchain_embeddings_from_env()
+        if self._embedding_client is None:
+            raise ValueError(
+                "Не удалось инициализировать LangChain Embeddings. "
+                "Убедитесь, что LangChain установлен и настройки эмбеддингов корректны."
+            )
         self._qdrant_client = None
         self._search_manager: Optional[HybridSearchManager] = None
 

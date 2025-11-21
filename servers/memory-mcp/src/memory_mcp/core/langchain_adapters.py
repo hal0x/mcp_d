@@ -1,4 +1,4 @@
-"""Адаптеры LangChain для обратной совместимости с существующими интерфейсами."""
+"""LangChain адаптеры для работы с эмбеддингами и LLM."""
 
 from __future__ import annotations
 
@@ -25,10 +25,10 @@ logger = logging.getLogger(__name__)
 
 
 class LangChainEmbeddingAdapter:
-    """Адаптер LangChain Embeddings для совместимости с EmbeddingService.
+    """Адаптер LangChain Embeddings.
     
-    Обертка над LangChain Embeddings, которая предоставляет тот же интерфейс,
-    что и EmbeddingService для обратной совместимости.
+    Обертка над LangChain Embeddings, которая предоставляет интерфейс
+    для работы с эмбеддингами через LangChain.
     """
 
     def __init__(
@@ -41,7 +41,7 @@ class LangChainEmbeddingAdapter:
         
         Args:
             embeddings: Экземпляр LangChain Embeddings
-            timeout: Таймаут для операций (для совместимости, не используется напрямую)
+            timeout: Таймаут для операций (не используется напрямую)
         """
         if LangChainEmbeddings is None:
             raise ImportError(
@@ -135,16 +135,16 @@ class LangChainEmbeddingAdapter:
             return [None] * len(texts)
 
     def close(self) -> None:
-        """Закрытие соединений (для совместимости с EmbeddingService)."""
+        """Закрытие соединений."""
         # LangChain embeddings обычно не требуют явного закрытия
         pass
 
 
 class LangChainLLMAdapter:
-    """Адаптер LangChain LLM для совместимости с LMStudioEmbeddingClient.
+    """Адаптер LangChain LLM.
     
     Обертка над LangChain ChatModel, которая предоставляет методы generate_summary
-    и другие для обратной совместимости.
+    и другие для работы с LLM через LangChain.
     """
 
     def __init__(
@@ -159,9 +159,9 @@ class LangChainLLMAdapter:
         
         Args:
             llm: Экземпляр LangChain ChatModel
-            model_name: Имя модели эмбеддингов (для совместимости)
-            llm_model_name: Имя LLM модели (для совместимости)
-            base_url: Базовый URL (для совместимости)
+            model_name: Имя модели эмбеддингов
+            llm_model_name: Имя LLM модели
+            base_url: Базовый URL
         """
         if BaseChatModel is None:
             raise ImportError(
@@ -171,14 +171,14 @@ class LangChainLLMAdapter:
         self.model_name = model_name
         self.llm_model_name = llm_model_name
         self.base_url = base_url
-        self.session = None  # Для совместимости с async context manager
+        self.session = None  # Для async context manager
 
     async def __aenter__(self):
-        """Асинхронный контекстный менеджер - вход (для совместимости)."""
+        """Асинхронный контекстный менеджер - вход."""
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Асинхронный контекстный менеджер - выход (для совместимости)."""
+        """Асинхронный контекстный менеджер - выход."""
         pass
 
     async def generate_summary(

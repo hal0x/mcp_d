@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import get_settings
-from ..core.lmstudio_client import LMStudioEmbeddingClient
+from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 from ..memory.artifacts_reader import ArtifactsReader, ArtifactSearchResult
 from ..mcp.schema import (
     SearchRequest,
@@ -37,7 +37,7 @@ class SmartSearchEngine:
         self.artifacts_reader = artifacts_reader
         self.session_store = session_store
         self.min_confidence = min_confidence
-        self._llm_client: Optional[LMStudioEmbeddingClient] = None
+        self._llm_client: Optional[LangChainLLMAdapter] = None
         
         from .entity_context_enricher import EntityContextEnricher
         from ..analysis.entity_dictionary import get_entity_dictionary
@@ -66,8 +66,8 @@ class SmartSearchEngine:
         from .query_understanding import QueryUnderstandingEngine
         self.query_understanding = QueryUnderstandingEngine()
 
-    def _get_llm_client(self) -> Optional[LMStudioEmbeddingClient | Any]:
-        """Получение или создание LLM клиента (LangChain или старый)."""
+    def _get_llm_client(self) -> Optional[LangChainLLMAdapter]:
+        """Получение или создание LangChain LLM клиента."""
         if self._llm_client is not None:
             return self._llm_client
 

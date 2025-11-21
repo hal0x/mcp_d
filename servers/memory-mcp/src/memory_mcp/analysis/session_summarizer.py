@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING
 
 from ..config import get_settings
-from ..core.lmstudio_client import LMStudioEmbeddingClient
+from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 from ..utils.naming import slugify
 from .adaptive_message_grouper import AdaptiveMessageGrouper
 from .context_manager import ContextManager
@@ -135,7 +135,7 @@ class SessionSummarizer:
 
     def __init__(
         self,
-        embedding_client: Optional[LMStudioEmbeddingClient] = None,
+        embedding_client: Optional[LangChainLLMAdapter] = None,
         summaries_dir: Path = Path("artifacts/reports"),
         instruction_manager: Optional[InstructionManager] = None,
         enable_quality_check: bool = True,
@@ -147,7 +147,7 @@ class SessionSummarizer:
         Инициализация саммаризатора
 
         Args:
-            embedding_client: Клиент для генерации эмбеддингов и текста (LM Studio, если None, создаётся новый)
+            embedding_client: LangChain LLM клиент для генерации текста (если None, создаётся новый)
             summaries_dir: Директория с саммаризациями для контекста
             instruction_manager: Менеджер специальных инструкций
             enable_quality_check: Включить проверку качества
@@ -156,25 +156,11 @@ class SessionSummarizer:
             strict_mode: Если True, выбрасывает исключения вместо использования fallback при ошибках LLM
         """
         if embedding_client is None:
-            # Используем фабричную функцию для получения LLM клиента (LangChain или старый)
-            from ..core.langchain_adapters import get_llm_client_factory
-            settings = get_settings()
-            
-            # Пытаемся использовать LangChain, если включен
-            if settings.use_langchain_llm:
-                embedding_client = get_llm_client_factory()
-                if embedding_client is None:
-                    # Fallback на старую реализацию
-                    embedding_client = LMStudioEmbeddingClient(
-                        model_name=settings.lmstudio_model,
-                        llm_model_name=settings.lmstudio_llm_model,
-                        base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
-                    )
-            else:
-                embedding_client = LMStudioEmbeddingClient(
-                    model_name=settings.lmstudio_model,
-                    llm_model_name=settings.lmstudio_llm_model,
-                    base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
+            embedding_client = get_llm_client_factory()
+            if embedding_client is None:
+                raise ValueError(
+                    "Не удалось инициализировать LangChain LLM клиент. "
+                    "Убедитесь, что LangChain установлен и MEMORY_MCP_LMSTUDIO_LLM_MODEL настроен."
                 )
         self.embedding_client = embedding_client
         settings = get_settings()
@@ -302,36 +288,15 @@ class SessionSummarizer:
                 extended_context,
             )
 
-            # Генерируем саммаризацию через LLM
-            # Если llm_model_name не указан, используем фабрику для получения клиента
-            if hasattr(self.embedding_client, 'llm_model_name') and not self.embedding_client.llm_model_name:
-                # Используем фабрику для получения LLM клиента (LM Studio)
-                from ..core.langchain_adapters import get_llm_client_factory
-                llm_client = get_llm_client_factory()
-                if llm_client is None:
-                    raise ValueError(
-                        "LLM клиент не настроен. Установите MEMORY_MCP_LMSTUDIO_LLM_MODEL "
-                        "или включите LangChain через MEMORY_MCP_USE_LANGCHAIN_LLM=true"
-                    )
-                
-                async with llm_client:
-                    summary_text = await llm_client.generate_summary(
-                        prompt=prompt,
-                        temperature=0.3,
-                        max_tokens=30000,  # Уменьшено для предотвращения таймаутов
-                        top_p=0.93,
-                        presence_penalty=0.05,
-                    )
-            else:
-                # Используем переданный клиент для генерации текста
-                async with self.embedding_client:
-                    summary_text = await self.embedding_client.generate_summary(
-                        prompt=prompt,
-                        temperature=0.3,
-                        max_tokens=30000,  # Уменьшено для предотвращения таймаутов
-                        top_p=0.93,
-                        presence_penalty=0.05,
-                    )
+            # Генерируем саммаризацию через LangChain LLM
+            async with self.embedding_client:
+                summary_text = await self.embedding_client.generate_summary(
+                    prompt=prompt,
+                    temperature=0.3,
+                    max_tokens=30000,  # Уменьшено для предотвращения таймаутов
+                    top_p=0.93,
+                    presence_penalty=0.05,
+                )
 
         # Парсим структурированную саммаризацию и дополняем пропуски при необходимости
         summary_structure = self._parse_summary_structure(summary_text)
@@ -3353,7 +3318,7 @@ class SessionSummarizer:
 async def summarize_chat_sessions(
     messages: List[Dict[str, Any]],
     chat_name: str,
-    embedding_client: Optional[LMStudioEmbeddingClient] = None,
+    embedding_client: Optional[LangChainLLMAdapter] = None,
     summaries_dir: Path = Path("artifacts/reports"),
     instruction_manager: Optional[InstructionManager] = None,
 ) -> List[Dict[str, Any]]:

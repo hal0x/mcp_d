@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..core.lmstudio_client import LMStudioEmbeddingClient
+from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ class RollingWindowAggregator:
         chats_dir: Path = Path("chats"),
         state_dir: Path = Path("aggregation_state"),
         strategy: List[TimeWindow] = None,
-        embedding_client: Optional[LMStudioEmbeddingClient] = None,
+        embedding_client: Optional[LangChainLLMAdapter] = None,
         batch_size: int = 50,
     ):
         self.chats_dir = chats_dir
@@ -140,7 +140,7 @@ class RollingWindowAggregator:
         if embedding_client is None:
             from ..config import get_settings
             settings = get_settings()
-            self.embedding_client = LMStudioEmbeddingClient(
+            self.embedding_client = LangChainLLMAdapter(
                 model_name=settings.lmstudio_model,
                 llm_model_name=settings.lmstudio_llm_model,
                 base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}",

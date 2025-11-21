@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from ...core.lmstudio_client import LMStudioEmbeddingClient
+from ...core.langchain_adapters import LangChainLLMAdapter
 from .templates import DEFAULT_PROMPTS_DIR, PromptTemplateManager
 
 logger = logging.getLogger(__name__)
@@ -36,8 +36,8 @@ class RelevanceAnalyzer:
         self.max_response_tokens = max_response_tokens
         self.thinking_level = thinking_level
 
-        # Используем LMStudioEmbeddingClient для работы с LLM
-        self.embedding_client = LMStudioEmbeddingClient(
+        # Используем LangChainLLMAdapter для работы с LLM
+        self.embedding_client = LangChainLLMAdapter(
             model_name=model_name,
             base_url=base_url,
         )

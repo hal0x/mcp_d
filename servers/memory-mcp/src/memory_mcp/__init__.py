@@ -14,7 +14,7 @@ __email__ = "team@memory_mcp.dev"
 
 from .analysis.insight_graph import SummaryInsightAnalyzer
 from .core.indexer import TwoLevelIndexer
-from .core.lmstudio_client import LMStudioEmbeddingClient
+from .core.langchain_adapters import LangChainLLMAdapter, LangChainEmbeddingAdapter
 from .indexing import (
     Attachment,
     BaseIndexer,
@@ -24,7 +24,8 @@ from .indexing import (
 
 __all__ = [
     "TwoLevelIndexer",
-    "LMStudioEmbeddingClient",
+    "LangChainLLMAdapter",
+    "LangChainEmbeddingAdapter",
     "SummaryInsightAnalyzer",
     "BaseIndexer",
     "TelegramIndexer",

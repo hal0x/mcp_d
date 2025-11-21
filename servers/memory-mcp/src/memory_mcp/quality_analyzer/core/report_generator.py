@@ -51,7 +51,7 @@ class ReportGenerator:
 
         self.quality_reports_dir.mkdir(parents=True, exist_ok=True)
 
-        from ...core.lmstudio_client import LMStudioEmbeddingClient
+        from ...core.langchain_adapters import LangChainLLMAdapter
         from .templates import DEFAULT_PROMPTS_DIR, PromptTemplateManager
 
         self.report_template_manager = PromptTemplateManager(
@@ -62,12 +62,12 @@ class ReportGenerator:
 
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.embedding_client: Optional[LMStudioEmbeddingClient] = None
+        self.embedding_client: Optional[LangChainLLMAdapter] = None
         self.thinking_level = thinking_level
 
         if llm_model and llm_base_url:
             # Используем LM Studio Server
-            self.embedding_client = LMStudioEmbeddingClient(
+            self.embedding_client = LangChainLLMAdapter(
                 model_name=llm_model,
                 base_url=llm_base_url,
             )

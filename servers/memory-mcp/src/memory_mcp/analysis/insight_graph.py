@@ -10,7 +10,7 @@ from typing import Any, Iterable, Sequence
 import networkx as nx
 import yaml
 
-from ..core.lmstudio_client import LMStudioEmbeddingClient
+from ..core.langchain_adapters import LangChainEmbeddingAdapter, build_langchain_embeddings_from_env
 
 try:
     from qdrant_client import QdrantClient
@@ -86,7 +86,7 @@ class SummaryInsightAnalyzer:
         summaries_dir: Path | str = Path("artifacts/reports"),
         qdrant_url: str | None = None,
         *,
-        embedding_client: LMStudioEmbeddingClient | None = None,
+        embedding_client: LangChainEmbeddingAdapter | None = None,
         qdrant_client: Any | None = None,
         similarity_threshold: float = 0.76,
         max_similar_results: int = 8,
@@ -94,7 +94,14 @@ class SummaryInsightAnalyzer:
         self.summaries_dir = Path(summaries_dir)
         self.similarity_threshold = similarity_threshold
         self.max_similar_results = max_similar_results
-        self.embedding_client = embedding_client or LMStudioEmbeddingClient()
+        if embedding_client is None:
+            embedding_client = build_langchain_embeddings_from_env()
+            if embedding_client is None:
+                raise ValueError(
+                    "Не удалось инициализировать LangChain Embeddings. "
+                    "Убедитесь, что LangChain установлен и настройки эмбеддингов корректны."
+                )
+        self.embedding_client = embedding_client
         self._own_embedding_client = embedding_client is None
         
         from ..config import get_settings

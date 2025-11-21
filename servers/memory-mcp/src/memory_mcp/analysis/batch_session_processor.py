@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..core.lmstudio_client import LMStudioEmbeddingClient
+from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 from .large_context_processor import LargeContextProcessor
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ class BatchSessionProcessor:
         max_tokens: int = 30000,  # Максимальный контекст модели (уменьшено для предотвращения таймаутов)
         prompt_reserve_tokens: int = 5000,
         context_reserve_tokens: int = 5000,  # Резерв для накопительного контекста (уменьшено)
-        embedding_client: Optional[LMStudioEmbeddingClient] = None,
+        embedding_client: Optional[LangChainLLMAdapter] = None,
     ):
         """
         Инициализация батч-процессора.

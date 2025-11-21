@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ..config import get_settings
-from ..core.lmstudio_client import LMStudioEmbeddingClient
+from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +50,9 @@ class QueryUnderstandingEngine:
 
     def __init__(self):
         """Инициализация движка понимания запросов."""
-        self._llm_client: Optional[LMStudioEmbeddingClient] = None
+        self._llm_client: Optional[LangChainLLMAdapter] = None
 
-    def _get_llm_client(self) -> Optional[LMStudioEmbeddingClient]:
+    def _get_llm_client(self) -> Optional[LangChainLLMAdapter]:
         """Получение или создание LLM клиента."""
         if self._llm_client is not None:
             return self._llm_client
@@ -61,7 +61,7 @@ class QueryUnderstandingEngine:
             settings = get_settings()
 
             if settings.lmstudio_llm_model:
-                self._llm_client = LMStudioEmbeddingClient(
+                self._llm_client = LangChainLLMAdapter(
                     model_name=settings.lmstudio_model,
                     llm_model_name=settings.lmstudio_llm_model,
                     base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}",

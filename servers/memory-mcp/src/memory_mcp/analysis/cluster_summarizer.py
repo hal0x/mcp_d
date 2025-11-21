@@ -20,7 +20,7 @@ class ClusterSummarizer:
         Инициализация
 
         Args:
-            embedding_client: LMStudioEmbeddingClient для взаимодействия с LLM
+            embedding_client: LangChainLLMAdapter для взаимодействия с LLM
         """
         self.embedding_client = embedding_client
         logger.info("Инициализирован ClusterSummarizer")
@@ -280,7 +280,7 @@ async def summarize_all_clusters(
 
     Args:
         clusters: Список кластеров
-        embedding_client: LMStudioEmbeddingClient
+        embedding_client: LangChainLLMAdapter
         progress_callback: Функция для отчёта о прогрессе
 
     Returns:

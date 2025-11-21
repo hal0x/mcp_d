@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 from ..utils.datetime_utils import format_datetime_display
 
 from ..config import get_settings
-from ..core.lmstudio_client import LMStudioEmbeddingClient
+from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 from .adaptive_message_grouper import AdaptiveMessageGrouper
 from .batch_session_processor import BatchSessionProcessor
 from .context_manager import ContextManager
@@ -171,7 +171,7 @@ class SmartRollingAggregator:
         state_dir: Path = Path("artifacts/smart_aggregation_state"),
         summaries_dir: Path = Path("artifacts/reports"),
         now_summaries_dir: Path = Path("artifacts/now_summaries"),
-        embedding_client: Optional[LMStudioEmbeddingClient] = None,
+        embedding_client: Optional[LangChainLLMAdapter] = None,
         use_smart_strategy: bool = True,
     ):
         self.chats_dir = chats_dir
@@ -184,7 +184,7 @@ class SmartRollingAggregator:
 
         if embedding_client is None:
             settings = get_settings()
-            self.embedding_client = LMStudioEmbeddingClient(
+            self.embedding_client = LangChainLLMAdapter(
                 model_name=settings.lmstudio_model,
                 llm_model_name=settings.lmstudio_llm_model,
                 base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}",

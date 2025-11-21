@@ -536,13 +536,13 @@ class EntityDictionary:
         if not self._llm_client_initialized:
             try:
                 from ..config import get_settings
-                from ..core.lmstudio_client import LMStudioEmbeddingClient
+                from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
                 
                 settings = get_settings()
                 
                 # Пытаемся использовать LM Studio, если указана LLM модель
                 if settings.lmstudio_llm_model:
-                    self._llm_client = LMStudioEmbeddingClient(
+                    self._llm_client = LangChainLLMAdapter(
                         model_name=settings.lmstudio_model,  # Для эмбеддингов (не используется здесь)
                         llm_model_name=settings.lmstudio_llm_model,  # Для генерации текста
                         base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
@@ -657,7 +657,7 @@ class EntityDictionary:
             # Используем async контекстный менеджер
             async with llm_client:
                 if hasattr(llm_client, 'generate_summary'):
-                    # LMStudioEmbeddingClient
+                    # LangChainLLMAdapter
                     # Для reasoning-моделей увеличиваем max_tokens, так как они генерируют reasoning перед ответом
                     # Минимум 200 токенов для reasoning-моделей, 100 для обычных
                     # Используем максимальное значение модели (131072 для gpt-oss-20b)

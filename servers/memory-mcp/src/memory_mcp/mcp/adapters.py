@@ -2566,16 +2566,18 @@ class MemoryServiceAdapter:
         """Index a specific Telegram chat with two-level indexing."""
         from ..core.indexer import TwoLevelIndexer
         from ..config import get_settings
-        from ..core.lmstudio_client import LMStudioEmbeddingClient
+        from ..core.langchain_adapters import get_llm_client_factory
         from pathlib import Path
 
         settings = get_settings()
         
         # Инициализируем embedding client
-        embedding_client = LMStudioEmbeddingClient(
-            model_name=settings.lmstudio_model,
-            base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
-        )
+        embedding_client = get_llm_client_factory()
+        if embedding_client is None:
+            raise ValueError(
+                "Не удалось инициализировать LangChain LLM клиент. "
+                "Убедитесь, что LangChain установлен и MEMORY_MCP_LMSTUDIO_LLM_MODEL настроен."
+            )
         
         # Инициализируем индексатор с графом памяти
         indexer = TwoLevelIndexer(

@@ -266,14 +266,14 @@ def cli(verbose, quiet):
       • indexing-progress  - Управление прогрессом инкрементальной индексации
       • update-summaries   - Обновление markdown-отчетов без полной индексации
       • review-summaries   - Автоматическое ревью и исправление саммаризаций
-      • rebuild-vector-db  - Пересоздание векторной базы данных из существующих артефактов
-      • search             - Поиск по индексированным данным
       • insight-graph      - Построение графа знаний
       • stats              - Статистика системы
       • check              - Проверка системы
       • extract-messages   - Извлечение новых сообщений из input в chats
       • deduplicate        - Удаление дубликатов сообщений
       • stop-indexing      - Остановка всех процессов индексации
+      
+    Примечание: Поиск доступен через MCP API (инструмент 'search' с типами: hybrid, smart, embedding, similar, trading)
       
     Управление данными:
       • backup-database    - Создание резервной копии (SQLite)
@@ -366,34 +366,44 @@ def check(embedding_model):
     """🔧 Проверка системы и подключений"""
 
     async def _check():
-        from ..core.lmstudio_client import LMStudioEmbeddingClient
+        from ..core.langchain_adapters import get_llm_client_factory, build_langchain_embeddings_from_env
         from ..config import get_settings
 
         click.echo("🔧 Проверка системы...")
 
-        # Проверяем LM Studio Server
+        # Проверяем LangChain LLM
         try:
             settings = get_settings()
-            lmstudio_client = LMStudioEmbeddingClient(
-                model_name=embedding_model or settings.lmstudio_model,
-                llm_model_name=settings.lmstudio_llm_model,
-                base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
-            )
-            async with lmstudio_client:
-                available = await lmstudio_client.test_connection()
-                if not available or not available.get("lmstudio_available", False):
-                    click.echo("❌ LM Studio Server недоступен")
-                    click.echo(f"Убедитесь, что LM Studio Server запущен на {settings.lmstudio_host}:{settings.lmstudio_port}")
-                    return False
+            llm_client = get_llm_client_factory()
+            if llm_client is None:
+                click.echo("❌ LangChain LLM клиент недоступен")
+                click.echo("Убедитесь, что LangChain установлен и MEMORY_MCP_LMSTUDIO_LLM_MODEL настроен")
+                return False
+            
+            if not llm_client.available():
+                click.echo("❌ LangChain LLM клиент не доступен")
+                return False
 
-                if not available.get("model_available", False):
-                    click.echo("❌ Модель для эмбеддингов не найдена")
-                    click.echo(f"Убедитесь, что модель {embedding_model or settings.lmstudio_model} загружена в LM Studio Server")
-                    return False
-
-                click.echo("✅ LM Studio доступен")
+            click.echo("✅ LangChain LLM доступен")
         except Exception as e:
-            click.echo(f"❌ Ошибка при проверке LM Studio: {e}")
+            click.echo(f"❌ Ошибка при проверке LangChain LLM: {e}")
+            return False
+        
+        # Проверяем LangChain Embeddings
+        try:
+            embedding_service = build_langchain_embeddings_from_env()
+            if embedding_service is None:
+                click.echo("❌ LangChain Embeddings недоступны")
+                click.echo("Убедитесь, что LangChain установлен и настройки эмбеддингов корректны")
+                return False
+            
+            if not embedding_service.available():
+                click.echo("❌ LangChain Embeddings не доступны")
+                return False
+
+            click.echo("✅ LangChain Embeddings доступны")
+        except Exception as e:
+            click.echo(f"❌ Ошибка при проверке LangChain Embeddings: {e}")
             return False
 
         # Проверяем Qdrant
@@ -589,7 +599,7 @@ def index(
             return
 
         # Инициализация трекера задач индексации
-        from ..core.lmstudio_client import LMStudioEmbeddingClient
+        from ..core.langchain_adapters import get_llm_client_factory
         from ..config import get_settings
         
         settings = get_settings()
@@ -617,11 +627,11 @@ def index(
         
         click.echo(f"📋 Задача индексации создана: {job_id}")
         click.echo("📦 Инициализация индексатора...")
-        embedding_client = LMStudioEmbeddingClient(
-            model_name=embedding_model or settings.lmstudio_model,
-            llm_model_name=settings.lmstudio_llm_model,
-            base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
-        )
+        embedding_client = get_llm_client_factory()
+        if embedding_client is None:
+            click.echo("❌ Не удалось инициализировать LangChain LLM клиент")
+            click.echo("Убедитесь, что LangChain установлен и MEMORY_MCP_LMSTUDIO_LLM_MODEL настроен")
+            return
         
         # Определяем callback функцию для обновления прогресса
         def progress_callback(job_id: str, event: str, data: Dict) -> None:
@@ -1461,7 +1471,7 @@ def review_summaries(dry_run, chat, limit):
     """
     import json
 
-    from ..core.lmstudio_client import LMStudioEmbeddingClient
+    from ..core.langchain_adapters import get_llm_client_factory
     from ..config import get_settings
 
     async def _review_summaries():
@@ -1509,10 +1519,11 @@ def review_summaries(dry_run, chat, limit):
 
         # Создаем LLM клиент
         settings = get_settings()
-        embedding_client = LMStudioEmbeddingClient(
-            model_name=settings.lmstudio_model,
-            base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
-        )
+        embedding_client = get_llm_client_factory()
+        if embedding_client is None:
+            click.echo("❌ Не удалось инициализировать LangChain LLM клиент")
+            click.echo("Убедитесь, что LangChain установлен и MEMORY_MCP_LMSTUDIO_LLM_MODEL настроен")
+            return
 
         async def review_summary(md_content: str) -> dict:
             prompt = f"""Ты - эксперт по анализу и улучшению саммаризаций чатов.

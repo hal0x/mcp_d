@@ -1221,7 +1221,7 @@ async def _run_indexing_job(
     
     from ..core.indexer import TwoLevelIndexer
     from ..config import get_settings
-    from ..core.lmstudio_client import LMStudioEmbeddingClient
+    from ..core.langchain_adapters import get_llm_client_factory
     from datetime import timezone
     
     try:
@@ -1233,10 +1233,12 @@ async def _run_indexing_job(
         
         settings = get_settings()
         
-        embedding_client = LMStudioEmbeddingClient(
-            model_name=settings.lmstudio_model,
-            base_url=f"http://{settings.lmstudio_host}:{settings.lmstudio_port}"
-        )
+        embedding_client = get_llm_client_factory()
+        if embedding_client is None:
+            raise ValueError(
+                "Не удалось инициализировать LangChain LLM клиент. "
+                "Убедитесь, что LangChain установлен и MEMORY_MCP_LMSTUDIO_LLM_MODEL настроен."
+            )
         
         indexer = TwoLevelIndexer(
             artifacts_path=settings.artifacts_path,

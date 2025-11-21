@@ -26,7 +26,7 @@ from ..analysis.session_summarizer import SessionSummarizer
 from ..analysis.time_processor import TimeProcessor
 from ..utils.naming import slugify
 from ..utils.url_validator import validate_embedding_text
-from .lmstudio_client import LMStudioEmbeddingClient
+from .langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ class TwoLevelIndexer:
     def __init__(
         self,
         artifacts_path: str = "./artifacts",
-        embedding_client: Optional[LMStudioEmbeddingClient] = None,
+        embedding_client: Optional[LangChainLLMAdapter] = None,
         enable_quality_check: bool = True,
         enable_iterative_refinement: bool = True,
         min_quality_score: float = 80.0,
@@ -104,7 +104,14 @@ class TwoLevelIndexer:
         self.artifacts_path.mkdir(parents=True, exist_ok=True)
         self.reports_path = self.artifacts_path / "reports"
         self.reports_path.mkdir(parents=True, exist_ok=True)
-        self.embedding_client = embedding_client or LMStudioEmbeddingClient()
+        if embedding_client is None:
+            embedding_client = get_llm_client_factory()
+            if embedding_client is None:
+                raise ValueError(
+                    "Не удалось инициализировать LangChain LLM клиент. "
+                    "Убедитесь, что LangChain установлен и MEMORY_MCP_LMSTUDIO_LLM_MODEL настроен."
+                )
+        self.embedding_client = embedding_client
         
         # Инициализируем Qdrant для векторного хранилища
         from ..config import get_settings

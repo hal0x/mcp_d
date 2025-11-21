@@ -9,9 +9,9 @@ from typing import Any, Dict, List, Optional
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..core.lmstudio_client import LMStudioEmbeddingClient
+    from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 else:
-    from ..core.lmstudio_client import LMStudioEmbeddingClient
+    from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class SemanticRegrouper:
 
     def __init__(
         self,
-        embedding_client: Optional[LMStudioEmbeddingClient] = None,
+        embedding_client: Optional[LangChainLLMAdapter] = None,
     ):
         """
         Инициализация семантического перегруппировщика.
