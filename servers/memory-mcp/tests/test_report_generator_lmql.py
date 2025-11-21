@@ -4,8 +4,8 @@ import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-from memory_mcp.quality_analyzer.core.report_generator import ReportGenerator
-from memory_mcp.core.lmql_adapter import LMQLAdapter
+from memory_mcp.analysis.quality.core.report_generator import ReportGenerator
+from memory_mcp.core.adapters.lmql_adapter import LMQLAdapter
 
 
 class TestReportGeneratorLMQL:

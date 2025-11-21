@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from ...utils.naming import slugify
-from ...utils.context_optimizer import optimize_context_dict
+from ...utils.system.naming import slugify
+from ...utils.processing.context_optimizer import optimize_context_dict
 
 logger = logging.getLogger(__name__)
 
@@ -349,7 +349,7 @@ class ContextManager:
             # Проверяем по времени
             if end_time_utc:
                 try:
-                    from ..utils.datetime_utils import parse_datetime_utc
+                    from ...utils.processing.datetime_utils import parse_datetime_utc
                     risk_time = parse_datetime_utc(
                         end_time_utc, return_none_on_error=True, use_zoneinfo=True
                     )
@@ -556,7 +556,7 @@ class ContextManager:
         new_context = "\n".join(context_parts)
         if len(new_context) > self.max_context_size:
             # Обрезаем до максимального размера, оставляя последние части
-            from ..utils.context_optimizer import truncate_text_from_end
+            from ...utils.processing.context_optimizer import truncate_text_from_end
             new_context = truncate_text_from_end(new_context, self.max_context_size)
 
         self._accumulative_contexts[chat_name] = new_context

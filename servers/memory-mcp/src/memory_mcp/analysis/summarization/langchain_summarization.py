@@ -94,7 +94,7 @@ class LangChainSummarizationChain:
                 docs = [Document(page_content=text)]
             else:
                 # Для map_reduce и refine разбиваем на чанки
-                from ..core.langchain_text_splitters import create_text_splitter
+                from ...core.adapters.langchain_text_splitters import create_text_splitter
                 splitter = create_text_splitter(
                     chunk_size=max_chunk_size,
                     chunk_overlap=200,
@@ -136,7 +136,7 @@ class LangChainSummarizationChain:
             if self.chain_type == "stuff":
                 docs = [Document(page_content=text)]
             else:
-                from ..core.langchain_text_splitters import create_text_splitter
+                from ...core.adapters.langchain_text_splitters import create_text_splitter
                 splitter = create_text_splitter(
                     chunk_size=max_chunk_size,
                     chunk_overlap=200,

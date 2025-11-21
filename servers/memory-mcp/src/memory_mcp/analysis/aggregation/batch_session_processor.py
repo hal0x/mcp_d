@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from ...core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
+from ...core.adapters.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 from .large_context_processor import LargeContextProcessor
 
 logger = logging.getLogger(__name__)

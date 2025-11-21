@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import chromadb
 from rank_bm25 import BM25Okapi
 
-from ..utils.russian_tokenizer import get_tokenizer
+from ..utils.text.russian_tokenizer import get_tokenizer
 
 logger = logging.getLogger(__name__)
 

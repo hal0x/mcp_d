@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from memory_mcp.search.query_intent_analyzer import QueryIntentAnalyzer, QueryIntent
-from memory_mcp.core.lmql_adapter import LMQLAdapter
+from memory_mcp.core.adapters.lmql_adapter import LMQLAdapter
 
 
 class TestQueryIntentAnalyzerLMQL:

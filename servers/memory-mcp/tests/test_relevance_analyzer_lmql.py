@@ -3,8 +3,8 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from memory_mcp.quality_analyzer.core.relevance_analyzer import RelevanceAnalyzer
-from memory_mcp.core.lmql_adapter import LMQLAdapter
+from memory_mcp.analysis.quality.core.relevance_analyzer import RelevanceAnalyzer
+from memory_mcp.core.adapters.lmql_adapter import LMQLAdapter
 
 
 class TestRelevanceAnalyzerLMQL:

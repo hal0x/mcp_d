@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from ....core.langchain_adapters import LangChainLLMAdapter
+from ....core.adapters.langchain_adapters import LangChainLLMAdapter
 from ...utils.instruction_manager import InstructionManager
 from ...segmentation.session_segmentation import SessionSegmenter
 from .summarizer import SessionSummarizer

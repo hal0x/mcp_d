@@ -5,9 +5,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from typing import Dict, Any, Optional
 
-from memory_mcp.analysis.session_summarizer import SessionSummarizer
-from memory_mcp.core.lmql_adapter import LMQLAdapter
-from memory_mcp.core.langchain_adapters import LangChainLLMAdapter
+from memory_mcp.analysis.summarization.session.summarizer import SessionSummarizer
+from memory_mcp.core.adapters.lmql_adapter import LMQLAdapter
+from memory_mcp.core.adapters.langchain_adapters import LangChainLLMAdapter
 
 
 @pytest.fixture

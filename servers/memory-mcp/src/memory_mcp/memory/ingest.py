@@ -9,9 +9,9 @@ from datetime import datetime
 from typing import Iterable, List, Optional
 from uuid import uuid4
 
-from ..indexing import Attachment, MemoryRecord
-from .graph_types import DocChunkNode, EdgeType, GraphEdge, NodeType
-from .typed_graph import TypedGraphMemory
+from ..models.memory import Attachment, MemoryRecord
+from .storage.graph.graph_types import DocChunkNode, EdgeType, GraphEdge, NodeType
+from .storage.graph.typed_graph import TypedGraphMemory
 
 logger = logging.getLogger(__name__)
 
@@ -239,7 +239,7 @@ class MemoryIngestor:
                     existing_timestamp_str = props.get("timestamp") or props.get("created_at")
                     existing_timestamp = None
                     if existing_timestamp_str:
-                        from ..utils.datetime_utils import parse_datetime_utc
+                        from ...utils.processing.datetime_utils import parse_datetime_utc
                         existing_timestamp = parse_datetime_utc(existing_timestamp_str, default=None)
                     
                     # Получаем данные существующей записи

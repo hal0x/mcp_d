@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from memory_mcp.core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
+from memory_mcp.core.adapters.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
 
 
 class TestLMQLAdapter:

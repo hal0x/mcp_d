@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from memory_mcp.search.smart_search_engine import SmartSearchEngine
 from memory_mcp.mcp.schema import SearchResultItem
-from memory_mcp.core.lmql_adapter import LMQLAdapter
+from memory_mcp.core.adapters.lmql_adapter import LMQLAdapter
 
 
 class TestSmartSearchEngineLMQL:

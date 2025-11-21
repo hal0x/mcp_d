@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import get_settings
-from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
-from ..core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
+from ..core.adapters.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
+from ..core.adapters.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
 from ..memory.artifacts_reader import ArtifactsReader, ArtifactSearchResult
 from ..mcp.schema import (
     SearchRequest,
@@ -48,7 +48,7 @@ class SmartSearchEngine:
         from .entity_context_enricher import EntityContextEnricher
         from ..analysis.entities import get_entity_dictionary
         from ..memory.embeddings import build_embedding_service_from_env
-        from ..memory.vector_store import build_entity_vector_store_from_env
+        from ..memory.storage.vector.vector_store import build_entity_vector_store_from_env
         
         entity_dict = get_entity_dictionary(graph=adapter.graph if hasattr(adapter, 'graph') else None)
         embedding_service = build_embedding_service_from_env()
@@ -78,7 +78,7 @@ class SmartSearchEngine:
             return self._llm_client
 
         try:
-            from ..core.langchain_adapters import get_llm_client_factory
+            from ..core.adapters.langchain_adapters import get_llm_client_factory
             
             self._llm_client = get_llm_client_factory()
             if self._llm_client is None:

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from src.memory_mcp.analysis.incremental_context_manager import IncrementalContextManager
-from src.memory_mcp.analysis.session_summarizer import SessionSummarizer
+from memory_mcp.analysis.summarization.session.summarizer import SessionSummarizer
 
 
 class TestIncrementalContextManager:

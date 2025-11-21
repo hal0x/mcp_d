@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from memory_mcp.search.query_understanding import QueryUnderstandingEngine, QueryUnderstanding
-from memory_mcp.core.lmql_adapter import LMQLAdapter
+from memory_mcp.core.adapters.lmql_adapter import LMQLAdapter
 
 
 @pytest.fixture

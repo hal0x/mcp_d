@@ -10,7 +10,7 @@ from .generation import (
     generate_claims,
 )
 from .quality import refresh_quality
-from ...utils import (
+from ..utils import (
     build_claim_summary,
     build_topic_title,
     collect_segment_by_ids,
@@ -273,7 +273,7 @@ def refine_pass_profile_rules(
 ) -> bool:
     changed = False
 
-        if profile == "broadcast":
+    if profile == "broadcast":
             claims_cov = aux_data.get("claims_coverage", 0.0)
             if claims_cov < 0.25:
                 changed |= refine_pass_claims(summary, aux_data, profile)

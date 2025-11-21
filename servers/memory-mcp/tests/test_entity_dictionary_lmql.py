@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
 
 from memory_mcp.analysis.entity_dictionary import EntityDictionary
-from memory_mcp.core.lmql_adapter import LMQLAdapter
+from memory_mcp.core.adapters.lmql_adapter import LMQLAdapter
 
 
 class TestEntityDictionaryLMQL:

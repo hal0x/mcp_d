@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ..config import get_settings
-from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
-from ..core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
+from ..core.adapters.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
+from ..core.adapters.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
 
 logger = logging.getLogger(__name__)
 

@@ -8,9 +8,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
-from ..utils.datetime_utils import parse_datetime_utc
-from .graph_types import DocChunkNode, EdgeType, GraphEdge, GraphNode, NodeType
-from .typed_graph import TypedGraphMemory
+from memory_mcp.utils.processing.datetime_utils import parse_datetime_utc
+from .storage.graph.graph_types import DocChunkNode, EdgeType, GraphEdge, GraphNode, NodeType
+from .storage.graph.typed_graph import TypedGraphMemory
 
 
 class TradingMemory:

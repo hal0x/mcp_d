@@ -12,9 +12,9 @@ __version__ = "2.0.0"
 __author__ = "Telegram Dump Team"
 __email__ = "team@memory_mcp.dev"
 
-from .analysis.insight_graph import SummaryInsightAnalyzer
-from .core.indexer import TwoLevelIndexer
-from .core.langchain_adapters import LangChainLLMAdapter, LangChainEmbeddingAdapter
+from .analysis.rendering.insight_graph import SummaryInsightAnalyzer
+from .core.indexing import TwoLevelIndexer
+from .core.adapters.langchain_adapters import LangChainLLMAdapter, LangChainEmbeddingAdapter
 from .indexing import (
     Attachment,
     BaseIndexer,

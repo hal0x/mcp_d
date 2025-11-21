@@ -6,7 +6,7 @@
 import re
 from typing import Any, Dict, List, Optional
 
-from ...utils import (
+from ..utils import (
     build_claim_summary,
     build_message_envelope,
     build_topic_title,

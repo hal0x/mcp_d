@@ -7,7 +7,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from ...utils.deduplication import deduplicate_consecutive
+from ...utils.data.deduplication import deduplicate_consecutive
 
 logger = logging.getLogger(__name__)
 

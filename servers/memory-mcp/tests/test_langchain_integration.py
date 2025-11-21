@@ -3,14 +3,14 @@
 import pytest
 from unittest.mock import Mock, patch
 
-from memory_mcp.core.langchain_adapters import (
+from memory_mcp.core.adapters.langchain_adapters import (
     LangChainEmbeddingAdapter,
     LangChainLLMAdapter,
     build_langchain_embeddings_from_env,
     build_langchain_llm_from_env,
 )
-from memory_mcp.core.langchain_prompts import LangChainPromptManager
-from memory_mcp.core.langchain_text_splitters import LangChainTextSplitter, create_text_splitter
+from memory_mcp.core.adapters.langchain_prompts import LangChainPromptManager
+from memory_mcp.core.adapters.langchain_text_splitters import LangChainTextSplitter, create_text_splitter
 from memory_mcp.search.langchain_retrievers import HybridMemoryRetriever
 from memory_mcp.analysis.langchain_summarization import LangChainSummarizationChain
 

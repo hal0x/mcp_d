@@ -10,15 +10,15 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from ..core.constants import DEFAULT_SEARCH_LIMIT
-from ..indexing import Attachment, MemoryRecord
+from ..models.memory import Attachment, MemoryRecord
 from ..memory.artifacts_reader import ArtifactsReader
 from ..memory.embeddings import build_embedding_service_from_env
-from ..memory.graph_types import EdgeType, NodeType
 from ..memory.ingest import MemoryIngestor
+from ..memory.storage.graph.graph_types import EdgeType, NodeType
+from ..memory.storage.graph.typed_graph import TypedGraphMemory
+from ..memory.storage.vector.vector_store import build_vector_store_from_env
 from ..memory.trading_memory import TradingMemory
-from ..memory.typed_graph import TypedGraphMemory
-from ..memory.vector_store import build_vector_store_from_env
-from ..utils.datetime_utils import parse_datetime_utc
+from ..utils.processing.datetime_utils import parse_datetime_utc
 from .schema import (
     AnalyzeEntitiesRequest,
     AnalyzeEntitiesResponse,
@@ -225,13 +225,13 @@ class MemoryServiceAdapter:
             self.vector_store.ensure_collection(self.embedding_service.dimension)
         self.trading_memory = TradingMemory(self.graph)
         
-        # Параметры гибридного поиска: FTS5 (0.8) + векторный (0.2)
+        # Параметры гибридного поиска: FTS5 (80%) + векторный (20%)
         _fts_weight_raw = 0.8
         _vector_weight_raw = 0.2
         _total_weight = _fts_weight_raw + _vector_weight_raw
         self._fts_weight = _fts_weight_raw / _total_weight
         self._vector_weight = _vector_weight_raw / _total_weight
-        self._rrf_k = 60  # Reciprocal Rank Fusion
+        self._rrf_k = 60  # Reciprocal Rank Fusion параметр
         self._use_rrf = True
         
         from ..config import get_settings
@@ -545,15 +545,12 @@ class MemoryServiceAdapter:
 
     def search(self, request: SearchRequest) -> SearchResponse:
         """Выполняет гибридный поиск: FTS5 + векторный (Qdrant) с объединением через RRF."""
-        # Обогащаем запрос контекстом сущностей
         enriched_query = self.entity_enricher.enrich_query_with_entity_context(request.query)
-        
-        # Извлекаем сущности из запроса для добавления в результаты
         extracted_entities = self.entity_enricher.extract_entities_from_query(request.query)
         
         rows, total_fts = self.graph.search_text(
-            enriched_query,  # Используем обогащенный запрос
-            limit=request.top_k * 2,  # Берем больше для RRF
+            enriched_query,
+            limit=request.top_k * 2,  # Берем больше результатов для RRF
             source=request.source,
             tags=request.tags,
             date_from=request.date_from,
@@ -564,12 +561,10 @@ class MemoryServiceAdapter:
         all_items: dict[str, SearchResultItem] = {}
         
         for row in rows:
-            # Получаем эмбеддинг из графа, если доступен
             embedding = None
             if row["node_id"] in self.graph.graph:
                 node_data = self.graph.graph.nodes[row["node_id"]]
                 embedding = node_data.get("embedding")
-                # Преобразуем numpy массив в список, если нужно
                 if embedding is not None:
                     if hasattr(embedding, 'tolist'):
                         embedding = embedding.tolist()
@@ -579,7 +574,6 @@ class MemoryServiceAdapter:
                         except (TypeError, ValueError):
                             embedding = None
                 
-                # Если эмбеддинг не в графе, пытаемся получить из БД
                 if embedding is None:
                     try:
                         cursor = self.graph.conn.cursor()
@@ -594,8 +588,6 @@ class MemoryServiceAdapter:
                     except Exception:
                         pass
             
-            # Добавляем BM25 score в метаданные
-            # row.get("metadata") может быть None, dict или строкой JSON
             row_metadata = row.get("metadata")
             if row_metadata is None:
                 metadata = {}
@@ -615,7 +607,7 @@ class MemoryServiceAdapter:
             
             item = SearchResultItem(
                 record_id=row["node_id"],
-                score=row["score"],  # Оригинальный score, RRF пересчитает
+                score=row["score"],
                 content=row["snippet"],
                 source=row["source"],
                 timestamp=row["timestamp"],
@@ -626,15 +618,13 @@ class MemoryServiceAdapter:
             fts_results.append(item)
             all_items[row["node_id"]] = item
 
-        # 2. Векторный поиск (Qdrant)
         vector_results: list[SearchResultItem] = []
         if self.embedding_service and self.vector_store and self.vector_store.available():
-            # Используем обогащенный запрос для векторного поиска
             query_vector = self.embedding_service.embed(enriched_query)
             if query_vector:
                 vector_matches = self.vector_store.search(
                     query_vector,
-                    limit=request.top_k * 2,  # Берем больше для RRF
+                    limit=request.top_k * 2,
                     source=request.source,
                     tags=request.tags,
                     date_from=request.date_from,
@@ -649,48 +639,38 @@ class MemoryServiceAdapter:
                     if isinstance(preview, str) and preview.strip():
                         snippet = preview
                     
-                    # Пытаемся получить полные данные из графа или используем данные из payload
                     item = self._build_item_from_graph(
                         record_id,
-                        match.score,  # Оригинальный score, RRF пересчитает
+                        match.score,
                         snippet=snippet,
                     )
                     if item:
-                        # Добавляем vector score в метаданные
                         if not item.metadata:
                             item.metadata = {}
                         item.metadata["vector_score"] = match.score
                         item.metadata["search_source"] = "vector"
                         vector_results.append(item)
-                        # Сохраняем в all_items, если еще нет (или обновляем, если векторный результат лучше)
                         if record_id not in all_items:
                             all_items[record_id] = item
                         else:
-                            # Обновляем метаданные, если их не было (сохраняем vector_score)
                             existing_item = all_items[record_id]
                             if not existing_item.metadata:
                                 existing_item.metadata = {}
                             if "vector_score" not in existing_item.metadata:
                                 existing_item.metadata["vector_score"] = match.score
                             if not existing_item.embedding and item.embedding:
-                                # Обновляем эмбеддинг, если его не было
                                 existing_item.embedding = item.embedding
 
-        # 3. Векторный поиск выполняется через Qdrant (см. раздел 2 выше)
-
-        # 4. Boost для точных совпадений в FTS5 результатах
+        # Boost для точных совпадений в FTS5 результатах
         query_words = set(request.query.lower().split())
         for item in fts_results:
-            # Проверяем, содержатся ли все слова запроса в контенте
             content_lower = item.content.lower()
             matched_words = sum(1 for word in query_words if word in content_lower)
             if matched_words == len(query_words) and len(query_words) > 0:
-                # Все слова найдены - добавляем boost 20%
-                item.score *= 1.2
+                item.score *= 1.2  # Boost 20% для точных совпадений
 
-        # 5. Объединение результатов с помощью RRF или простого объединения
+        # Объединение результатов через RRF или простое объединение с весами
         if self._use_rrf and (fts_results or vector_results):
-            # Применяем RRF для объединения результатов (только FTS5 и Qdrant)
             result_lists = []
             if fts_results:
                 result_lists.append(fts_results)
@@ -699,64 +679,48 @@ class MemoryServiceAdapter:
             
             rrf_scores = self._reciprocal_rank_fusion(result_lists, k=self._rrf_k)
             
-            # Обновляем scores в all_items на основе RRF
-            # Но сохраняем оригинальные BM25 и vector scores в метаданных
             for record_id, rrf_score in rrf_scores.items():
                 if record_id in all_items:
                     item = all_items[record_id]
-                    # Сохраняем оригинальные scores в метаданных перед обновлением
                     if not item.metadata:
                         item.metadata = {}
-                    # Сохраняем оригинальный score как rrf_input_score, если его еще нет
                     if "rrf_input_score" not in item.metadata:
                         item.metadata["rrf_input_score"] = item.score
-                    # Обновляем score на RRF score
                     item.score = rrf_score
                     item.metadata["rrf_score"] = rrf_score
             
-            # Сортируем по RRF score
             results = sorted(all_items.values(), key=lambda item: item.score, reverse=True)
         else:
-            # Простое объединение с весами (старая логика)
             combined: dict[str, SearchResultItem] = {}
             
-            # FTS5 результаты с весом
             for item in fts_results:
-                # Сохраняем оригинальный BM25 score в метаданных
                 if not item.metadata:
                     item.metadata = {}
                 item.metadata["bm25_score_original"] = item.score
                 item.score = item.score * self._fts_weight
                 combined[item.record_id] = item
             
-            # Vector результаты с весом
             for item in vector_results:
-                # Сохраняем оригинальный vector score в метаданных
                 if not item.metadata:
                     item.metadata = {}
                 item.metadata["vector_score_original"] = item.score
                 score = item.score * self._vector_weight
                 existing = combined.get(item.record_id)
                 if existing:
-                    # Сохраняем vector score в метаданных существующего элемента
                     if not existing.metadata:
                         existing.metadata = {}
                     existing.metadata["vector_score_original"] = item.score
                     existing.score = max(existing.score, score)
-                    # Обновляем эмбеддинг, если его не было
                     if not existing.embedding and item.embedding:
                         existing.embedding = item.embedding
                 else:
                     item.score = score
                     combined[item.record_id] = item
             
-            # Векторный поиск выполняется через Qdrant (см. раздел выше)
-            
             results = sorted(combined.values(), key=lambda item: item.score, reverse=True)
 
         total_combined = max(total_fts, len(all_items))
         
-        # Добавляем информацию о найденных сущностях в метаданные результатов
         if extracted_entities:
             for result in results[: request.top_k]:
                 if not result.metadata:
@@ -768,20 +732,17 @@ class MemoryServiceAdapter:
             total_matches=total_combined,
         )
 
-    # Fetch
     def fetch(self, request: FetchRequest) -> FetchResponse:
+        """Получение полной записи по идентификатору с поддержкой частичного совпадения."""
         try:
             logger.debug(f"Fetch record: {request.record_id}")
             
-            # Сначала пытаемся найти в графе по точному совпадению
             if request.record_id in self.graph.graph:
                 data = self.graph.graph.nodes[request.record_id]
                 payload = _node_to_payload(self.graph, request.record_id, data)
                 logger.debug(f"Запись найдена в графе: {request.record_id}")
                 return FetchResponse(record=payload)
             
-            # Fallback: поиск по частичному совпадению в БД
-            # Для record_id типа "telegram:Семья:257859" ищем узел с ID, содержащим эту часть
             cursor = self.graph.conn.cursor()
             
             # Пробуем разные варианты поиска
@@ -803,32 +764,25 @@ class MemoryServiceAdapter:
                     except ValueError:
                         pass
             
-            # Убираем дубликаты
             search_patterns = list(dict.fromkeys(search_patterns))
             
-            # Также пробуем поиск по частичному совпадению (LIKE)
             search_patterns_with_like = []
             for pattern in search_patterns:
                 search_patterns_with_like.append(pattern)
-                # Если pattern содержит дефисы, пробуем поиск по частичному совпадению
                 if "-" in pattern:
-                    # Для записей типа "semya-old-S0005-M0007" пробуем найти по началу
                     parts = pattern.split("-")
                     if len(parts) >= 2:
-                        # Пробуем найти по начальным частям
                         for i in range(2, len(parts) + 1):
                             partial = "-".join(parts[:i])
                             search_patterns_with_like.append(partial)
             
             for pattern in search_patterns_with_like:
-                # Сначала точное совпадение
                 cursor.execute(
                     "SELECT id FROM nodes WHERE id = ? LIMIT 1",
                     (pattern,)
                 )
                 row = cursor.fetchone()
                 if not row:
-                    # Пробуем частичное совпадение (LIKE)
                     cursor.execute(
                         "SELECT id FROM nodes WHERE id LIKE ? LIMIT 1",
                         (f"{pattern}%",)
@@ -838,9 +792,7 @@ class MemoryServiceAdapter:
                 if row:
                     found_id = row["id"]
                     logger.debug(f"Найдена запись по паттерну '{pattern}': {found_id}")
-                    # Загружаем узел из БД, если его нет в графе
                     if found_id not in self.graph.graph:
-                        # Пытаемся загрузить узел из БД
                         cursor.execute(
                             "SELECT id, type, label, properties, embedding FROM nodes WHERE id = ?",
                             (found_id,)
@@ -875,7 +827,7 @@ class MemoryServiceAdapter:
             # Если не найдено в графе, ищем в Qdrant коллекциях
             if self.vector_store and self.vector_store.available():
                 try:
-                    from ..memory.qdrant_collections import QdrantCollectionsManager
+                    from ..memory.storage.vector.qdrant_collections import QdrantCollectionsManager
                     from ..config import get_settings
                     
                     settings = get_settings()
@@ -949,7 +901,7 @@ class MemoryServiceAdapter:
                                     if embedding and request.record_id not in self.graph.graph:
                                         try:
                                             # Создаём узел в графе для синхронизации
-                                            from ..indexing import MemoryRecord
+                                            from ..models.memory import MemoryRecord
                                             record = MemoryRecord(
                                                 record_id=request.record_id,
                                                 source=chat_name,
@@ -980,10 +932,10 @@ class MemoryServiceAdapter:
             logger.error(f"Failed to fetch record {request.record_id}: {e}", exc_info=True)
             return FetchResponse(record=None)
 
-    # Trading API
     def store_trading_signal(
         self, request: StoreTradingSignalRequest
     ) -> StoreTradingSignalResponse:
+        """Сохранение торгового сигнала в память."""
         data = self.trading_memory.store_signal(
             symbol=request.symbol,
             signal_type=request.signal_type,
@@ -1061,7 +1013,7 @@ class MemoryServiceAdapter:
         self, request: SearchEntitiesRequest
     ) -> SearchEntitiesResponse:
         """Поиск сущностей по семантическому сходству."""
-        from ..memory.vector_store import build_entity_vector_store_from_env
+        from ..memory.storage.vector.vector_store import build_entity_vector_store_from_env
         
         entity_vector_store = build_entity_vector_store_from_env()
         if not entity_vector_store or not entity_vector_store.available():
@@ -1208,10 +1160,10 @@ class MemoryServiceAdapter:
                 message=f"Failed to ingest scraped content: {str(e)}",
             )
 
-    # Embeddings
     def generate_embedding(
         self, request: GenerateEmbeddingRequest
     ) -> GenerateEmbeddingResponse:
+        """Генерация эмбеддинга для произвольного текста."""
         """Generate embedding for arbitrary text."""
         if not self.embedding_service:
             raise ValueError(
@@ -1250,7 +1202,6 @@ class MemoryServiceAdapter:
             model=self.embedding_service.model_name,
         )
 
-    # Record Management
     def update_record(self, request: UpdateRecordRequest) -> UpdateRecordResponse:
         """Update an existing memory record."""
         node = self.graph.get_node(request.record_id)
@@ -1261,7 +1212,6 @@ class MemoryServiceAdapter:
                 message=f"Record {request.record_id} not found",
             )
 
-        # Проверяем, есть ли изменения
         props = dict(node.get("properties") or {})
         has_changes = False
         
@@ -1371,7 +1321,6 @@ class MemoryServiceAdapter:
             message="Record deleted successfully",
         )
 
-    # Statistics
     def get_statistics(self) -> GetStatisticsResponse:
         """Get system statistics."""
         graph_stats_obj = self.graph.get_stats()
@@ -1465,7 +1414,7 @@ class MemoryServiceAdapter:
         """
         from ..core.indexing_tracker import IndexingJobTracker
         from ..config import get_settings
-        from ..utils.paths import find_project_root
+        from ..utils.system.paths import find_project_root
         from pathlib import Path
         
         # Создаем трекер напрямую, избегая циклического импорта
@@ -1523,7 +1472,6 @@ class MemoryServiceAdapter:
             f"edge_type={request.edge_type}, direction={request.direction}"
         )
         
-        # Пробуем найти узел по разным форматам record_id
         node_id = self._find_node_id(request.node_id)
         if not node_id:
             logger.warning(f"Узел {request.node_id} не найден в графе")
@@ -2404,7 +2352,7 @@ class MemoryServiceAdapter:
 
         def parse_message_time(date_str: str) -> datetime:
             try:
-                from ..utils.datetime_utils import parse_datetime_utc
+                from ..utils.processing.datetime_utils import parse_datetime_utc
 
                 return parse_datetime_utc(
                     date_str, default=datetime.now(ZoneInfo("UTC")), use_zoneinfo=True
@@ -2563,9 +2511,9 @@ class MemoryServiceAdapter:
     # Indexing
     async def index_chat(self, request: "IndexChatRequest") -> "IndexChatResponse":
         """Index a specific Telegram chat with two-level indexing."""
-        from ..core.indexer import TwoLevelIndexer
+        from ..core.indexing import TwoLevelIndexer
         from ..config import get_settings
-        from ..core.langchain_adapters import get_llm_client_factory
+        from ..core.adapters.langchain_adapters import get_llm_client_factory
         from pathlib import Path
 
         settings = get_settings()
@@ -2680,7 +2628,7 @@ class MemoryServiceAdapter:
             return []
         
         try:
-            from ..memory.vector_store import VectorStore
+            from ..memory.storage.vector.vector_store import VectorStore
             from ..config import get_settings
             
             settings = get_settings()
@@ -2786,7 +2734,7 @@ class MemoryServiceAdapter:
         """Удаление всех записей конкретного чата из Qdrant коллекций."""
         total_deleted = 0
         try:
-            from ..memory.qdrant_collections import QdrantCollectionsManager
+            from ..memory.storage.vector.qdrant_collections import QdrantCollectionsManager
             from ..config import get_settings
 
             settings = get_settings()

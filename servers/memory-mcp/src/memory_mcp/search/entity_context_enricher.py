@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from ..analysis.entities import EntityExtractor, EntityDictionary
 from ..memory.embeddings import build_embedding_service_from_env
-from ..memory.vector_store import build_entity_vector_store_from_env, EntityVectorStore
+from ..memory.storage.vector.vector_store import build_entity_vector_store_from_env, EntityVectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +240,7 @@ class EntityContextEnricher:
             return []
 
         try:
-            from ..memory.graph_types import EdgeType
+            from ..memory.storage.graph.graph_types import EdgeType
 
             # Нормализуем значение для поиска ID узла
             normalized_value = value.lower().strip().replace(" ", "-")

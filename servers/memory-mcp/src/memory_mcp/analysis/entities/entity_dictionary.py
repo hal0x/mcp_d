@@ -9,7 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ...core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
+from ...core.adapters.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -493,7 +493,7 @@ class EntityDictionary:
             True если сущность прошла предварительную проверку, False иначе
         """
         # Импортируем стоп-слова из токенизатора
-        from ..utils.russian_tokenizer import RUSSIAN_STOP_WORDS, ENGLISH_STOP_WORDS
+        from ...utils.text.russian_tokenizer import RUSSIAN_STOP_WORDS, ENGLISH_STOP_WORDS
         stop_words = RUSSIAN_STOP_WORDS | ENGLISH_STOP_WORDS
 
         # Проверка на стоп-слова (предлоги, союзы и т.д.)
@@ -546,7 +546,7 @@ class EntityDictionary:
         if not self._llm_client_initialized:
             try:
                 from ..config import get_settings
-                from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
+                from ...core.adapters.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
                 
                 settings = get_settings()
                 
@@ -1464,7 +1464,7 @@ class EntityDictionary:
         if self.graph:
             try:
                 # Ищем узлы DocChunk, которые упоминают эту сущность
-                from ..memory.graph_types import NodeType
+                from ...memory.storage.graph.graph_types import NodeType
                 
                 # Ищем через FTS поиск по сущностям
                 search_results = self.graph.search_text(
@@ -1958,7 +1958,7 @@ class EntityDictionary:
             return contexts
         
         try:
-            from ..memory.graph_types import NodeType, EdgeType
+            from ...memory.storage.graph.graph_types import NodeType, EdgeType
             
             # Ищем EntityNode для этой сущности
             entity_id = f"entity-{normalized_value.replace(' ', '-')}"
@@ -2252,7 +2252,7 @@ class EntityDictionary:
         related_entities = []
         if self.graph:
             try:
-                from ..memory.graph_types import EdgeType
+                from ...memory.storage.graph.graph_types import EdgeType
                 entity_id = f"entity-{normalized_value.replace(' ', '-')}"
                 
                 if entity_id in self.graph.graph:

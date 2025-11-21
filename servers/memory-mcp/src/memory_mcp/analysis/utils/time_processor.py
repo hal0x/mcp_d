@@ -47,7 +47,7 @@ class TimeProcessor:
         Returns:
             Нормализованный datetime объект в UTC или None
         """
-        from ..utils.datetime_utils import parse_datetime_utc
+        from ...utils.processing.datetime_utils import parse_datetime_utc
 
         return parse_datetime_utc(date_str, return_none_on_error=True, use_zoneinfo=True)
 

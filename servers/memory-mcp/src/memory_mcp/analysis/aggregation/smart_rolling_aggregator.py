@@ -18,10 +18,10 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ...utils.datetime_utils import format_datetime_display
+from ...utils.processing.datetime_utils import format_datetime_display
 
 from ...config import get_settings
-from ...core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
+from ...core.adapters.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 from ..segmentation.adaptive_message_grouper import AdaptiveMessageGrouper
 from .batch_session_processor import BatchSessionProcessor
 from ..context.context_manager import ContextManager
@@ -138,7 +138,7 @@ class SmartAggregationState:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SmartAggregationState":
         """Десериализация состояния из словаря."""
-        from ..utils.datetime_utils import parse_datetime_utc
+        from ...utils.processing.datetime_utils import parse_datetime_utc
 
         state = cls(data["chat_name"])
         state.chat_type = data.get("chat_type")
@@ -222,7 +222,7 @@ class SmartRollingAggregator:
 
     def _parse_date(self, date_str: str) -> Optional[datetime]:
         """Парсит дату из строки."""
-        from ..utils.datetime_utils import parse_datetime_utc
+        from ...utils.processing.datetime_utils import parse_datetime_utc
 
         return parse_datetime_utc(date_str, return_none_on_error=True, use_zoneinfo=True)
 
@@ -249,7 +249,7 @@ class SmartRollingAggregator:
 
     def _load_state(self, chat_name: str) -> SmartAggregationState:
         """Загружает состояние агрегации для чата."""
-        from ..utils.state_manager import StateManager
+        from ...utils.system.state_manager import StateManager
 
         manager = StateManager(self.state_dir)
         return manager.load_state(
@@ -260,14 +260,14 @@ class SmartRollingAggregator:
 
     def _save_state(self, state: SmartAggregationState):
         """Сохраняет состояние агрегации."""
-        from ..utils.state_manager import StateManager
+        from ...utils.system.state_manager import StateManager
 
         manager = StateManager(self.state_dir)
         manager.save_state(state)
 
     def _load_messages(self, chat_file: Path) -> List[Dict[str, Any]]:
         """Загружает сообщения из файла (поддерживает JSON и JSONL)."""
-        from ..utils.json_loader import load_json_or_jsonl
+        from ...utils.data.json_loader import load_json_or_jsonl
         
         try:
             messages, is_jsonl = load_json_or_jsonl(chat_file)
@@ -1185,7 +1185,7 @@ class SmartRollingAggregator:
 
                 if end_time_utc:
                     try:
-                        from ..utils.datetime_utils import parse_datetime_utc
+                        from ...utils.processing.datetime_utils import parse_datetime_utc
                         risk_time = parse_datetime_utc(
                             end_time_utc, return_none_on_error=True, use_zoneinfo=True
                         )

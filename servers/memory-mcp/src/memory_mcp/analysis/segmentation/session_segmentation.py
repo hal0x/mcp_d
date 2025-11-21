@@ -199,7 +199,7 @@ class SessionSegmenter:
         Returns:
             datetime объект в UTC
         """
-        from ..utils.datetime_utils import parse_message_time
+        from ...utils.processing.datetime_utils import parse_message_time
 
         return parse_message_time(msg, use_zoneinfo=True)
 

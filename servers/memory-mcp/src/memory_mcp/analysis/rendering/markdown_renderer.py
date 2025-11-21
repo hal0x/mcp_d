@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ...utils.datetime_utils import format_datetime_display
-from ...utils.naming import slugify
-from ...utils.paths import find_project_root
+from ...utils.processing.datetime_utils import format_datetime_display
+from ...utils.system.naming import slugify
+from ...utils.system.paths import find_project_root
 
 logger = logging.getLogger(__name__)
 
@@ -387,7 +387,7 @@ class MarkdownRenderer:
 
     def _format_time(self, iso: Optional[str]) -> str:
         """Форматирует ISO строку времени для отображения."""
-        from ..utils.datetime_utils import format_datetime_display
+        from ...utils.processing.datetime_utils import format_datetime_display
 
         return format_datetime_display(iso, format_type="datetime", fallback=iso or "—")
 

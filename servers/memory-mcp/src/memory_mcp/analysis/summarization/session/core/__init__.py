@@ -4,7 +4,7 @@
 """
 
 from .batch import summarize_batch_sessions
-from .canonical import build_canonical_summary_internal
+from .canonical import build_canonical_summary as build_canonical_summary_internal
 from .generation import (
     apply_addon_metadata_to_claim,
     generate_actions,

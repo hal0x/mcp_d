@@ -16,10 +16,10 @@ from mcp.server import Server
 from mcp.types import Tool, TextContent
 from pydantic import BaseModel
 
-from ..quality_analyzer.utils.error_handler import format_error_message
+from ..analysis.quality.utils.error_handler import format_error_message
 from ..config import get_settings
-from ..utils.paths import find_project_root
-from ..utils.datetime_utils import parse_datetime_utc
+from ..utils.system.paths import find_project_root
+from ..utils.processing.datetime_utils import parse_datetime_utc
 
 from .adapters import MemoryServiceAdapter
 from ..memory.artifacts_reader import ArtifactsReader
@@ -848,22 +848,21 @@ async def list_tools() -> List[Tool]:
 
 # Обработчики инструментов
 async def _handle_health() -> ToolResponse:
-    """Обработчик инструмента health."""
+    """Проверка состояния сервера и доступности зависимостей."""
     result = get_health_payload()
     return _format_tool_response(result)
 
 
 async def _handle_version() -> ToolResponse:
-    """Обработчик инструмента version."""
+    """Возвращает версию сервера и список доступных функций."""
     result = get_version_payload()
     return _format_tool_response(result)
 
 
 async def _handle_search(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента search."""
+    """Универсальный поиск с поддержкой различных типов: hybrid, smart, embedding, similar, trading."""
     search_type = arguments.get("search_type", "hybrid")
     
-    # Валидация обязательных параметров в зависимости от типа поиска
     if search_type in ("hybrid", "smart", "trading"):
         if not arguments.get("query"):
             raise ValueError(f"Параметр 'query' обязателен для search_type='{search_type}'")
@@ -874,19 +873,15 @@ async def _handle_search(arguments: Dict[str, Any], adapter: MemoryServiceAdapte
         if not arguments.get("record_id"):
             raise ValueError("Параметр 'record_id' обязателен для search_type='similar'")
     
-    # Парсим feedback для smart search
     feedback_data = arguments.get("feedback")
     feedback_list = None
     if feedback_data:
         feedback_list = [SearchFeedback(**item) for item in feedback_data]
 
-    # Парсим даты
     date_from = parse_datetime_utc(arguments.get("date_from"), return_none_on_error=True)
     date_to = parse_datetime_utc(arguments.get("date_to"), return_none_on_error=True)
     
     if search_type == "smart":
-        # Smart search требует SmartSearchEngine
-        # query уже проверен валидацией выше
         request = SmartSearchRequest(
             query=arguments["query"],
             session_id=arguments.get("session_id"),
@@ -901,7 +896,6 @@ async def _handle_search(arguments: Dict[str, Any], adapter: MemoryServiceAdapte
         )
         engine = _get_smart_search_engine()
         result = await engine.search(request)
-        # Преобразуем SmartSearchResponse в UnifiedSearchResponse
         unified_result = UnifiedSearchResponse(
             search_type="smart",
             results=result.results,
@@ -915,7 +909,6 @@ async def _handle_search(arguments: Dict[str, Any], adapter: MemoryServiceAdapte
         )
         return _format_tool_response(unified_result.model_dump())
     else:
-        # Остальные типы поиска через адаптер
         unified_request = UnifiedSearchRequest(
             search_type=search_type,
             query=arguments.get("query"),
@@ -939,7 +932,7 @@ async def _handle_search(arguments: Dict[str, Any], adapter: MemoryServiceAdapte
 
 
 async def _handle_batch_operations(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента batch_operations."""
+    """Пакетные операции: update, delete, fetch."""
     from .schema import BatchUpdateRecordItem
     
     operation = arguments.get("operation")
@@ -958,14 +951,14 @@ async def _handle_batch_operations(arguments: Dict[str, Any], adapter: MemorySer
 
 
 async def _handle_graph_query(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента graph_query."""
+    """Запросы к графу знаний: neighbors, path, related."""
     request = GraphQueryRequest(**arguments)
     result = adapter.graph_query(request)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_background_indexing(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента background_indexing."""
+    """Управление фоновой индексацией: start, stop, status."""
     request = BackgroundIndexingRequest(**arguments)
     action = request.action
     
@@ -983,19 +976,18 @@ async def _handle_background_indexing(arguments: Dict[str, Any], adapter: Memory
 
 
 async def _handle_summaries(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента summaries."""
+    """Управление саммаризацией: update, review."""
     request = SummariesRequest(**arguments)
     result = await adapter.summaries(request)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_ingest(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента ingest."""
+    """Универсальная индексация: records или scraped контент."""
     from .schema import MemoryRecordPayload
     
     source_type = arguments.get("source_type", "records")
     if source_type == "scraped":
-        # Преобразуем аргументы в IngestRequest для scraped
         request = IngestRequest(
             records=[],
             source_type="scraped",
@@ -1008,7 +1000,6 @@ async def _handle_ingest(arguments: Dict[str, Any], adapter: MemoryServiceAdapte
             entities=arguments.get("entities", []),
         )
     else:
-        # Обычная индексация записей
         records_data = arguments.get("records", [])
         records = [MemoryRecordPayload(**item) for item in records_data]
         request = IngestRequest(records=records, source_type="records")
@@ -1018,63 +1009,63 @@ async def _handle_ingest(arguments: Dict[str, Any], adapter: MemoryServiceAdapte
 
 
 async def _handle_store_trading_signal(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента store_trading_signal."""
+    """Сохранение торгового сигнала в память."""
     request = StoreTradingSignalRequest(**arguments)
     result = adapter.store_trading_signal(request)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_get_signal_performance(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента get_signal_performance."""
+    """Метрики производительности торгового сигнала."""
     request = GetSignalPerformanceRequest(**arguments)
     result = adapter.get_signal_performance(request)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_search_entities(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента search_entities."""
+    """Поиск сущностей по семантическому сходству."""
     request = SearchEntitiesRequest(**arguments)
     result = adapter.search_entities(request)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_get_entity_profile(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента get_entity_profile."""
+    """Полный профиль сущности с контекстом и связанными сущностями."""
     request = GetEntityProfileRequest(**arguments)
     result = adapter.get_entity_profile(request)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_generate_embedding(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента generate_embedding."""
+    """Генерация эмбеддинга для произвольного текста."""
     request = GenerateEmbeddingRequest(**arguments)
     result = adapter.generate_embedding(request)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_update_record(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента update_record."""
+    """Обновление существующей записи памяти."""
     request = UpdateRecordRequest(**arguments)
     result = adapter.update_record(request)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_get_statistics(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента get_statistics."""
+    """Статистика системы: general, tags, indexing."""
     request = GetStatisticsRequest(**arguments) if arguments else GetStatisticsRequest()
     result = adapter.get_statistics_unified(request)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_search_explain(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента search_explain."""
+    """Объяснение релевантности результата поиска."""
     request = SearchExplainRequest(**arguments)
     result = adapter.search_explain(request)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_get_timeline(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента get_timeline."""
+    """Временная шкала записей, отсортированная по timestamp."""
     if "date_from" in arguments and arguments["date_from"]:
         parsed_date = parse_datetime_utc(arguments["date_from"], return_none_on_error=True)
         if parsed_date is not None:
@@ -1093,14 +1084,14 @@ async def _handle_get_timeline(arguments: Dict[str, Any], adapter: MemoryService
 
 
 async def _handle_analyze_entities(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента analyze_entities."""
+    """Извлечение и анализ сущностей из текста."""
     request = AnalyzeEntitiesRequest(**arguments)
     result = adapter.analyze_entities(request)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_export_records(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента export_records."""
+    """Экспорт записей в JSON/CSV/Markdown."""
     if "date_from" in arguments and arguments["date_from"]:
         parsed_date = parse_datetime_utc(arguments["date_from"], return_none_on_error=True)
         if parsed_date is not None:
@@ -1119,34 +1110,33 @@ async def _handle_export_records(arguments: Dict[str, Any], adapter: MemoryServi
 
 
 async def _handle_import_records(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента import_records."""
+    """Импорт записей из JSON/CSV/директорий."""
     request = ImportRecordsRequest(**arguments)
     result = adapter.import_records(request)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_build_insight_graph(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента build_insight_graph."""
+    """Построение графа инсайтов из markdown-саммаризаций."""
     request = BuildInsightGraphRequest(**arguments)
     result = await adapter.build_insight_graph(request)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_index_chat(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента index_chat."""
+    """Индексация Telegram чата с двухуровневой индексацией (фоновый режим)."""
     request = IndexChatRequest(**arguments)
     result = await _start_indexing_job(request, adapter)
     return _format_tool_response(result.model_dump())
 
 
 async def _handle_get_available_chats(arguments: Dict[str, Any], adapter: MemoryServiceAdapter) -> ToolResponse:
-    """Обработчик инструмента get_available_chats."""
+    """Список доступных Telegram чатов для индексации."""
     request = GetAvailableChatsRequest(**arguments)
     result = adapter.get_available_chats(request)
     return _format_tool_response(result.model_dump())
 
 
-# Словарь диспетчеризации инструментов
 _TOOL_HANDLERS: Dict[str, Any] = {
     "health": _handle_health,
     "version": _handle_version,
@@ -1186,21 +1176,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> ToolResponse:
         raise RuntimeError(error_msg)
 
     try:
-        # Инструменты health и version не требуют адаптера
         if name in ("health", "version"):
             return await handler()
 
-        # Остальные инструменты требуют адаптер
         adapter = _get_adapter()
         return await handler(arguments, adapter)
 
     except ValueError as exc:
-        # ValueError обычно означает ошибку валидации параметров
         error_msg = format_error_message(exc)
         logger.warning(f"Ошибка валидации для инструмента {name}: {error_msg}")
         raise RuntimeError(error_msg) from exc
     except Exception as exc:
-        # Общая обработка всех остальных исключений
         error_msg = format_error_message(exc)
         logger.exception(f"Ошибка при выполнении инструмента {name}: {error_msg}")
         raise RuntimeError(error_msg) from exc
@@ -1275,9 +1261,9 @@ async def _run_indexing_job(
     """Выполняет индексацию чата в фоновом режиме с отслеживанием прогресса."""
     tracker = _get_indexing_tracker()
     
-    from ..core.indexer import TwoLevelIndexer
+    from ..core.indexing import TwoLevelIndexer
     from ..config import get_settings
-    from ..core.langchain_adapters import get_llm_client_factory
+    from ..core.adapters.langchain_adapters import get_llm_client_factory
     from datetime import timezone
     
     try:
@@ -1579,7 +1565,7 @@ def _update_importance_scores(graph) -> Dict[str, Any]:
     """Пересчитывает важность всех узлов графа на основе метрик использования."""
     import json
     import sqlite3
-    from ..memory.importance_scoring import ImportanceScorer
+    from ..memory.storage.graph.importance_scoring import ImportanceScorer
     
     conn = None
     try:
@@ -1684,7 +1670,7 @@ def _validate_database(db_path: str) -> Dict[str, Any]:
                 })
         
         # Проверка графа знаний
-        from ..memory.typed_graph import TypedGraphMemory
+        from ..memory.storage.graph.typed_graph import TypedGraphMemory
         graph = TypedGraphMemory(db_path=str(db_path))
         
         # Сиротские узлы
@@ -1751,7 +1737,7 @@ def _check_prune_memory(graph) -> Dict[str, Any]:
     """Проверяет, требуется ли очистка памяти на основе порога количества записей."""
     import json
     import sqlite3
-    from ..memory.importance_scoring import MemoryPruner, EvictionScorer
+    from ..memory.storage.graph.importance_scoring import MemoryPruner, EvictionScorer
     
     conn = None
     try:
@@ -1902,7 +1888,7 @@ async def _start_background_indexing(adapter: MemoryServiceAdapter) -> "Backgrou
             )
         
         # Инициализируем сервис
-        from ..core.background_indexing import BackgroundIndexingService
+        from ..core.services.background_indexing import BackgroundIndexingService
         
         if not _background_indexing_service:
             _background_indexing_service = BackgroundIndexingService(
@@ -2054,7 +2040,7 @@ def _start_background_indexing_if_enabled():
             logger.info("Автозапуск фоновой индексации (настроено в конфигурации)")
             
             # Инициализируем сервис синхронно
-            from ..core.background_indexing import BackgroundIndexingService
+            from ..core.services.background_indexing import BackgroundIndexingService
             
             if not _background_indexing_service:
                 _background_indexing_service = BackgroundIndexingService(

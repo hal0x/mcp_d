@@ -4,26 +4,28 @@ Memory management модуль
 Компоненты для управления памятью и оценки важности данных
 """
 
-from .graph_builder import GraphBuilder
-from .graph_types import (
+from .embeddings import EmbeddingService, build_embedding_service_from_env
+from .storage.graph import (
     DocChunkNode,
     EdgeType,
     EntityNode,
     EventNode,
+    EvictionScorer,
+    GraphBuilder,
     GraphEdge,
     GraphNode,
+    ImportanceScorer,
+    MemoryPruner,
     NodeType,
     ToolCallNode,
     TopicNode,
+    TypedGraphMemory,
 )
-from .importance_scoring import EvictionScorer, ImportanceScorer, MemoryPruner
-from .typed_graph import TypedGraphMemory
-from .embeddings import EmbeddingService, build_embedding_service_from_env
-from .vector_store import (
-    VectorStore,
+from .storage.vector import (
     EntityVectorStore,
-    build_vector_store_from_env,
+    VectorStore,
     build_entity_vector_store_from_env,
+    build_vector_store_from_env,
 )
 
 __all__ = [

@@ -130,7 +130,7 @@ class IncrementalContextManager:
 
     def _parse_message_time(self, message: Dict[str, Any]) -> datetime:
         """Парсит время сообщения (использует общую утилиту)."""
-        from ..utils.datetime_utils import parse_message_time
+        from ...utils.processing.datetime_utils import parse_message_time
 
         return parse_message_time(message, use_zoneinfo=True)
 
@@ -370,7 +370,7 @@ class IncrementalContextManager:
                 # Проверяем время (фильтр уже применен, но проверяем для надежности)
                 session_end_time = None
                 if session["end_time_utc"]:
-                    from ..utils.datetime_utils import parse_datetime_utc
+                    from ...utils.processing.datetime_utils import parse_datetime_utc
 
                     session_end_time = parse_datetime_utc(
                         session["end_time_utc"], return_none_on_error=True, use_zoneinfo=True
@@ -385,7 +385,7 @@ class IncrementalContextManager:
                             end_part = time_span.split(" – ")[1].split(" BKK")[0]
                             # Предполагаем, что это время в том же дне
                             date_part = time_span.split(" – ")[0].split(" ")[0]
-                            from ..utils.datetime_utils import parse_datetime_utc
+                            from ...utils.processing.datetime_utils import parse_datetime_utc
 
                             session_end_time = parse_datetime_utc(
                                 f"{date_part}T{end_part}:00+07:00", return_none_on_error=True, use_zoneinfo=True
@@ -401,7 +401,7 @@ class IncrementalContextManager:
             def get_sort_key(session):
                 # Пробуем получить время для сортировки
                 if session.get("end_time_utc"):
-                    from ..utils.datetime_utils import parse_datetime_utc
+                    from ...utils.processing.datetime_utils import parse_datetime_utc
 
                     result = parse_datetime_utc(session["end_time_utc"], return_none_on_error=True, use_zoneinfo=True)
                     if result:

@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
+from ...core.adapters.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ class AggregationState:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AggregationState":
         """Десериализация состояния из словаря."""
-        from ..utils.datetime_utils import parse_datetime_utc
+        from ...utils.processing.datetime_utils import parse_datetime_utc
 
         state = cls(data["chat_name"])
         if data.get("last_aggregation_time"):
@@ -155,13 +155,13 @@ class RollingWindowAggregator:
 
     def _parse_date(self, date_str: str) -> Optional[datetime]:
         """Парсинг даты из строки."""
-        from ..utils.datetime_utils import parse_datetime_utc
+        from ...utils.processing.datetime_utils import parse_datetime_utc
 
         return parse_datetime_utc(date_str, return_none_on_error=True, use_zoneinfo=True)
 
     def _load_state(self, chat_name: str) -> AggregationState:
         """Загружает состояние агрегации для чата."""
-        from ..utils.state_manager import StateManager
+        from ...utils.system.state_manager import StateManager
 
         manager = StateManager(self.state_dir)
         return manager.load_state(
@@ -172,7 +172,7 @@ class RollingWindowAggregator:
 
     def _save_state(self, state: AggregationState):
         """Сохраняет состояние агрегации."""
-        from ..utils.state_manager import StateManager
+        from ...utils.system.state_manager import StateManager
 
         manager = StateManager(self.state_dir)
         manager.save_state(state)

@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional
 
-from ..quality_analyzer.utils.data_processor import load_chats_from_directory
-from ..utils.datetime_utils import parse_datetime_utc
+from ..analysis.quality.utils.data_processor import load_chats_from_directory
+from ..utils.processing.datetime_utils import parse_datetime_utc
 from .base import Attachment, BaseIndexer, IndexingStats, MemoryRecord
 
 logger = logging.getLogger(__name__)

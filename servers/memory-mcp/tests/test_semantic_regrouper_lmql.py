@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from memory_mcp.analysis.semantic_regrouper import SemanticRegrouper
-from memory_mcp.core.lmql_adapter import LMQLAdapter
+from memory_mcp.core.adapters.lmql_adapter import LMQLAdapter
 
 
 class TestSemanticRegrouperLMQL:

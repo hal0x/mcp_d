@@ -33,6 +33,7 @@ from .summarization import (
     LangChainSummarizationChain,
     QualityEvaluator,
 )
+from .quality import QualityAnalyzer
 from .utils import InstructionManager, MessageFilter, TimeProcessor
 
 __all__ = [
@@ -72,4 +73,6 @@ __all__ = [
     "MessageFilter",
     "InstructionManager",
     "TimeProcessor",
+    # Quality
+    "QualityAnalyzer",
 ]

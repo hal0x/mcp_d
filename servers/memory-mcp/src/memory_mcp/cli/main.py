@@ -17,19 +17,19 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import click
 
-from ..utils.russian_tokenizer import tokenize_text as enhanced_tokenize
-from ..utils.paths import find_project_root
+from ..utils.text.russian_tokenizer import tokenize_text as enhanced_tokenize
+from ..utils.system.paths import find_project_root
 
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 from ..analysis.rendering import SummaryInsightAnalyzer
 from ..analysis.utils import InstructionManager
-from ..core.indexer import TwoLevelIndexer
+from ..core.indexing import TwoLevelIndexer
 from ..core.indexing_tracker import IndexingJobTracker
 from ..indexing import TelegramIndexer
 from ..memory.ingest import MemoryIngestor
-from ..memory.typed_graph import TypedGraphMemory
-from ..utils.message_extractor import MessageExtractor
+from ..memory.storage.graph.typed_graph import TypedGraphMemory
+from ..utils.data.message_extractor import MessageExtractor
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -80,7 +80,7 @@ class MessageDeduplicator:
 
         chat_stats["total_messages"] = len(all_messages)
 
-        from ..utils.deduplication import deduplicate_by_id
+        from ..utils.data.deduplication import deduplicate_by_id
 
         unique_messages = deduplicate_by_id(all_messages)
         chat_stats["duplicates_removed"] = len(all_messages) - len(unique_messages)
@@ -366,7 +366,7 @@ def check(embedding_model):
     """🔧 Проверка системы и подключений"""
 
     async def _check():
-        from ..core.langchain_adapters import get_llm_client_factory, build_langchain_embeddings_from_env
+        from ..core.adapters.langchain_adapters import get_llm_client_factory, build_langchain_embeddings_from_env
         from ..config import get_settings
 
         click.echo("🔧 Проверка системы...")
@@ -408,7 +408,7 @@ def check(embedding_model):
 
         # Проверяем Qdrant
         try:
-            from ..memory.vector_store import build_vector_store_from_env
+            from ..memory.storage.vector.vector_store import build_vector_store_from_env
             from ..memory.embeddings import build_embedding_service_from_env
             
             vector_store = build_vector_store_from_env()
@@ -599,7 +599,7 @@ def index(
             return
 
         # Инициализация трекера задач индексации
-        from ..core.langchain_adapters import get_llm_client_factory
+        from ..core.adapters.langchain_adapters import get_llm_client_factory
         from ..config import get_settings
         
         settings = get_settings()
@@ -693,7 +693,7 @@ def index(
                 logger.warning(f"Ошибка при обновлении прогресса: {e}")
         
         # Создаем граф памяти для синхронизации записей
-        from ..memory.typed_graph import TypedGraphMemory
+        from ..memory.storage.graph.typed_graph import TypedGraphMemory
         db_path = settings.db_path
         if not Path(db_path).is_absolute():
             # Ищем корень проекта по pyproject.toml
@@ -1089,7 +1089,7 @@ def stats():
 
         # Проверяем Qdrant
         try:
-            from ..memory.vector_store import build_vector_store_from_env
+            from ..memory.storage.vector.vector_store import build_vector_store_from_env
             from ..memory.embeddings import build_embedding_service_from_env
             
             vector_store = build_vector_store_from_env()
@@ -1277,7 +1277,7 @@ def update_summaries(chat, force):
 
         def parse_message_time(date_str: str) -> datetime:
             try:
-                from ..utils.datetime_utils import parse_datetime_utc
+                from ..utils.processing.datetime_utils import parse_datetime_utc
 
                 return parse_datetime_utc(date_str, default=datetime.now(ZoneInfo("UTC")), use_zoneinfo=True)
             except Exception:
@@ -1471,7 +1471,7 @@ def review_summaries(dry_run, chat, limit):
     """
     import json
 
-    from ..core.langchain_adapters import get_llm_client_factory
+    from ..core.adapters.langchain_adapters import get_llm_client_factory
     from ..config import get_settings
 
     async def _review_summaries():
@@ -2134,7 +2134,7 @@ def validate_database(db_path, check_integrity, check_foreign_keys, check_orphan
         # Проверка графа знаний
         if check_orphaned_nodes or check_orphaned_edges:
             click.echo("🕸️  Проверка графа знаний...")
-            from ..memory.typed_graph import TypedGraphMemory
+            from ..memory.storage.graph.typed_graph import TypedGraphMemory
             graph = TypedGraphMemory(db_path=str(db_path))
             
             # Проверка сиротских узлов
@@ -2262,8 +2262,8 @@ def calculate_importance(record_id, db_path, entity_weight, task_weight, length_
     - Длины контента
     - Частоты поиска
     """
-    from ..memory.importance_scoring import ImportanceScorer
-    from ..memory.typed_graph import TypedGraphMemory
+    from ..memory.storage.graph.importance_scoring import ImportanceScorer
+    from ..memory.storage.graph.typed_graph import TypedGraphMemory
     import sqlite3
     
     click.echo(f"📊 Вычисление важности записи: {record_id}")
@@ -2377,8 +2377,8 @@ def prune_memory(db_path, max_records, eviction_threshold, dry_run, source):
     Удаляет записи с низкой важностью для управления размером БД.
     Использует систему оценки важности (Importance Scoring).
     """
-    from ..memory.importance_scoring import MemoryPruner, EvictionScorer
-    from ..memory.typed_graph import TypedGraphMemory
+    from ..memory.storage.graph.importance_scoring import MemoryPruner, EvictionScorer
+    from ..memory.storage.graph.typed_graph import TypedGraphMemory
     import sqlite3
     
     click.echo("🧹 Автоматическая очистка памяти")
@@ -2503,8 +2503,8 @@ def update_importance_scores(db_path, source, batch_size):
     Пересчитывает importance scores для всех записей в базе данных.
     Полезно после изменения весов факторов или обновления системы оценки.
     """
-    from ..memory.importance_scoring import ImportanceScorer
-    from ..memory.typed_graph import TypedGraphMemory
+    from ..memory.storage.graph.importance_scoring import ImportanceScorer
+    from ..memory.storage.graph.typed_graph import TypedGraphMemory
     import sqlite3
     
     click.echo("🔄 Массовый пересчёт важности записей")

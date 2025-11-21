@@ -11,16 +11,16 @@ from typing import Any, Dict, List, Optional, Tuple
 from typing import TYPE_CHECKING
 
 from ....config import get_settings
-from ..core.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
-from ....core.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
-from ....utils.naming import slugify
+from ....core.adapters.langchain_adapters import LangChainLLMAdapter, get_llm_client_factory
+from ....core.adapters.lmql_adapter import LMQLAdapter, build_lmql_adapter_from_env
+from ....utils.system.naming import slugify
 from ...context.context_manager import ContextManager
 from ...entities.entity_extraction import EntityExtractor
 from ...context.incremental_context_manager import IncrementalContextManager
 from ...utils.instruction_manager import InstructionManager
 from ..quality_evaluator import IterativeRefiner, QualityEvaluator
 from .core.batch import summarize_batch_sessions
-from .core.canonical import build_canonical_summary_internal
+from .core.canonical import build_canonical_summary as build_canonical_summary_internal
 from .prompts import (
     create_summarization_prompt,
     ensure_summary_completeness,
@@ -92,11 +92,10 @@ class SessionSummarizer:
         self.enable_quality_check = enable_quality_check
         self.enable_iterative_refinement = enable_iterative_refinement
         self.quality_evaluator = QualityEvaluator(min_quality_score=min_quality_score)
-        # Целевой балл чуть ниже min_quality для margin
         self.iterative_refiner = IterativeRefiner(
             self,
             max_iterations=5,
-            target_score=max(85.0, min_quality_score - 2.0),
+            target_score=max(85.0, min_quality_score - 2.0),  # Целевой балл чуть ниже min_quality для margin
         )
 
         from ...aggregation.large_context_processor import LargeContextProcessor
@@ -136,9 +135,8 @@ class SessionSummarizer:
         chat_mode = detect_chat_mode(messages)
         previous_context = self.context_manager.get_previous_context(chat, session_id)
 
-        # Расширенный контекст для малых сессий (< 20 сообщений)
         extended_context = None
-        if len(messages) < 20:
+        if len(messages) < 20:  # Расширенный контекст для малых сессий
             extended_context = (
                 self.incremental_context_manager.get_extended_context_for_session(
                     chat, messages, context_window_hours=24, max_previous_messages=50
@@ -152,16 +150,14 @@ class SessionSummarizer:
 
         entities = self.entity_extractor.extract_from_messages(messages)
 
-        # Обработка большим контекстом для сессий > 100K токенов
         estimated_tokens = self.large_context_processor.estimate_messages_tokens(messages)
-        use_large_context = estimated_tokens > 100000
+        use_large_context = estimated_tokens > 100000  # Обработка большим контекстом для сессий > 100K токенов
 
         if use_large_context:
             logger.info(
                 f"Используется обработка большим контекстом для сессии {session_id} "
                 f"(~{estimated_tokens} токенов)"
             )
-            # Базовый промпт без conversation_text (добавится процессором)
             base_prompt = create_summarization_prompt(
                 "",
                 chat,
@@ -178,15 +174,12 @@ class SessionSummarizer:
                 messages, chat, base_prompt
             )
             
-            # Используем саммаризацию из результата
             summary_text = large_context_result.get("summary", "")
             if not summary_text and large_context_result.get("detailed_summaries"):
-                # Объединяем детальные саммаризации
                 summary_text = "\n\n".join([
                     s.get("summary", "") for s in large_context_result["detailed_summaries"]
                 ])
         else:
-            # Стандартная обработка для небольших сессий
             conversation_text = prepare_conversation_text(messages)
             prompt = create_summarization_prompt(
                 conversation_text,
@@ -203,7 +196,6 @@ class SessionSummarizer:
             summary_structure = None
             summary_text = ""
             
-            # Пробуем LMQL, если доступен
             if self.lmql_adapter:
                 try:
                     logger.debug("Используется LMQL для генерации структурированной саммаризации")
@@ -213,7 +205,6 @@ class SessionSummarizer:
                 except Exception as e:
                     logger.warning(f"Ошибка при использовании LMQL для саммаризации: {e}, используем LLM")
             
-            # Если LMQL не сработал или недоступен, используем обычный LLM
             if not summary_structure:
                 async with self.embedding_client:
                     summary_text = await self.embedding_client.generate_summary(
@@ -260,9 +251,7 @@ class SessionSummarizer:
 
         metrics = None
 
-        # === ПРОВЕРКА КАЧЕСТВА И ИТЕРАТИВНОЕ УЛУЧШЕНИЕ ===
         if self.enable_quality_check:
-            # Оцениваем качество саммаризации
             metrics = self.quality_evaluator.evaluate(
                 legacy_summary, expected_language=dominant_language
             )
@@ -275,7 +264,6 @@ class SessionSummarizer:
                 f"  Решения: {metrics.decisions_count}, Риски: {metrics.risks_count}, Ссылки: {metrics.links_count}"
             )
 
-            # Добавляем метрики в саммаризацию
             legacy_summary["quality_metrics"] = {
                 "score": metrics.score,
                 "has_context": metrics.has_context,
@@ -350,7 +338,6 @@ class SessionSummarizer:
 
 
 
-    # Методы для IterativeRefiner
     def _run_structural_pass(
         self,
         summary: Dict[str, Any],
